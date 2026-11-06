@@ -13,7 +13,7 @@ VERSION = '1.1'
 SLI_L_GEOMETRY = {'blocks': 8, 'size': 4, 'source': 'NXP UID type 03'}
 TAG_ERRORS = {0x01: 'unsupported_command', 0x02: 'unrecognized_command',
               0x03: 'unsupported_option', 0x10: 'block_unavailable',
-              0x12: 'block_locked'}
+              0x12: 'block_locked', 0x15: 'read_protected'}
 
 
 class TagError(ValueError):
@@ -47,7 +47,9 @@ def is_sli_l(uid):
 
 class Reader(Chip):
     def read_single(self, uid, block, verbose=False, expected_size=None):
-        payload = bytes((0x22, 0x20)) + bytes.fromhex(uid)[::-1] + bytes((block,))
+        extended = block >= 256
+        payload = (bytes((0x22, 0x30 if extended else 0x20)) + bytes.fromhex(uid)[::-1] +
+                   block.to_bytes(2 if extended else 1, 'little'))
         data = checked_reply(self.exchange(payload, verbose=verbose))[1:]
         if not 1 <= len(data) <= 32 or (expected_size is not None and len(data) != expected_size):
             raise FrameError('size', f'Block {block} has unexpected length {len(data)}')
@@ -69,8 +71,16 @@ class Reader(Chip):
                 raise FrameError('framing', 'Invalid System Information block size')
             geometry = {'blocks': reply[pos] + 1, 'size': reply[pos + 1] + 1,
                         'source': 'ISO15693 Get System Information'}
-        return {'flags': flags, 'ic_reference': reply[-1] if flags & 8 else None,
-                'geometry': geometry}
+        ic_reference = reply[-1] if flags & 8 else None
+        if geometry is None and uid.startswith('E002') and ic_reference == 0x26:
+            # ST25DV16K/64K omit geometry from standard System Information.
+            ext = checked_reply(self.exchange(b'\x22\x3b\x14' + air_uid, verbose=verbose))
+            if (len(ext) != 13 or ext[1] != 0x14 or ext[2:10] != air_uid or
+                    ext[12] != 3 or int.from_bytes(ext[10:12], 'little') not in (511, 2047)):
+                raise FrameError('framing', 'Invalid ST25DV extended geometry response')
+            geometry = {'blocks': int.from_bytes(ext[10:12], 'little') + 1, 'size': 4,
+                        'source': 'ST25DV Extended Get System Information'}
+        return {'flags': flags, 'ic_reference': ic_reference, 'geometry': geometry}
 
 
 def read_memory(reader, uid, limit=0, verbose=False):
@@ -82,7 +92,7 @@ def read_memory(reader, uid, limit=0, verbose=False):
     if geometry is None and is_sli_l(uid):
         geometry = dict(SLI_L_GEOMETRY)
     # Eight is a conservative probe limit for unknown tags, never a geometry claim.
-    count = limit or (geometry['blocks'] if geometry else 8)
+    count = (min(limit or 256, geometry['blocks']) if geometry else min(limit or 8, 256))
     width = geometry['size'] if geometry else None
     blocks, errors = [], []
     for index in range(count):
@@ -108,9 +118,6 @@ def read_memory(reader, uid, limit=0, verbose=False):
 
 
 def main():
-    from smbus2 import SMBus
-    from pt35_nfc import new_record, skip_internal_uid
-
     ap = argparse.ArgumentParser(description='Read and archive ISO15693 UID and memory blocks')
     ap.add_argument('--bus', type=int, default=1)
     ap.add_argument('--blocks', type=int, default=8)
@@ -121,8 +128,10 @@ def main():
     ap.add_argument('--verbose', action='store_true')
     ap.add_argument('--tries', type=int, default=60)
     args = ap.parse_args()
-    if not 1 <= args.blocks <= 256 or args.tries < 1:
-        ap.error('--blocks must be 1..256 and --tries must be positive')
+    if not 1 <= args.blocks <= 2048 or args.tries < 1:
+        ap.error('--blocks must be 1..2048 and --tries must be positive')
+    from smbus2 import SMBus
+    from pt35_nfc import new_record, skip_internal_uid
     handle_sigterm()
     with reader_lock(f'i2c-{args.bus}'), SMBus(args.bus) as bus:
         reader = Reader(bus)

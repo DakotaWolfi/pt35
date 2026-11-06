@@ -23,20 +23,22 @@ The archive defaults to `~/pt35-nfc/archive` for CLI and GUI. Keep existing file
 
 The archive has one current JSON record per protocol and identifier. A later degraded read retains the better capture and its timestamp, source and coverage while updating sighting metadata. Data from different reads is kept separate. JSON is published atomically under an archive lock. Newly verified binaries use content-addressed filenames and the record references the matching binary. Repeated reads retain at most one managed binary per tag after a successful save. Legacy files remain intact.
 
-`requested_range_complete` requires all requested indices and consistent byte lengths. `addressable_memory_complete` also requires known geometry and an exact range covering it from block zero. System Information may provide geometry. NXP UID tag type `03` uses the published SLI-L/SLIX-L user-memory geometry when System Information is unavailable. Other tags default to a conservative eight-block probe when geometry is unknown. All-zero blocks are valid when framing, CRC, response flags and lengths agree. A timeout leaves the cause unknown. A tag-reported unavailable or locked block is recorded separately. Addressable user memory does not include protected configuration, passwords or authentication secrets.
+`requested_range_complete` requires all requested indices and consistent byte lengths. `addressable_memory_complete` also requires known geometry and an exact range covering it from block zero. System Information may provide geometry. NXP UID tag type `03` uses the published SLI-L/SLIX-L user-memory geometry when System Information is unavailable. Other tags default to a conservative eight-block probe when geometry is unknown. ST25DV16K/64K extended geometry is queried when standard System Information identifies that family. Automatic scans read at most 256 blocks. Request 512 or 2048 explicitly to read the larger addressable ranges. All-zero blocks are valid when framing, CRC, response flags and lengths agree. A timeout leaves the cause unknown. A tag-reported unavailable or locked block is recorded separately. Addressable user memory does not include protected configuration, passwords or authentication secrets.
 
 ## Verification status
 
 | Backend / mode | Status |
 | --- | --- |
 | Internal NFC-V inventory and addressed read | Legacy path bench-proven. Changes in this branch require PT35 verification. |
-| Internal NFC-A / NFC-B / NFC-F | Pending implementation and individual bench checks. |
+| Internal NFC-A | Implemented single-tag discovery and NTAG213/215/216 user-page reads. Bench check pending. |
+| Internal NFC-B | Implemented one-slot ATQB/PUPI discovery. Bench check pending. |
+| Internal NFC-F | Implemented one-slot FeliCa polling at 212 kbit/s. Bench check pending. |
 | Proxmark3/Iceman selection and identification | Implemented for a matching, responsive client. PT35 USB/RF verification pending. |
 
 Offline tests use synthetic frames and temporary archives.
 
 ```sh
-python3 -m unittest discover -s tests -p 'test_nfc_offline.py' -v
+python3 -m unittest discover -s tests -p 'test_nfc*.py' -v
 ```
 
 ### Raspberry Pi bench checklist
@@ -60,3 +62,17 @@ PY
 ```
 
 References for the driver include the [ST25R3916 datasheet](https://www.st.com/resource/en/datasheet/st25r3916.pdf), [M5Stack stream decoder](https://github.com/m5stack/M5Unit-NFC/blob/471a6e02e8052264d39b3ac97005ce4de9d1cb91/src/nfc/v/nfcv.cpp), and [NXP SLIX-L datasheet](https://www.nxp.com/docs/en/data-sheet/SL2S5002_SL2S5102.pdf).
+
+### Internal NFC-A, NFC-B and NFC-F checks
+
+Select **Internal** and set **Internal protocol** in Settings, or run:
+
+```sh
+python3 nfc/pt35_nfc.py scan --backend internal --protocol NFC-A --tries 8
+python3 nfc/pt35_nfc.py scan --backend internal --protocol NFC-B --tries 8
+python3 nfc/pt35_nfc.py scan --backend internal --protocol NFC-F --tries 8
+```
+
+Use an NTAG213/215/216, an ISO14443-B card, and a FeliCa tag respectively. Compare the A UID, B PUPI or F IDm with an independent reader if available. Check the A user pages and NDEF preview with a known NDEF tag. B/F are discovery-only in this build. A resolves one UID at a time. B uses one REQB slot and F uses one 212 kbit/s polling slot. Retest NFC-V after changing modes. These use ST25R3916 hardware framing and polled status. Each mode needs a Pi bench result before it can be listed as tested.
+
+Profile references are the upstream [NFC-A](https://github.com/m5stack/M5Unit-NFC/blob/471a6e02e8052264d39b3ac97005ce4de9d1cb91/src/unit/unit_ST25R3916_nfca.cpp), [NFC-B](https://github.com/m5stack/M5Unit-NFC/blob/471a6e02e8052264d39b3ac97005ce4de9d1cb91/src/unit/unit_ST25R3916_nfcb.cpp), and [NFC-F](https://github.com/m5stack/M5Unit-NFC/blob/471a6e02e8052264d39b3ac97005ce4de9d1cb91/src/unit/unit_ST25R3916_nfcf.cpp) implementations and [NXP's NTAG21x datasheet](https://www.nxp.com/docs/en/data-sheet/NTAG213_215_216.pdf).

@@ -14,6 +14,8 @@ from tkinter.scrolledtext import ScrolledText
 
 from nfc_archive import atomic_write, range_bytes, record_bytes, save_record
 from nfc_config import DEFAULT_ARCHIVE
+from nfc_ndef import decode_message, extract_message, ndef_area
+from nfc_poll import MODES
 
 BACKEND_SCRIPT = Path(__file__).resolve().with_name('pt35_nfc.py')
 
@@ -49,6 +51,19 @@ def format_record(record):
         lines.append(record['verification'])
     if record.get('system_info', {}).get('error'):
         lines.append('System Information: ' + record['system_info']['error']['error'])
+    if record.get('discovery'):
+        lines.append('Discovery: ' + json.dumps(record['discovery']))
+    data = range_bytes(record)
+    if data is not None:
+        message = extract_message(ndef_area(record, data))
+        if message is not None:
+            lines.extend(decode_message(message) or ['NDEF message present (no supported preview)'])
+        try:
+            preview = data.rstrip(b'\0').decode('utf-8')
+            if preview and all(char.isprintable() or char in '\r\n\t' for char in preview):
+                lines.append('UTF-8: ' + preview)
+        except UnicodeDecodeError:
+            pass
     if record.get('pm3_log'):
         lines += ['', record['pm3_log']]
     lines.append('')
@@ -79,6 +94,7 @@ class NFCWindow(tk.Tk):
         self.live = {}
         self.saved = {}
         self.backend = tk.StringVar(value='auto')
+        self.protocol_mode = tk.StringVar(value='ISO15693')
         self.auto_tonie = tk.BooleanVar(value=True)
         self.auto_candidates = tk.BooleanVar(value=False)
         self.save_all = tk.BooleanVar(value=False)
@@ -149,15 +165,18 @@ class NFCWindow(tk.Tk):
         ttk.Label(settings, text='Backend').grid(row=0, column=0, sticky='w')
         ttk.Combobox(settings, textvariable=self.backend, state='readonly',
                      values=('auto', 'internal', 'proxmark3')).grid(row=0, column=1, sticky='ew')
+        ttk.Label(settings, text='Internal protocol').grid(row=1, column=0, sticky='w')
+        ttk.Combobox(settings, textvariable=self.protocol_mode, state='readonly',
+                     values=('ISO15693', *MODES)).grid(row=1, column=1, sticky='ew')
         for row, (label, var) in enumerate((
                 ('Blocks (0 = auto)', self.blocks), ('Onboard ST25DV UID', self.exclude_uid),
-                ('Iceman client path', self.client), ('Proxmark3 serial port', self.port)), start=1):
+                ('Iceman client path', self.client), ('Proxmark3 serial port', self.port)), start=2):
             ttk.Label(settings, text=label).grid(row=row, column=0, sticky='w', padx=(0, 6))
             ttk.Entry(settings, textvariable=var).grid(row=row, column=1, sticky='ew')
         for row, (label, var) in enumerate((
                 ('Include configured onboard tag', self.include_st), ('Save every tag', self.save_all),
                 ('Auto-save known Tonie UIDs', self.auto_tonie),
-                ('Also auto-save unverified NXP candidates', self.auto_candidates)), start=5):
+                ('Also auto-save unverified NXP candidates', self.auto_candidates)), start=6):
             ttk.Checkbutton(settings, text=label, variable=var).grid(row=row, columnspan=2, sticky='w')
 
     def make_tree(self, parent, records):
@@ -255,7 +274,7 @@ class NFCWindow(tk.Tk):
             return
         cmd = [sys.executable, '-u', str(BACKEND_SCRIPT), action, '--json-lines',
                '--backend', force or self.backend.get(), '--archive', str(self.archive),
-               '--blocks', self.blocks.get()]
+               '--blocks', self.blocks.get(), '--protocol', self.protocol_mode.get()]
         for flag, value in (('--exclude-uid', self.exclude_uid), ('--client', self.client),
                             ('--port', self.port)):
             if value.get().strip():

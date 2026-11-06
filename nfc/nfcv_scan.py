@@ -113,7 +113,7 @@ class Chip:
         return value
     def irqs(self):
         return self.read(0x40 | 0x1a, 4)
-    def initialize(self, verbose=False):
+    def initialize(self, verbose=False, configure=None):
         identity = self.rd(0x3f)
         if identity >> 3 != 5:
             raise RuntimeError(f'Unexpected chip ID 0x{identity:02X}')
@@ -154,6 +154,15 @@ class Chip:
         self.cmd(0xd6)  # adjust regulators
         time.sleep(.006)
         self.irqs()
+        if configure is None:
+            self.configure_nfc_v()
+        else:
+            configure(self)
+        self.field_on()
+        if verbose:
+            print(f'RF enabled; op=0x{self.rd(0x02):02X} I/O2=0x{self.rd(0x01):02X}', flush=True)
+
+    def configure_nfc_v(self):
         # NFC-V: directly transcribed from M5Stack configure_nfc_v.
         for addr,val in [(0x0b,0x13),(0x0c,0x2d),(0x0d,0),(0x0e,0),(0x28,0x70),
                          (0x00,0x07),(0x09,0x38),(0x0a,0x02)]:
@@ -164,14 +173,13 @@ class Chip:
                          (0x0d,0x01),(0x0f,0),(0x15,0),(0x28,0x10),(0x29,0x7c),(0x2a,0x80)]:
             self.wr(addr,val,True)
         self.wr(0x03,0x70)
+    def field_on(self):
         # NFC collision avoidance, then turn TX/RX on.
         self.cmd(0xc8)
         time.sleep(.006)
         self.update(0x02,setbits=0x48)
         time.sleep(.010)
-        if verbose:
-            print(f'NFC-V RF enabled; op=0x{self.rd(0x02):02X} I/O2=0x{self.rd(0x01):02X}', flush=True)
-    def transceive(self, frame, timeout, *, tx_command=0xc5, extra_bits=0, max_rx=MAX_V_FIFO):
+    def transceive(self, frame, timeout, *, tx_command=0xc5, max_rx=MAX_V_FIFO, check_errors=False):
         """Poll latched IRQs together because every IRQ read clears the registers."""
         ticks = min(65535, max(1, int(timeout * 13560000 / 4096)))
         self.update(0x12, setbits=0x01)
@@ -182,7 +190,7 @@ class Chip:
             self.irqs()
             if frame:
                 self.send(0x80, *frame)
-            nbits = len(frame) * 8 + extra_bits
+            nbits = len(frame) * 8
             self.wr(0x22, nbits >> 8)
             self.wr(0x23, nbits & 255)
             self.cmd(tx_command)
@@ -193,6 +201,11 @@ class Chip:
                 main |= irq_main
                 timer |= irq_timer
                 errors |= irq_error
+                if check_errors and main & 0x04:
+                    raise FrameError('collision', 'RF bit collision')
+                if check_errors and errors & 0xf0:
+                    raise FrameError('crc' if errors & 0x80 else 'framing',
+                                     f'RF receive error 0x{errors:02X}')
                 if main & 0x18 == 0x18:
                     low, high = self.read(0x5e, 2)
                     size = low | ((high & 0xc0) << 2)

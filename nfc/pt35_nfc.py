@@ -8,15 +8,18 @@ import re
 import subprocess
 import sys
 import time
+from functools import partial
 from pathlib import Path
 
 import nfc_pm3 as pm3
 from nfc_archive import is_known_tonie, migrate_archive, now, record_path, save_record
+from nfc_poll import MODES, POLL, configure, read_ntag
 from nfc_config import DEFAULT_ARCHIVE, LEGACY_ARCHIVE, handle_sigterm, reader_lock
 from nfcv_dump import Reader, failure, is_sli_l, read_memory
+from nfcv_scan import FrameError
 
-VERSION = '0.2.0'
-INTERNAL_PROTOCOLS = ('ISO15693',)
+VERSION = '0.3.0'
+INTERNAL_PROTOCOLS = ('ISO15693', *MODES)
 
 
 def new_record(uid, backend, dsfid=None, protocol='ISO15693'):
@@ -111,31 +114,52 @@ def internal_operation(args, emit):
                  backend='internal', capabilities=list(INTERNAL_PROTOCOLS))
             return
         try:
+            profile = None if args.protocol == 'ISO15693' else partial(configure, protocol=args.protocol)
             with diagnostics:
-                reader.initialize(verbose=args.verbose)
-            emit('backend', 'Internal ST25R3916 connected', backend='internal',
+                reader.initialize(verbose=args.verbose, configure=profile)
+            emit('backend', f'Internal ST25R3916 connected | {args.protocol}', backend='internal',
                  capabilities=list(INTERNAL_PROTOCOLS))
             last = {}
             attempts = 0
             last_error = None
             while args.watch or attempts < args.tries:
                 attempts += 1
+                error = None
+                details = {}
                 with diagnostics:
-                    result = reader.inventory(verbose=args.verbose)
-                if result and not skip_internal_uid(result[0], args.include_st, args.exclude_uid):
-                    uid, payload = result
+                    if args.protocol == 'ISO15693':
+                        result = reader.inventory(verbose=args.verbose)
+                        error = reader.inventory_error
+                        if result:
+                            uid, inventory = result
+                            if skip_internal_uid(uid, args.include_st, args.exclude_uid):
+                                result = None
+                            else:
+                                details['dsfid'] = inventory[1]
+                    else:
+                        try:
+                            result = POLL[args.protocol](reader)
+                            details['discovery'] = result[1]
+                        except (FrameError, TimeoutError) as exc:
+                            error, result = exc, None
+                if result:
+                    uid = result[0]
                     current = time.monotonic()
                     if uid not in last or current - last[uid] >= args.repeat_after:
                         if len(last) >= 256:
                             last.pop(next(iter(last)))
                         last[uid] = current
-                        record = new_record(uid, 'internal', dsfid=payload[1])
+                        record = new_record(uid, 'internal', dsfid=details.pop('dsfid', None),
+                                            protocol=args.protocol)
+                        record.update(details)
                         with diagnostics:
-                            record.update(read_memory(reader, uid, args.blocks, args.verbose))
+                            if args.protocol == 'ISO15693':
+                                record.update(read_memory(reader, uid, args.blocks, args.verbose))
+                            elif args.protocol == 'NFC-A':
+                                record.update(read_ntag(reader, uid, record['discovery']))
                         tag_event(args, emit, record)
                         if not args.watch:
                             return
-                error = reader.inventory_error
                 state = (failure(error)['kind'] if error else 'tag')
                 if state != last_error and error:
                     emit('scan_state', 'Waiting for tag' if state == 'timeout' else str(error), state=state)
@@ -181,6 +205,8 @@ def main():
     p.add_argument('--backend', choices=['auto', 'internal', 'proxmark3'], default='auto')
     p.add_argument('--port', help='select a detected Proxmark3 serial port')
     p.add_argument('--client', help='path to the Iceman client executable')
+    p.add_argument('--protocol', choices=INTERNAL_PROTOCOLS, default='ISO15693',
+                   help='internal reader polling mode (A/B/F require bench verification)')
     p.add_argument('--bus', type=int, default=1)
     p.add_argument('--archive', type=Path, default=DEFAULT_ARCHIVE)
     p.add_argument('--save', action='store_true', help='save all discovered tags')
@@ -198,7 +224,7 @@ def main():
     args = p.parse_args()
     args.watch = args.action == 'watch'
     args.archive = args.archive.expanduser().resolve()
-    if not 0 <= args.blocks <= 256 or args.tries < 1 or not 0 <= args.delay <= 10 or args.repeat_after < 0:
+    if not 0 <= args.blocks <= 2048 or args.tries < 1 or not 0 <= args.delay <= 10 or args.repeat_after < 0:
         p.error('Invalid block count, retry count or scan interval')
     if args.exclude_uid and not re.fullmatch(r'E002[0-9A-F]{12}', args.exclude_uid.upper()):
         p.error('--exclude-uid must be the exact onboard 16-digit ST25DV UID')
@@ -219,7 +245,7 @@ def main():
         if args.action == 'show':
             if not args.uid:
                 p.error('show requires a UID')
-            print(record_path(args.archive, args.uid).read_text(encoding='utf-8'))
+            print(record_path(args.archive, args.uid, args.protocol).read_text(encoding='utf-8'))
             return 0
         backend, client, port = backend_choice(args, emit)
         if backend is None:

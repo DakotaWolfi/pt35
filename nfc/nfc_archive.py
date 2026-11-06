@@ -14,7 +14,7 @@ MEMORY_FIELDS = (
     'blocks', 'read_errors', 'dump_status', 'geometry', 'geometry_known',
     'requested_blocks', 'requested_range', 'requested_range_complete',
     'addressable_memory_complete', 'system_info', 'verification', 'memory_binary',
-    'capture_backend', 'captured_utc', 'capture_format', 'memory_start',
+    'capture_backend', 'captured_utc', 'capture_format', 'memory_start', 'cc',
 )
 
 
@@ -77,7 +77,7 @@ def set_coverage(record, count, geometry, start=0):
     record.update(capture_format=2, geometry=geometry, geometry_known=geometry is not None,
                   requested_blocks=count, requested_range={'start': start, 'count': count})
     complete = range_bytes(record) is not None
-    full = bool(complete and geometry and start == 0 and count == geometry['blocks'])
+    full = bool(complete and geometry and start == geometry.get('start', 0) and count == geometry['blocks'])
     record.update(requested_range_complete=complete, addressable_memory_complete=full,
                   dump_status='addressable_memory_complete' if full else
                   'requested_range_complete' if complete else
