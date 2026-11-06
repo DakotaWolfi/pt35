@@ -12,13 +12,14 @@ from functools import partial
 from pathlib import Path
 
 import nfc_pm3 as pm3
-from nfc_archive import is_known_tonie, migrate_archive, now, record_path, save_record
+from nfc_archive import atomic_write, record_bytes, is_known_tonie, migrate_archive, now, record_path, save_record
+from nfc_diagnostics import Diagnostics, safe_event
 from nfc_poll import MODES, POLL, configure, read_ntag
 from nfc_config import DEFAULT_ARCHIVE, LEGACY_ARCHIVE, handle_sigterm, reader_lock
-from nfcv_dump import Reader, failure, is_sli_l, read_memory
-from nfcv_scan import FrameError
+from nfcv_dump import ALL_KNOWN, Reader, failure, is_sli_l, read_memory
+from nfcv_scan import FrameError, InventorySearch
 
-VERSION = '0.4.0'
+VERSION = '0.5.0'
 INTERNAL_PROTOCOLS = ('ISO15693', *MODES)
 
 
@@ -43,8 +44,17 @@ def skip_internal_uid(uid, include, exclude):
 
 
 class Events:
-    def __init__(self, json_lines):
+    def __init__(self, json_lines, collect=False):
         self.json_lines = json_lines
+        self.rf = Diagnostics() if collect else None
+
+    def diagnostic(self, stage, result, **details):
+        if self.rf is not None:
+            self.rf.add(stage, result, **details)
+        if self.json_lines:
+            event = safe_event(stage, result, **details)
+            if event is not None:
+                self('diagnostic', '', **event)
 
     def __call__(self, event, message, **data):
         if self.json_lines:
@@ -120,6 +130,9 @@ def internal_operation(args, emit, reselect=None):
     diagnostics = contextlib.redirect_stdout(sys.stderr) if args.json_lines else contextlib.nullcontext()
     with reader_lock(f'i2c-{args.bus}'), SMBus(args.bus) as bus:
         reader = Reader(bus)
+        reader.diagnostic = emit.diagnostic if emit.json_lines or emit.rf is not None else None
+        bench = args.action == 'rf-bench'
+        inventory_search = InventorySearch(args.exclude_uid, args.include_st)
         if args.action == 'status':
             identity = reader.rd(0x3f)
             if identity >> 3 != 5:
@@ -146,7 +159,11 @@ def internal_operation(args, emit, reselect=None):
                 details = {}
                 with diagnostics:
                     if args.protocol == 'ISO15693':
-                        result = reader.inventory(verbose=args.verbose)
+                        if bench:
+                            # Unmasked for the like-for-like original scanner comparison.
+                            result = reader.inventory(verbose=args.verbose)
+                        else:
+                            result = inventory_search.poll(reader, args.verbose)
                         error = reader.inventory_error
                         if result:
                             uid, inventory = result
@@ -160,29 +177,39 @@ def internal_operation(args, emit, reselect=None):
                             details['discovery'] = result[1]
                         except (FrameError, TimeoutError) as exc:
                             error, result = exc, None
+                if bench:
+                    if result and not args.inventory_only:
+                        read_memory(reader, result[0], args.blocks)
+                    if attempts < args.tries:
+                        time.sleep(args.delay)
+                    continue
                 if result:
                     uid = result[0]
                     current = time.monotonic()
-                    if uid not in last or current - last[uid] >= args.repeat_after:
+                    if uid not in last or current >= last[uid]:
                         if len(last) >= 256:
                             last.pop(next(iter(last)))
-                        last[uid] = current
                         record = new_record(uid, 'internal', dsfid=details.pop('dsfid', None),
                                             protocol=args.protocol)
                         record.update(details)
                         with diagnostics:
                             if args.protocol == 'ISO15693':
+                                emit('scan_state', 'Tag detected · reading NFC-V blocks', state='reading')
                                 record.update(read_memory(reader, uid, args.blocks, args.verbose))
                             elif args.protocol == 'NFC-A':
                                 record.update(read_ntag(reader, uid, record['discovery']))
                         tag_event(args, emit, record)
                         if not args.watch:
                             return
+                        interval = args.repeat_after
+                        if record.get('dump_status') in ('partial', 'failed'):
+                            interval = min(interval, 4)
+                        last[uid] = time.monotonic() + interval
                 state = (failure(error)['kind'] if error else 'tag')
                 if state != last_error and error:
                     emit('scan_state', 'Waiting for tag' if state == 'timeout' else str(error), state=state)
                 last_error = state
-                time.sleep(args.delay)
+                time.sleep(min(args.delay, .035) if inventory_search.pending else args.delay)
         finally:
             reader.shutdown()
 
@@ -303,7 +330,7 @@ def main():
     p = argparse.ArgumentParser(description='PT35 NFC dual-reader and local archive')
     p.add_argument('--version', action='version', version=f'PT35 NFC {VERSION}')
     p.add_argument('action', choices=['status', 'scan', 'watch', 'list', 'show', 'identify', 'pm3-shell',
-                                       'migrate-archive', 'pm3-dump', 'pm3-simulate'], nargs='?', default='scan')
+                                       'migrate-archive', 'pm3-dump', 'pm3-simulate', 'rf-bench'], nargs='?', default='scan')
     p.add_argument('uid', nargs='?', help='tag identifier for show, pm3-dump or pm3-simulate')
     p.add_argument('--backend', choices=['auto', 'internal', 'proxmark3'], default='auto')
     p.add_argument('--pm3-mode', choices=pm3.PM3_MODES, default='HF')
@@ -320,16 +347,21 @@ def main():
     p.add_argument('--include-st', action='store_true', help='include the configured onboard ST25DV UID')
     p.add_argument('--exclude-uid', default=os.environ.get('PT35_NFC_ONBOARD_UID'),
                    help='exact onboard ST25DV UID to omit')
-    p.add_argument('--blocks', type=int, default=0, help='ISO15693 blocks (0 = geometry or conservative probe)')
+    p.add_argument('--blocks', type=int, default=0, help='ISO15693 blocks (0 = auto, -1 = all known blocks)')
     p.add_argument('--tries', type=int, default=40)
     p.add_argument('--delay', type=float, default=.25)
     p.add_argument('--repeat-after', type=float, default=30)
     p.add_argument('--json-lines', action='store_true')
-    p.add_argument('--verbose', action='store_true')
+    p.add_argument('--verbose', action='store_true', help='include private raw output locally')
+    p.add_argument('--inventory-only', action='store_true', help='rf-bench: compare unmasked inventory only')
+    p.add_argument('--diagnostics', type=Path, help='write a redacted NFC-V diagnostics JSON file')
     args = p.parse_args()
     args.watch = args.action == 'watch'
+    bench = args.action == 'rf-bench'
+    if bench:
+        args.backend, args.protocol, args.verbose = 'internal', 'ISO15693', False
     args.archive = args.archive.expanduser().resolve()
-    if not 0 <= args.blocks <= 2048 or args.tries < 1 or not 0 <= args.delay <= 10 or args.repeat_after < 0:
+    if not ALL_KNOWN <= args.blocks <= 2048 or args.tries < 1 or not 0 <= args.delay <= 10 or args.repeat_after < 0:
         p.error('Invalid block count, retry count or scan interval')
     if args.exclude_uid and not re.fullmatch(r'E002[0-9A-F]{12}', args.exclude_uid.upper()):
         p.error('--exclude-uid must be the exact onboard 16-digit ST25DV UID')
@@ -339,7 +371,7 @@ def main():
             p.error('This operation requires a 16-digit ISO15693 UID')
     if args.action == 'pm3-simulate' and not args.confirm_emulation:
         p.error('Simulation requires --confirm-emulation after selecting an authorized bench tag')
-    emit = Events(args.json_lines)
+    emit = Events(args.json_lines, collect=bench or args.diagnostics is not None)
     handle_sigterm()
     try:
         if args.action == 'migrate-archive':
@@ -365,6 +397,17 @@ def main():
     except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
         emit('fault', str(exc))
         return 2
+    finally:
+        if emit.rf is not None:
+            report = emit.rf.export()
+            if bench:
+                emit('summary', json.dumps(report['counts'], sort_keys=True), counts=report['counts'])
+            if args.diagnostics:
+                try:
+                    atomic_write(args.diagnostics.expanduser(), record_bytes(report))
+                except OSError as exc:
+                    emit('fault', f'Could not export diagnostics: {exc}')
+                    return 2
 
 
 if __name__ == '__main__':

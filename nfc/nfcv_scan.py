@@ -5,9 +5,12 @@ Read-only RF command: INVENTORY (flags 0x26, command 0x01, mask len 0).
 """
 import argparse
 import time
+from collections import deque
 from nfc_config import handle_sigterm, reader_lock
 
-VERSION = '1.1'
+VERSION = '1.2'
+INVENTORY_TIMEOUT = .30
+ADDRESSED_TIMEOUT = .35
 MAX_V_FIFO = 128
 
 
@@ -42,7 +45,7 @@ def encode_vcd(payload):
     return out
 
 
-def decode_response(raw):
+def decode_response(raw, *, recover_end=False, last_bits=0, details=None):
     """Decode exactly one bounded VICC frame, including its stream EOF and CRC.
 
     Each payload byte uses 16 stream bits. M5Stack documents the FIFO SOF
@@ -52,16 +55,27 @@ def decode_response(raw):
         raise FrameError('framing', 'Invalid NFC-V SOF')
     if len(raw) > MAX_V_FIFO:
         raise FrameError('framing', 'Oversize NFC-V response')
+    valid_bits = (len(raw) - 1) * 8 + (last_bits or 8)
     stream = int.from_bytes(raw, 'little') >> 5
     frame = bytearray()
-    for offset in range(0, len(raw) - 1, 2):
-        if raw[offset] & 0xe0 == 0xa0 and raw[offset + 1] == 0x03:
+    # At most eleven stream bits can follow the last complete encoded byte.
+    # The original scanner ignored those terminal symbols after the CRC.
+    boundary = (valid_bits - 5) // 16
+    for offset in range(0, len(raw), 2):
+        if valid_bits >= offset * 8 + 10 and raw[offset] & 0xe0 == 0xa0 and raw[offset + 1] == 0x03:
             if len(frame) < 3 or any(raw[offset + 2:]):
                 raise FrameError('framing', 'Invalid NFC-V frame boundary')
             if crc15693(frame[:-2]) != int.from_bytes(frame[-2:], 'little'):
                 raise FrameError('crc', 'NFC-V CRC mismatch')
             return bytes(frame[:-2])
-        if offset + 2 >= len(raw):
+        tail_bits = valid_bits - 5 - 16 * len(frame)
+        if recover_end and len(frame) == boundary and len(frame) >= 3 and tail_bits <= 11:
+            if crc15693(frame[:-2]) != int.from_bytes(frame[-2:], 'little'):
+                raise FrameError('crc', 'NFC-V CRC mismatch')
+            if details is not None:
+                details['end_recovered'] = True
+            return bytes(frame[:-2])
+        if valid_bits < offset * 8 + 21:
             break
         byte = 0
         for bit in range(8):
@@ -75,7 +89,7 @@ def decode_response(raw):
 
 
 def decode_vicc(buf):
-    payload = decode_response(buf)
+    payload = decode_response(buf, recover_end=True)
     if len(payload) != 10 or payload[0] & 1:
         raise FrameError('framing', 'Unexpected ISO15693 inventory response')
     return payload
@@ -85,6 +99,14 @@ class Chip:
     def __init__(self, bus):
         self.bus = bus
         self.identified = False
+        self.rf_state = {}
+        self.diagnostic = None
+        self.trace_context = {}
+
+    def trace(self, stage, result, **details):
+        if self.diagnostic is not None:
+            self.diagnostic(stage, result, **details)
+
     def send(self, *data):
         from smbus2 import i2c_msg
         self.bus.i2c_rdwr(i2c_msg.write(ADDRESS, list(data)))
@@ -114,6 +136,17 @@ class Chip:
     def irqs(self):
         return self.read(0x40 | 0x1a, 4)
     def initialize(self, verbose=False, configure=None):
+        try:
+            self._initialize(verbose, configure)
+            if self.diagnostic is not None:
+                self.trace('configure', 'ok', identity=self.rd(0x3f), op=self.rd(0x02),
+                           io2=self.rd(0x01), mode=self.rd(0x03), bitrate=self.rd(0x04),
+                           stream=self.rd(0x09))
+        except (OSError, RuntimeError):
+            self.trace('configure', 'io')
+            raise
+
+    def _initialize(self, verbose, configure):
         identity = self.rd(0x3f)
         if identity >> 3 != 5:
             raise RuntimeError(f'Unexpected chip ID 0x{identity:02X}')
@@ -179,77 +212,165 @@ class Chip:
         time.sleep(.006)
         self.update(0x02,setbits=0x48)
         time.sleep(.010)
-    def transceive(self, frame, timeout, *, tx_command=0xc5, max_rx=MAX_V_FIFO, check_errors=False):
-        """Poll latched IRQs together because every IRQ read clears the registers."""
+    def transceive(self, frame, timeout, *, tx_command=0xc5, max_rx=MAX_V_FIFO, check_errors=False,
+                   recover_fifo=False):
+        """Latch clear-on-read IRQs and retain the original NFC-V FIFO fallback."""
+        started = time.monotonic()
+        state = self.rf_state = {}
         ticks = min(65535, max(1, int(timeout * 13560000 / 4096)))
-        self.update(0x12, setbits=0x01)
-        self.wr(0x10, ticks >> 8)
-        self.wr(0x11, ticks & 255)
+        complete = False
+
+        def fifo():
+            low, high = self.read(0x5e, 2)
+            size = low | ((high & 0xc0) << 2)
+            state.update(fifo_size=size, fifo_status=high)
+            if size > max_rx or high & 0x30:
+                raise FrameError('fifo', f'Invalid RX FIFO (size {size}, status 0x{high:02X})')
+            return size, high
+
         try:
-            self.cmd(0xdb)
+            self.update(0x12, setbits=0x01)
+            self.wr(0x10, ticks >> 8)
+            self.wr(0x11, ticks & 255)
             self.irqs()
+            self.cmd(0xdb)
             if frame:
                 self.send(0x80, *frame)
             nbits = len(frame) * 8
             self.wr(0x22, nbits >> 8)
             self.wr(0x23, nbits & 255)
             self.cmd(tx_command)
-            deadline = time.monotonic() + timeout + .025
+            deadline = time.monotonic() + timeout + (.10 if recover_fifo else .025)
             main = timer = errors = 0
             while time.monotonic() < deadline:
                 irq_main, irq_timer, irq_error, _ = self.irqs()
                 main |= irq_main
                 timer |= irq_timer
                 errors |= irq_error
+                state.update(irq_main=main, irq_timer=timer, irq_error=errors)
                 if check_errors and main & 0x04:
                     raise FrameError('collision', 'RF bit collision')
                 if check_errors and errors & 0xf0:
                     raise FrameError('crc' if errors & 0x80 else 'framing',
                                      f'RF receive error 0x{errors:02X}')
                 if main & 0x18 == 0x18:
-                    low, high = self.read(0x5e, 2)
-                    size = low | ((high & 0xc0) << 2)
-                    if not size or size > max_rx or high & 0x30:
-                        raise FrameError('fifo', f'Invalid RX FIFO (size {size}, status 0x{high:02X})')
-                    return self.read(0x9f, size), high, errors
+                    size, high = fifo()
+                    if not size:
+                        raise FrameError('fifo', 'RX ended with empty FIFO')
+                    raw = self.read(0x9f, size)
+                    complete = True
+                    return raw, high, errors
                 if timer & 0x40 and not main & 0x20:
                     break
                 time.sleep(.001)
             if not main & 0x08:
                 raise FrameError('tx_timeout', 'NFC transmit did not finish')
+            if recover_fifo:
+                size, high = fifo()
+                if size:
+                    raw = self.read(0x9f, size)
+                    state['fifo_recovered'] = True
+                    return raw, high, errors
             raise TimeoutError('Tag did not respond')
         finally:
-            # STOP terminates the exchange without switching off the RF field.
-            # Clear stale RX/IRQ state so the next inventory can start cleanly.
-            self.cmd(0xc2)
-            self.cmd(0xdb)
-            self.irqs()
+            state['elapsed_ms'] = round((time.monotonic() - started) * 1000)
+            if not complete:
+                self.recover_exchange()
 
-    def exchange(self, payload, timeout=.12, verbose=False):
-        raw, _, _ = self.transceive(encode_vcd(payload), timeout)
+    def recover_exchange(self):
+        # STOP is reserved for interrupted or failed exchanges. A successful
+        # RXE returns to the original scanner's clear-before-transmit sequence.
+        self.cmd(0xc2)
+        self.cmd(0xdb)
+        self.irqs()
+
+    def exchange(self, payload, timeout=ADDRESSED_TIMEOUT, verbose=False):
+        raw, fifo_status, _ = self.transceive(encode_vcd(payload), timeout, recover_fifo=True)
         if verbose:
             print(f'  RF raw={raw.hex(" ")}', flush=True)
-        return decode_response(raw)
-
-    def inventory(self, timeout=.12, verbose=False):
         try:
-            decoded = self.exchange((0x26, 0x01, 0x00), timeout, verbose)
+            return decode_response(raw, recover_end=True, last_bits=(fifo_status >> 1) & 7, details=self.rf_state)
+        except FrameError:
+            if not self.rf_state.get('fifo_recovered'):
+                self.recover_exchange()
+            raise
+
+    def inventory(self, timeout=INVENTORY_TIMEOUT, verbose=False, *, mask_bits=0, mask=0):
+        mask_bytes = mask.to_bytes((mask_bits + 7) // 8, 'little')
+        try:
+            decoded = self.exchange(bytes((0x26, 0x01, mask_bits)) + mask_bytes, timeout, verbose)
             if len(decoded) != 10 or decoded[0] & 1:
                 raise FrameError('framing', 'Unexpected ISO15693 inventory response')
-        except (FrameError, TimeoutError) as exc:
+            if int.from_bytes(decoded[2:10], 'little') & ((1 << mask_bits) - 1) != mask:
+                raise FrameError('framing', 'Inventory response outside requested mask')
+        except (FrameError, TimeoutError, OSError) as exc:
+            kind = getattr(exc, 'kind', 'timeout' if isinstance(exc, TimeoutError) else 'io')
+            self.trace('inventory', kind, mask_bits=mask_bits, **self.rf_state)
+            if kind == 'io':
+                raise
             self.inventory_error = exc
             if verbose:
                 print(f'Inventory: {exc}', flush=True)
             return None
+        self.trace('inventory', 'ok', mask_bits=mask_bits, **self.rf_state)
         self.inventory_error = None
         return decoded[2:10][::-1].hex().upper(), decoded
 
     def shutdown(self):
-        if self.identified:
+        if not self.identified:
+            self.trace('shutdown', 'not_configured')
+            return
+        try:
             try:
                 self.cmd(0xc2)
             finally:
                 self.update(0x02, clearbits=0x48)
+            op = self.rd(0x02)
+            self.trace('shutdown', 'rf_on' if op & 0x48 else 'ok', op=op, rf_bits=op & 0x48)
+            if op & 0x48:
+                raise RuntimeError(f'RF shutdown failed (RF bits 0x{op & 0x48:02X})')
+        except OSError:
+            self.trace('shutdown', 'io')
+            raise
+
+
+class InventorySearch:
+    """Split single-slot inventory by LSB-first UID masks after a collision.
+
+    Process one mask per poll. Budget the tree and return to unmasked discovery
+    so moving/removing tags cannot leave the scanner stuck in an old search.
+    """
+    def __init__(self, onboard_uid=None, include_onboard=False):
+        self.onboard = int(onboard_uid, 16) if onboard_uid else None
+        self.include_onboard = include_onboard
+        self.pending = deque()
+        self.remaining = 0
+
+    def poll(self, reader, verbose=False):
+        if self.pending and self.remaining:
+            bits, mask = self.pending.popleft()
+            self.remaining -= 1
+            reader.trace('collision_probe', 'ok', mask_bits=bits)
+        else:
+            self.pending.clear()
+            self.remaining = 24
+            bits, mask = 0, 0
+        result = reader.inventory(timeout=.075 if bits else INVENTORY_TIMEOUT, verbose=verbose,
+                                  mask_bits=bits, mask=mask)
+        if result and self.onboard == int(result[0], 16):
+            if bits < 64:
+                # The onboard tag may have won the unmasked exchange. Search
+                # each sibling from this prefix without waking or muting it.
+                for index in range(bits, 64):
+                    sibling = (self.onboard ^ (1 << index)) & ((1 << (index + 1)) - 1)
+                    self.pending.append((index + 1, sibling))
+                while len(self.pending) > self.remaining:
+                    self.pending.pop()
+            return result if self.include_onboard else None
+        if not result and getattr(reader.inventory_error, 'kind', None) in (
+                'crc', 'manchester', 'framing', 'fifo') and bits < 64:
+            self.pending.extendleft(((bits + 1, mask | (1 << bits)), (bits + 1, mask)))
+        return result
 
 
 def main():

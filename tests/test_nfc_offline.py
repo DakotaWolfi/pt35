@@ -13,7 +13,8 @@ sys.path.insert(0, str(ROOT / 'nfc'))
 
 from nfc_archive import migrate_archive, range_bytes, save_record, set_coverage
 from nfcv_dump import Reader, read_memory
-from nfcv_scan import Chip, FrameError, crc15693, decode_response
+from nfcv_scan import Chip, FrameError, InventorySearch, crc15693, decode_response
+from nfc_diagnostics import Diagnostics
 from pt35_nfc import new_record, skip_internal_uid
 
 UID = 'E004030000000000'
@@ -32,9 +33,10 @@ def wire(payload, bad_crc=False):
 
 
 class FakeChip(Chip):
-    def __init__(self, statuses):
+    def __init__(self, statuses, sizes=()):
         super().__init__(None)
         self.statuses = iter(statuses)
+        self.sizes = iter(sizes)
         self.commands = []
         self.raw = wire(bytes.fromhex('0000 00000000000004E0'))
 
@@ -49,7 +51,7 @@ class FakeChip(Chip):
 
     def read(self, operation, length):
         if operation == 0x5e:
-            return bytes((len(self.raw), 0))
+            return bytes((next(self.sizes, len(self.raw)), 0))
         return self.raw
 
 
@@ -87,11 +89,51 @@ class RFTests(unittest.TestCase):
 
     def test_poll_both_irqs_and_recover_after_timeout(self):
         idle, nrt, reply = (0, 0, 0, 0), (8, 0x40, 0, 0), (0x18, 0, 0, 0)
-        chip = FakeChip([idle, nrt, idle, idle, reply, idle])
+        chip = FakeChip([idle, nrt, idle, idle, reply], sizes=[0])
         self.assertIsNone(chip.inventory())
         self.assertIsInstance(chip.inventory_error, TimeoutError)
         self.assertEqual(chip.inventory()[0], UNKNOWN)
-        self.assertEqual(chip.commands.count(0xc2), 2)
+        self.assertEqual(chip.commands.count(0xc2), 1)
+
+    def test_fifo_and_terminal_symbol_recovery_still_requires_crc(self):
+        idle, nrt = (0, 0, 0, 0), (8, 0x40, 0, 0)
+        chip = FakeChip([idle, nrt, idle])
+        report = Diagnostics()
+        chip.diagnostic = report.add
+        chip.raw = chip.raw[:-1]
+        self.assertEqual(chip.inventory()[0], UNKNOWN)
+        self.assertTrue(report.events[-1]['fifo_recovered'])
+        self.assertTrue(report.events[-1]['end_recovered'])
+        with self.assertRaisesRegex(FrameError, 'CRC'):
+            decode_response(wire(bytes(5), bad_crc=True)[:-1], recover_end=True)
+
+    def test_mask_search_keeps_external_tag_visible(self):
+        onboard = 'E002000000000000'
+        external = 'E004000000000001'
+
+        class MaskedReader:
+            def trace(self, *args, **kwargs):
+                pass
+
+            def inventory(self, mask_bits, mask, **kwargs):
+                self.inventory_error = None
+                if not mask_bits:
+                    return onboard, b''
+                if (mask_bits, mask) == (1, 1):
+                    return external, b''
+                return None
+
+        search = InventorySearch(onboard)
+        reader = MaskedReader()
+        self.assertIsNone(search.poll(reader))
+        self.assertEqual(search.poll(reader)[0], external)
+
+    def test_report_only_exports_allowlisted_metadata(self):
+        report = Diagnostics(capacity=1)
+        report.add('inventory', 'ok', uid=UID, raw='AA BB CC', irq_main=24)
+        report.add('read_block', 'crc', block=2, message=UID, fifo_status='AA BB')
+        self.assertEqual(report.export()['events'], [{'stage': 'read_block', 'result': 'crc', 'block': 2}])
+        self.assertEqual(report.counts['inventory.ok'], 1)
 
     def test_filter_excludes_only_configured_uid(self):
         self.assertTrue(skip_internal_uid('E002000000000000', False, 'E002000000000000'))
