@@ -5,7 +5,16 @@ Read-only RF command: INVENTORY (flags 0x26, command 0x01, mask len 0).
 """
 import argparse
 import time
-from smbus2 import SMBus, i2c_msg
+from nfc_config import handle_sigterm, reader_lock
+
+VERSION = '1.1'
+MAX_V_FIFO = 128
+
+
+class FrameError(ValueError):
+    def __init__(self, kind, message):
+        super().__init__(message)
+        self.kind = kind
 
 ADDRESS = 0x50
 
@@ -33,46 +42,54 @@ def encode_vcd(payload):
     return out
 
 
-def decode_vicc(buf):
-    """Decode one ISO15693 inventory reply from ST25R3916 subcarrier stream.
+def decode_response(raw):
+    """Decode exactly one bounded VICC frame, including its stream EOF and CRC.
 
-    Inventory response is 12 decoded bytes: flags, DSFID, UID[8], CRC[2].
-    The chip's trailing EOF symbols aren't Manchester data. Stop immediately
-    after exactly 96 decoded bits; verify CRC instead of parsing EOF as data.
+    Each payload byte uses 16 stream bits. M5Stack documents the FIFO SOF
+    in the low five bits and the byte-aligned EOF as 0b101 followed by 0x03.
     """
-    if not buf or (buf[0] & 0x1F) != 0x17:
-        raise ValueError('invalid Manchester SOF: ' + buf[:8].hex(' '))
-    response_len = 12
-    required_bits = response_len * 8
-    decoded_bits = 0
-    payload = bytearray(response_len)
-    p = 5  # ST25R3916 stream SOF consumes five bits
-    while decoded_bits < required_bits:
-        if p + 1 >= len(buf) * 8:
-            raise ValueError(f'truncated response: {decoded_bits}/96 decoded bits')
-        symbol = ((buf[p // 8] >> (p % 8)) & 1) | (((buf[(p + 1) // 8] >> ((p + 1) % 8)) & 1) << 1)
-        if symbol not in (1, 2):
-            raise ValueError(f'Manchester collision before complete frame at bit {p}, symbol {symbol}')
-        if symbol == 2:
-            payload[decoded_bits // 8] |= 1 << (decoded_bits % 8)
-        decoded_bits += 1
-        p += 2
-    # The remaining stream is the non-Manchester ISO15693 EOF; ignore it.
-    expected = crc15693(payload[:10])
-    received = payload[10] | (payload[11] << 8)
-    if expected != received:
-        raise ValueError(f'CRC mismatch: calculated {expected:04x} received {received:04x} decoded={payload.hex(" ")}')
-    if payload[0] & 0x01:
-        raise ValueError(f'ISO15693 inventory error response: {payload.hex(" ")}')
-    return payload[:10]
+    if not raw or raw[0] & 0x1f != 0x17:
+        raise FrameError('framing', 'Invalid NFC-V SOF')
+    if len(raw) > MAX_V_FIFO:
+        raise FrameError('framing', 'Oversize NFC-V response')
+    stream = int.from_bytes(raw, 'little') >> 5
+    frame = bytearray()
+    for offset in range(0, len(raw) - 1, 2):
+        if raw[offset] & 0xe0 == 0xa0 and raw[offset + 1] == 0x03:
+            if len(frame) < 3 or any(raw[offset + 2:]):
+                raise FrameError('framing', 'Invalid NFC-V frame boundary')
+            if crc15693(frame[:-2]) != int.from_bytes(frame[-2:], 'little'):
+                raise FrameError('crc', 'NFC-V CRC mismatch')
+            return bytes(frame[:-2])
+        if offset + 2 >= len(raw):
+            break
+        byte = 0
+        for bit in range(8):
+            symbol = stream & 3
+            if symbol not in (1, 2):
+                raise FrameError('manchester', 'Invalid NFC-V Manchester symbol')
+            byte |= (symbol == 2) << bit
+            stream >>= 2
+        frame.append(byte)
+    raise FrameError('framing', 'Truncated NFC-V response or missing EOF')
+
+
+def decode_vicc(buf):
+    payload = decode_response(buf)
+    if len(payload) != 10 or payload[0] & 1:
+        raise FrameError('framing', 'Unexpected ISO15693 inventory response')
+    return payload
 
 
 class Chip:
     def __init__(self, bus):
         self.bus = bus
+        self.identified = False
     def send(self, *data):
+        from smbus2 import i2c_msg
         self.bus.i2c_rdwr(i2c_msg.write(ADDRESS, list(data)))
     def read(self, operation, length=1):
+        from smbus2 import i2c_msg
         write = i2c_msg.write(ADDRESS, [operation])
         read = i2c_msg.read(ADDRESS, length)
         self.bus.i2c_rdwr(write, read)
@@ -82,6 +99,7 @@ class Chip:
     def rd(self, address, space_b=False):
         # space B read register mode
         if space_b:
+            from smbus2 import i2c_msg
             write = i2c_msg.write(ADDRESS, [0xfb, 0x40 | (address & 0x3f)])
             read = i2c_msg.read(ADDRESS, 1)
             self.bus.i2c_rdwr(write, read)
@@ -95,21 +113,13 @@ class Chip:
         return value
     def irqs(self):
         return self.read(0x40 | 0x1a, 4)
-    def await_irq(self, mask, duration):
-        until = time.monotonic() + duration
-        observed = 0
-        while time.monotonic() < until:
-            status = self.irqs()
-            observed |= status[0]
-            if observed & mask:
-                return observed
-            time.sleep(0.001)
-        return observed
     def initialize(self, verbose=False):
         identity = self.rd(0x3f)
-        if (identity >> 3) != 5:
+        if identity >> 3 != 5:
             raise RuntimeError(f'Unexpected chip ID 0x{identity:02X}')
-        print(f'ST25R3916 detected: 0x{identity:02X}', flush=True)
+        self.identified = True
+        if verbose:
+            print(f'ST25R3916 detected: 0x{identity:02X}', flush=True)
         self.cmd(0xc2)
         self.update(0x02, clearbits=0x48)
         time.sleep(.003)
@@ -159,49 +169,72 @@ class Chip:
         time.sleep(.006)
         self.update(0x02,setbits=0x48)
         time.sleep(.010)
-        print(f'NFC-V RF enabled; op=0x{self.rd(0x02):02X} I/O2=0x{self.rd(0x01):02X}',flush=True)
-    def inventory(self, timeout=.3, verbose=False):
-        frame = encode_vcd([0x26,0x01,0x00])  # single slot inventory; 1 subcarrier, high rate
-        # NRT period 4096/fc: approx 13 ticks per 4ms, 995 per 300ms
-        t = min(65535, max(1, int(timeout * 13560000 / 4096)))
-        self.update(0x12,setbits=0x01)
-        self.wr(0x10,t>>8)
-        self.wr(0x11,t&255)
-        self.irqs()
-        self.cmd(0xdb)
-        self.send(0x80,*frame)
-        nbits = len(frame)*8
-        self.wr(0x22,nbits>>8)
-        self.wr(0x23,nbits&255)
-        self.cmd(0xc5)
-        irq = self.await_irq(0x08,timeout+.1)
-        if not irq & 0x08:
-            print(f'TX did not complete (IRQ main=0x{irq:02X})')
-            return None
-        irq = self.await_irq(0x10,timeout+.1)
-        length1,length2 = self.read(0x5e,2)
-        size = length1 | ((length2 & 0xc0)<<2)
-        if not size:
-            if verbose:
-                print(f'No reply (IRQ main=0x{irq:02X}, FIFO=0)')
-            return None
-        raw = self.read(0x9f,min(size,256))
         if verbose:
-            print(f'RX IRQ=0x{irq:02X}, FIFO={size}, raw={raw.hex(" ")}')
+            print(f'NFC-V RF enabled; op=0x{self.rd(0x02):02X} I/O2=0x{self.rd(0x01):02X}', flush=True)
+    def transceive(self, frame, timeout, *, tx_command=0xc5, extra_bits=0, max_rx=MAX_V_FIFO):
+        """Poll latched IRQs together because every IRQ read clears the registers."""
+        ticks = min(65535, max(1, int(timeout * 13560000 / 4096)))
+        self.update(0x12, setbits=0x01)
+        self.wr(0x10, ticks >> 8)
+        self.wr(0x11, ticks & 255)
         try:
-            decoded = decode_vicc(raw)
-        except ValueError as e:
+            self.cmd(0xdb)
+            self.irqs()
+            if frame:
+                self.send(0x80, *frame)
+            nbits = len(frame) * 8 + extra_bits
+            self.wr(0x22, nbits >> 8)
+            self.wr(0x23, nbits & 255)
+            self.cmd(tx_command)
+            deadline = time.monotonic() + timeout + .025
+            main = timer = errors = 0
+            while time.monotonic() < deadline:
+                irq_main, irq_timer, irq_error, _ = self.irqs()
+                main |= irq_main
+                timer |= irq_timer
+                errors |= irq_error
+                if main & 0x18 == 0x18:
+                    low, high = self.read(0x5e, 2)
+                    size = low | ((high & 0xc0) << 2)
+                    if not size or size > max_rx or high & 0x30:
+                        raise FrameError('fifo', f'Invalid RX FIFO (size {size}, status 0x{high:02X})')
+                    return self.read(0x9f, size), high, errors
+                if timer & 0x40 and not main & 0x20:
+                    break
+                time.sleep(.001)
+            raise TimeoutError('Tag did not respond' if main & 0x08 else 'NFC transmit did not finish')
+        finally:
+            # STOP terminates the exchange without switching off the RF field.
+            # Clear stale RX/IRQ state so the next inventory can start cleanly.
+            self.cmd(0xc2)
+            self.cmd(0xdb)
+            self.irqs()
+
+    def exchange(self, payload, timeout=.12, verbose=False):
+        raw, _, _ = self.transceive(encode_vcd(payload), timeout)
+        if verbose:
+            print(f'  RF raw={raw.hex(" ")}', flush=True)
+        return decode_response(raw)
+
+    def inventory(self, timeout=.12, verbose=False):
+        try:
+            decoded = self.exchange((0x26, 0x01, 0x00), timeout, verbose)
+            if len(decoded) != 10 or decoded[0] & 1:
+                raise FrameError('framing', 'Unexpected ISO15693 inventory response')
+        except (FrameError, TimeoutError) as exc:
+            self.inventory_error = exc
             if verbose:
-                print('Decode error:',e)
+                print(f'Inventory: {exc}', flush=True)
             return None
-        if len(decoded)>=10 and not (decoded[0]&1):
-            uid = decoded[2:10]
-            return uid[::-1].hex().upper(),decoded
-        print('Received NFC-V response:',decoded.hex(' '))
-        return None
+        self.inventory_error = None
+        return decoded[2:10][::-1].hex().upper(), decoded
+
     def shutdown(self):
-        self.cmd(0xc2)
-        self.update(0x02, clearbits=0x48)
+        if self.identified:
+            try:
+                self.cmd(0xc2)
+            finally:
+                self.update(0x02, clearbits=0x48)
 
 
 def main():
@@ -211,7 +244,10 @@ def main():
     p.add_argument('--delay',type=float,default=.35)
     p.add_argument('--verbose',action='store_true')
     opts=p.parse_args()
-    with SMBus(opts.bus) as bus:
+    from smbus2 import SMBus
+
+    handle_sigterm()
+    with reader_lock(f'i2c-{opts.bus}'), SMBus(opts.bus) as bus:
         chip=Chip(bus)
         try:
             chip.initialize(opts.verbose)

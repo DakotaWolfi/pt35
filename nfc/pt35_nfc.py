@@ -1,425 +1,249 @@
 #!/usr/bin/env python3
-"""PT35 NFC archive and dual-reader frontend.
-
-Backends: Proxmark3/Iceman USB when genuinely available, otherwise existing
-ST25R3916 on /dev/i2c-1. Internal driver currently implements ISO15693/NFC-V.
-All automatic operations are read-only. Simulation is explicit via Iceman shell.
-"""
+"""PT35 read-only NFC frontend and JSON-lines worker for the desktop app."""
 import argparse
+import contextlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-DEFAULT_ARCHIVE = HERE / 'archive'
-VERSION = '0.1.0'
-UID_RE = re.compile(r'(?<![0-9a-fA-F])(?:E0[0-9a-fA-F]{14})(?![0-9a-fA-F])', re.I)
-COLOR_RE = re.compile(r'\x1b\[[0-9;]*m')
+import nfc_pm3 as pm3
+from nfc_archive import is_known_tonie, migrate_archive, now, record_path, save_record
+from nfc_config import DEFAULT_ARCHIVE, LEGACY_ARCHIVE, handle_sigterm, reader_lock
+from nfcv_dump import Reader, failure, is_sli_l, read_memory
+
+VERSION = '0.2.0'
+INTERNAL_PROTOCOLS = ('ISO15693',)
 
 
-def now():
-    return datetime.now(timezone.utc).isoformat()
+def new_record(uid, backend, dsfid=None, protocol='ISO15693'):
+    manufacturer = 'Unknown'
+    if protocol == 'ISO15693':
+        manufacturer = {'E004': 'NXP', 'E002': 'STMicroelectronics'}.get(uid[:4], 'Unknown')
+    candidate = manufacturer == 'NXP'
+    record = dict(format='PT35-NFC-archive-v2', uid=uid.upper(), protocol=protocol,
+                  manufacturer=manufacturer, classification='tonie_candidate' if candidate else 'other',
+                  classification_verified=False, backend=backend,
+                  dsfid=f'{dsfid:02X}' if dsfid is not None else None,
+                  last_seen_utc=now(), blocks=[], read_errors=[], dump_status='not_requested')
+    if protocol == 'ISO15693' and is_sli_l(uid):
+        record['chip'] = 'NXP ICODE SLI-L / SLIX-L (UID type 03)'
+    return record
 
 
-def classify(uid):
-    uid = uid.upper()
-    if uid.startswith('E004'):
-        return 'NXP ISO15693', 'tonie_candidate'
-    if uid.startswith('E002'):
-        return 'STMicroelectronics ISO15693', 'other'
-    return 'ISO15693', 'other'
+def skip_internal_uid(uid, include, exclude):
+    # E002 identifies the vendor, so never use it to hide all external ST tags.
+    return not include and bool(exclude) and uid == exclude.upper()
 
 
-def is_known_tonie(uid, archive):
-    known_file = archive / 'known_tonies.txt'
-    if not known_file.is_file():
-        return False
-    return uid.upper() in {line.strip().upper() for line in known_file.read_text().splitlines()
-                           if line.strip() and not line.startswith('#')}
+class Events:
+    def __init__(self, json_lines):
+        self.json_lines = json_lines
+
+    def __call__(self, event, message, **data):
+        if self.json_lines:
+            print(json.dumps({'event': event, 'message': message, **data}), flush=True)
+        else:
+            print(message, flush=True)
 
 
-def record_path(root, uid):
-    return root / uid.upper() / 'record.json'
-
-
-def save_record(root, record):
-    path = record_path(root, record['uid'])
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        old = json.loads(path.read_text(encoding='utf-8'))
-        record['first_seen_utc'] = old.get('first_seen_utc', now())
-        record['labels'] = old.get('labels', record.get('labels', []))
-        if old.get('blocks') and not record.get('blocks'):
-            record['blocks'] = old['blocks']
-            record['read_errors'] = old.get('read_errors', [])
-            record['dump_status'] = old.get('dump_status')
-        if old.get('pm3') and not record.get('pm3'):
-            record['pm3'] = old['pm3']
-    else:
-        record['first_seen_utc'] = now()
-    path.write_text(json.dumps(record, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-    return path
-
-
-def new_record(uid, backend, dsfid=None):
-    manufacturer, kind = classify(uid)
-    return dict(format='PT35-NFC-archive-v1', uid=uid.upper(), protocol='ISO15693',
-                manufacturer=manufacturer, classification=kind,
-                classification_verified=False, backend=backend,
-                dsfid=f'{dsfid:02X}' if dsfid is not None else None,
-                last_seen_utc=now(), blocks=[], read_errors=[], dump_status='not_requested',
-                notes='Ordinary read-only tag data. No Tonie authentication keys are recovered.')
-
-
-def usb_ports():
-    # Never select arbitrary USB serial adapters; check sysfs ancestry for PM3 descriptors.
-    found = []
-    for base in ('/dev/serial/by-id',):
-        folder = Path(base)
-        if folder.is_dir():
-            for item in folder.iterdir():
-                if re.search(r'proxmark|pm3|iceman', item.name, re.I):
-                    found.append(str(item.resolve()))
-    for item in list(Path('/dev').glob('ttyACM*')) + list(Path('/dev').glob('ttyUSB*')):
-        if str(item) in found:
-            continue
-        sysdev = Path('/sys/class/tty') / item.name / 'device'
-        desc = []
-        try:
-            p = sysdev.resolve()
-            for parent in [p, *p.parents]:
-                for f in ('product', 'manufacturer', 'interface'):
-                    fp = parent / f
-                    if fp.is_file():
-                        desc.append(fp.read_text(errors='replace').strip())
-        except OSError:
-            pass
-        if re.search(r'proxmark|pm3', ' '.join(desc), re.I):
-            found.append(str(item))
-    return sorted(set(found))
-
-
-def pm3_client():
-    paths = [os.environ.get('PT35_PM3_CLIENT', ''),
-             str(Path.home() / 'proxmark3' / 'client' / 'proxmark3'),
-             str(Path.home() / 'proxmark3' / 'pm3'),
-             '/usr/local/bin/proxmark3', shutil.which('proxmark3') or '']
-    for v in paths:
-        if v and Path(v).is_file() and os.access(v, os.X_OK):
-            return v
-    return None
-
-
-def run_pm3(client, port, command, timeout=35, cwd=None):
-    # -c is the Proxmark3 client command-string flag; no shell interpolation.
-    proc = subprocess.run([client, '-p', port, '-c', command], cwd=cwd,
-                          text=True, capture_output=True, timeout=timeout,
-                          env={**os.environ, 'NO_COLOR': '1'})
-    return proc.returncode, COLOR_RE.sub('', (proc.stdout or '') + '\n' + (proc.stderr or ''))
-
-
-def pm3_online(client, port):
-    try:
-        code, out = run_pm3(client, port, 'hw version', timeout=12)
-        return code == 0 and bool(re.search(r'proxmark|firmware|bootrom|fpga', out, re.I))
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-
-def choose_backend(mode, port=None):
-    if mode == 'internal':
-        return 'internal', None, None
-    client = pm3_client()
-    candidates = [port] if port else usb_ports()
-    if client:
-        for p in candidates:
-            if p and pm3_online(client, p):
-                return 'proxmark3', client, p
-    if mode == 'proxmark3':
-        raise RuntimeError('No reachable Proxmark3/Iceman client/device. Run status or choose --backend internal.')
+def backend_choice(args, emit):
+    if args.backend != 'internal':
+        client = pm3.pm3_client(args.client)
+        ports = pm3.usb_ports()
+        if args.port:
+            requested = str(Path(args.port).resolve())
+            ports = [port for port in ports if str(Path(port).resolve()) == requested]
+        reason = ('Iceman client missing or not executable' if not client else
+                  'No matching Proxmark3 USB descriptor' if not ports else '')
+        if client:
+            for port in ports:
+                try:
+                    with reader_lock(Path(port).name):
+                        reason = pm3.probe(client, port)
+                except RuntimeError as exc:
+                    reason = str(exc)
+                if reason is None:
+                    emit('backend', f'Proxmark3/Iceman connected on {port}', backend='proxmark3',
+                         capabilities=['ISO15693 inventory', 'HF/LF identify logs'], port=port)
+                    return 'proxmark3', client, port
+        emit('fault', f'Proxmark3 unavailable: {reason}', backend='proxmark3')
+        if args.backend == 'proxmark3':
+            return None, None, None
     return 'internal', None, None
 
 
-def pm3_inventory(client, port):
-    code, output = run_pm3(client, port, 'hf 15 reader', timeout=20)
-    # Different Iceman versions print UID differently; accept explicitly labeled UID only.
-    uid = None
-    for line in output.splitlines():
-        if re.search(r'\bUID\b', line, re.I):
-            match = UID_RE.search(line.replace(' ', ''))
-            if match:
-                uid = match.group(0).upper()
-                break
-            # Common spaced hex UID format on a 'UID:' line.
-            if ':' in line:
-                tail = line.split(':', 1)[1]
-                chunks = re.findall(r'\b[0-9a-fA-F]{2}\b', tail)
-                if len(chunks) >= 8:
-                    candidate = ''.join(chunks[:8]).upper()
-                    if candidate.startswith('E0'):
-                        uid = candidate
-                        break
-    return uid, output, code
+def tag_event(args, emit, record):
+    candidate = record['classification'] == 'tonie_candidate'
+    known = candidate and is_known_tonie(record['uid'], args.archive)
+    record['tonie_status'] = ('known_tonie' if known else 'possible_tonie' if candidate else
+                              'not_identified_as_tonie')
+    if known:
+        record.update(classification='known_tonie', classification_verified=True)
+    uid = record['uid']
+    emit('tag', f"FOUND {uid} | {record['protocol']} | {record['dump_status']}", record=record)
+    if args.save or (args.auto_tonie and known) or (args.auto_candidates and candidate):
+        try:
+            path = save_record(args.archive, record)
+        except (OSError, ValueError) as exc:
+            emit('fault', f'Archive save failed: {exc}')
+        else:
+            emit('archived', f'Archived {uid}', path=str(path))
 
 
-def pm3_dump(client, port, uid, root):
-    dest = record_path(root, uid).parent / 'proxmark3'
-    dest.mkdir(parents=True, exist_ok=True)
-    try:
-        code, output = run_pm3(client, port, 'hf 15 dump', timeout=100, cwd=dest)
-    except subprocess.TimeoutExpired:
-        code, output = 124, 'Timeout while executing hf 15 dump'
-    (dest / 'iceman_dump.log').write_text(output, encoding='utf-8')
-    return dict(command='hf 15 dump', exit_status=code, log='proxmark3/iceman_dump.log',
-                files=[str(x.relative_to(record_path(root, uid).parent)) for x in dest.iterdir() if x.is_file()])
-
-
-def internal_driver():
+def internal_operation(args, emit):
     try:
         from smbus2 import SMBus
-        from nfcv_dump import Reader
     except ImportError as exc:
-        raise RuntimeError(f'Install smbus2 and place nfcv_scan.py + nfcv_dump.py beside pt35_nfc.py: {exc}') from exc
-    return SMBus, Reader
-
-
-def get_v_memory_size(reader, uid, verbose=False):
-    # ISO15693 GET SYSTEM INFORMATION (addressed, high data rate).
-    # Response: flags, infoflags, UID[8], optionally DSFID/AFI/memory geometry/IC ref.
-    try:
-        reply = reader.exchange(bytes([0x22, 0x2B]) + bytes.fromhex(uid)[::-1],
-                                timeout=.5, verbose=verbose)
-        if not reply or (reply[0] & 1) or len(reply) < 10:
-            return None
-        mask, index = reply[1], 10
-        if mask & 0x01: index += 1  # DSFID
-        if mask & 0x02: index += 1  # AFI
-        if mask & 0x04:
-            if len(reply) < index + 2:
-                return None
-            return dict(blocks=reply[index] + 1,
-                        size=(reply[index + 1] & 0x1f) + 1)
-    except (OSError, TimeoutError, ValueError) as exc:
-        if verbose:
-            print(f'  System info not available: {exc}')
-    return None
-
-
-def internal_dump(reader, uid, blocks, verbose):
-    got, errors = [], []
-    for i in range(blocks):
-        try:
-            block = reader.read_single(uid, i, verbose=verbose)
-            if not block:
-                raise ValueError('empty response')
-            got.append(dict(index=i, hex=block.hex().upper(), size=len(block)))
-            print(f'  Block {i:03}: {block.hex(" ").upper()}', flush=True)
-        except (OSError, TimeoutError, ValueError) as exc:
-            print(f'  Block {i:03}: {exc}', flush=True)
-            errors.append(dict(index=i, error=str(exc)))
-            break
-    return got, errors
-
-
-def save_binary(root, record):
-    blocks = record.get('blocks', [])
-    if not blocks or record.get('read_errors'):
-        return
-    if len({len(bytes.fromhex(block['hex'])) for block in blocks}) != 1:
-        return
-    file = record_path(root, record['uid']).parent / 'memory.bin'
-    file.parent.mkdir(parents=True, exist_ok=True)
-    file.write_bytes(b''.join(bytes.fromhex(x['hex']) for x in blocks))
-    record['memory_binary'] = 'memory.bin'
-
-
-def handle_tag(root, uid, backend, dsfid, save, auto_tonie, blocks, verbose, reader=None,
-               pm3_client_path=None, pm3_port=None):
-    candidate = uid.startswith('E004')
-    known = is_known_tonie(uid, root)
-    manufacturer, tagclass = classify(uid)
-    print(f'FOUND {uid}  ({manufacturer})  via {backend}', flush=True)
-    should_save = save or (auto_tonie and (known or candidate))
-    if not should_save:
-        print('  Not archived. Use --save or --auto-tonie to store it.', flush=True)
-        return False
-    existing = record_path(root, uid)
-    if auto_tonie and not save and existing.is_file():
-        try:
-            old = json.loads(existing.read_text(encoding='utf-8'))
-            if old.get('dump_status') in ('requested_range_complete', 'see_pm3_log'):
-                print('  Already archived; skipping repeated dump.', flush=True)
-                return False
-        except (OSError, ValueError):
-            pass
-    rec = new_record(uid, backend, dsfid)
-    rec['tonie_status'] = 'known_tonie' if known else ('possible_tonie' if candidate else 'not_identified_as_tonie')
-    if known:
-        rec['classification_verified'] = True
-    if backend == 'internal':
-        geometry = get_v_memory_size(reader, uid, verbose)
-        rec['geometry'] = geometry
-        count = (geometry['blocks'] if geometry else 8) if blocks == 0 else blocks
-        print(f'  Reading {count} block(s)' + (f" of {geometry['blocks']} x {geometry['size']} bytes" if geometry else ' (geometry unavailable)'), flush=True)
-        rec['requested_blocks'] = count
-        rec['blocks'], rec['read_errors'] = internal_dump(reader, uid, count, verbose)
-        rec['dump_status'] = ('requested_range_complete' if len(rec['blocks']) == count
-                              else 'partial' if rec['blocks'] else 'failed')
-        save_binary(root, rec)
-    else:
-        rec['pm3'] = pm3_dump(pm3_client_path, pm3_port, uid, root)
-        rec['dump_status'] = 'see_pm3_log'
-    loc = save_record(root, rec)
-    print(f'  Archived: {loc}', flush=True)
-    return True
-
-
-def internal_scan(args):
-    SMBus, Reader = internal_driver()
-    last, last_time = None, 0.0
-    with SMBus(args.bus) as bus:
+        raise RuntimeError('Install python3-smbus2 for the internal reader') from exc
+    # Legacy verbose hex diagnostics stay off the JSON-lines stream.
+    diagnostics = contextlib.redirect_stdout(sys.stderr) if args.json_lines else contextlib.nullcontext()
+    with reader_lock(f'i2c-{args.bus}'), SMBus(args.bus) as bus:
         reader = Reader(bus)
+        if args.action == 'status':
+            identity = reader.rd(0x3f)
+            if identity >> 3 != 5:
+                raise RuntimeError(f'Unexpected ST25R3916 ID 0x{identity:02X}')
+            emit('backend', f'Internal ST25R3916 connected (0x{identity:02X})',
+                 backend='internal', capabilities=list(INTERNAL_PROTOCOLS))
+            return
         try:
-            reader.initialize(verbose=args.verbose)
-            print('Internal NFC-V reader. Present a tag; Ctrl+C to stop.', flush=True)
+            with diagnostics:
+                reader.initialize(verbose=args.verbose)
+            emit('backend', 'Internal ST25R3916 connected', backend='internal',
+                 capabilities=list(INTERNAL_PROTOCOLS))
+            last = {}
             attempts = 0
+            last_error = None
             while args.watch or attempts < args.tries:
                 attempts += 1
-                result = reader.inventory(verbose=args.verbose)
-                if result:
+                with diagnostics:
+                    result = reader.inventory(verbose=args.verbose)
+                if result and not skip_internal_uid(result[0], args.include_st, args.exclude_uid):
                     uid, payload = result
-                    if uid.startswith('E002') and not args.include_st:
-                        if args.verbose:
-                            print(f'  Ignored ST tag {uid}; use --include-st to include it.')
-                        time.sleep(args.delay)
-                        continue
-                    if uid != last or time.monotonic() - last_time > args.repeat_after:
-                        last, last_time = uid, time.monotonic()
-                        handle_tag(args.archive, uid, 'internal', payload[1], args.save,
-                                   args.auto_tonie, args.blocks, args.verbose, reader=reader)
-                elif args.verbose:
-                    print('  No tag')
+                    current = time.monotonic()
+                    if uid not in last or current - last[uid] >= args.repeat_after:
+                        if len(last) >= 256:
+                            last.pop(next(iter(last)))
+                        last[uid] = current
+                        record = new_record(uid, 'internal', dsfid=payload[1])
+                        with diagnostics:
+                            record.update(read_memory(reader, uid, args.blocks, args.verbose))
+                        tag_event(args, emit, record)
+                        if not args.watch:
+                            return
+                error = reader.inventory_error
+                state = (failure(error)['kind'] if error else 'tag')
+                if state != last_error and error:
+                    emit('scan_state', 'Waiting for tag' if state == 'timeout' else str(error), state=state)
+                last_error = state
                 time.sleep(args.delay)
-        except KeyboardInterrupt:
-            print('\nStopped.')
         finally:
-            try: reader.shutdown()
-            except OSError: pass
+            reader.shutdown()
 
 
-def pm3_scan(args, client, port):
-    print(f'Proxmark3/Iceman active: {port} ({client})', flush=True)
-    attempts = 0
-    last, last_time = None, 0.0
-    while args.watch or attempts < args.tries:
-        attempts += 1
-        try:
-            uid, output, code = pm3_inventory(client, port)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            print(f'Proxmark3 connection failed: {exc}', flush=True)
-            if args.backend == 'auto':
-                print('Falling back to internal NFC-V reader...', flush=True)
-                return internal_scan(args)
-            raise
-        if uid and (uid != last or time.monotonic() - last_time > args.repeat_after):
-            last, last_time = uid, time.monotonic()
-            handle_tag(args.archive, uid, 'proxmark3', None, args.save,
-                       args.auto_tonie, args.blocks, args.verbose,
-                       pm3_client_path=client, pm3_port=port)
-        elif args.verbose:
-            print(output.strip()[-1500:] or '(no output)')
-        if not args.watch and attempts >= args.tries:
-            break
-        time.sleep(args.delay)
-
-
-def list_archive(root):
-    if not root.exists():
-        print('No archive yet.')
-        return
-    for p in sorted(root.glob('*/record.json')):
-        try:
-            r = json.loads(p.read_text(encoding='utf-8'))
-            print(f"{r['uid']} | {r.get('tonie_status','unknown'):22} | {r.get('dump_status','?'):24} | {r.get('backend','?')}")
-        except (ValueError, KeyError):
-            print(f'Invalid record: {p}')
+def pm3_operation(args, emit, client, port):
+    with reader_lock(Path(port).name):
+        if args.action == 'identify':
+            for command in ('hf search', 'lf search'):
+                code, output = pm3.run_pm3(client, port, command)
+                emit('log', f'{command} (exit {code})\n{output}')
+            return
+        if args.action == 'pm3-shell':
+            subprocess.run([client, '-p', port], check=True)
+            return
+        last = None
+        last_time = 0
+        attempts = 0
+        while args.watch or attempts < args.tries:
+            attempts += 1
+            if not Path(port).exists():
+                raise OSError(f'Proxmark3 disconnected ({port})')
+            uid, output, _ = pm3.pm3_inventory(client, port)
+            if args.verbose:
+                emit('log', output.strip())
+            if uid and (uid != last or time.monotonic() - last_time >= args.repeat_after):
+                last, last_time = uid, time.monotonic()
+                tag_event(args, emit, new_record(uid, 'proxmark3'))
+                if not args.watch:
+                    return
+            time.sleep(args.delay)
 
 
 def main():
-    p = argparse.ArgumentParser(description='PT35 NFC dual-backend reader/archive')
-    p.add_argument('action', choices=['status', 'scan', 'watch', 'list', 'show', 'identify', 'pm3-shell'], nargs='?', default='scan')
-    p.add_argument('uid', nargs='?', help='UID for show action')
+    p = argparse.ArgumentParser(description='PT35 NFC dual-reader and local archive')
+    p.add_argument('action', choices=['status', 'scan', 'watch', 'list', 'show', 'identify', 'pm3-shell',
+                                       'migrate-archive'], nargs='?', default='scan')
+    p.add_argument('uid', nargs='?', help='tag identifier for show')
     p.add_argument('--backend', choices=['auto', 'internal', 'proxmark3'], default='auto')
-    p.add_argument('--port', help='Proxmark3 serial device, e.g. /dev/ttyACM0')
+    p.add_argument('--port', help='select a detected Proxmark3 serial port')
+    p.add_argument('--client', help='path to the Iceman client executable')
     p.add_argument('--bus', type=int, default=1)
     p.add_argument('--archive', type=Path, default=DEFAULT_ARCHIVE)
-    p.add_argument('--save', action='store_true', help='save every scanned tag')
-    p.add_argument('--auto-tonie', action='store_true', help='archive NXP NFC-V Tonie candidates')
-    p.add_argument('--include-st', action='store_true', help='also detect internal ST25DV tags')
-    p.add_argument('--blocks', type=int, default=0, help='ISO15693 block count; 0=auto from system info, fallback 8')
+    p.add_argument('--save', action='store_true', help='save all discovered tags')
+    p.add_argument('--auto-tonie', action='store_true', help='save UID matches in known_tonies.txt')
+    p.add_argument('--auto-candidates', action='store_true', help='also save unverified NXP candidates')
+    p.add_argument('--include-st', action='store_true', help='include the configured onboard ST25DV UID')
+    p.add_argument('--exclude-uid', default=os.environ.get('PT35_NFC_ONBOARD_UID'),
+                   help='exact onboard ST25DV UID to omit')
+    p.add_argument('--blocks', type=int, default=0, help='ISO15693 blocks (0 = geometry or conservative probe)')
     p.add_argument('--tries', type=int, default=40)
     p.add_argument('--delay', type=float, default=.25)
     p.add_argument('--repeat-after', type=float, default=30)
+    p.add_argument('--json-lines', action='store_true')
     p.add_argument('--verbose', action='store_true')
     args = p.parse_args()
     args.watch = args.action == 'watch'
     args.archive = args.archive.expanduser().resolve()
-    if not 0 <= args.blocks <= 256:
-        p.error('--blocks must be 0..256')
-    if args.action == 'list':
-        list_archive(args.archive)
-        return
-    if args.action == 'show':
-        if not args.uid:
-            p.error('show requires UID')
-        file = record_path(args.archive, args.uid)
-        if not file.exists():
-            p.error(f'Not archived: {args.uid}')
-        print(file.read_text(encoding='utf-8'))
-        return
-    backend, client, port = choose_backend(args.backend, args.port)
-    if args.action == 'status':
-        print(f'PT35 NFC v{VERSION}')
-        print(f'Selected backend: {backend}')
-        print(f'Iceman client: {client or "not found"}')
-        print(f'Proxmark3 USB ports: {", ".join(usb_ports()) or "none detected"}')
-        print(f'Archive: {args.archive}')
-        print('Internal implemented protocol: ISO15693/NFC-V (UID + readable blocks)')
-        print('Internal NFC-A/B/F and card emulation: not implemented in this build')
-        return
-    if args.action == 'identify':
-        if backend != 'proxmark3':
-            print('Generic HF/LF identification requires Proxmark3. Internal backend supports NFC-V only.')
-            return
-        for command in ('hf search', 'lf search'):
-            try:
-                code, output = run_pm3(client, port, command, timeout=35)
-                print(f'===== {command} (exit {code}) =====\n{output}')
-            except subprocess.TimeoutExpired:
-                print(f'{command}: timeout')
-        return
-    if args.action == 'pm3-shell':
-        if backend != 'proxmark3':
-            p.error('PM3 not available. Plug it in or specify --port.')
-        print('Opening Iceman interactive console; use hf 15 help / hf 15 sim etc.')
-        os.execv(client, [client, '-p', port])
+    if not 0 <= args.blocks <= 256 or args.tries < 1 or not 0 <= args.delay <= 10 or args.repeat_after < 0:
+        p.error('Invalid block count, retry count or scan interval')
+    if args.exclude_uid and not re.fullmatch(r'E002[0-9A-F]{12}', args.exclude_uid.upper()):
+        p.error('--exclude-uid must be the exact onboard 16-digit ST25DV UID')
+    emit = Events(args.json_lines)
+    handle_sigterm()
     try:
-        if backend == 'proxmark3':
-            pm3_scan(args, client, port)
-        else:
-            internal_scan(args)
+        if args.action == 'migrate-archive':
+            print(f'Copied {migrate_archive(LEGACY_ARCHIVE, args.archive)} missing archive files.')
+            return 0
+        if args.action == 'list':
+            for path in sorted(args.archive.glob('*/record.json')):
+                try:
+                    record = json.loads(path.read_text())
+                    print(record['uid'], record['protocol'], record.get('dump_status', '?'))
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    print(f'{path}: {exc}', file=sys.stderr)
+            return 0
+        if args.action == 'show':
+            if not args.uid:
+                p.error('show requires a UID')
+            print(record_path(args.archive, args.uid).read_text(encoding='utf-8'))
+            return 0
+        backend, client, port = backend_choice(args, emit)
+        if backend is None:
+            return 2
+        if backend == 'internal':
+            if args.action in ('identify', 'pm3-shell'):
+                raise RuntimeError('This operation requires a responsive Proxmark3/Iceman')
+            internal_operation(args, emit)
+        elif args.action != 'status':
+            try:
+                pm3_operation(args, emit, client, port)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                if args.backend != 'auto' or args.action not in ('scan', 'watch'):
+                    raise
+                emit('fault', f'Proxmark3 unavailable: {exc}. Switching to internal reader.')
+                internal_operation(args, emit)
     except KeyboardInterrupt:
-        print('\nStopped.')
-    except Exception as exc:
-        print(f'ERROR: {exc}', file=sys.stderr)
-        raise SystemExit(2) from exc
+        emit('stopped', 'Stopped')
+        return 130
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
+        emit('fault', str(exc))
+        return 2
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

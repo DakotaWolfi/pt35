@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""PT35 NFC graphical front end (Tkinter).
-
-Runs the existing pt35_nfc.py backend; never manipulates RF hardware itself.
-Archives stay in the existing ~/pt35-nfc/archive directory.
-"""
-from __future__ import annotations
-
+"""Standalone Tk application for the PT35 NFC worker and local archive."""
 import json
 import os
 import queue
@@ -15,240 +9,361 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
+from tkinter.scrolledtext import ScrolledText
 
-HERE = Path(__file__).resolve().parent
-BACKEND_SCRIPT = HERE / "pt35_nfc.py"
-ARCHIVE = Path.home() / "pt35-nfc" / "archive"
-POLL_MS = 100
+from nfc_archive import atomic_write, range_bytes, record_bytes, save_record
+from nfc_config import DEFAULT_ARCHIVE
+
+BACKEND_SCRIPT = Path(__file__).resolve().with_name('pt35_nfc.py')
+
+
+def read_events(proc, events):
+    with proc.stdout:
+        for line in proc.stdout:
+            try:
+                item = json.loads(line)
+                if not isinstance(item, dict) or 'event' not in item:
+                    raise ValueError
+            except ValueError:
+                item = {'event': 'log', 'message': line.strip()}
+            events.put(item)
+    events.put({'event': 'exit', 'code': proc.wait()})
+
+
+def format_record(record):
+    geom = record.get('geometry')
+    lines = [
+        f"{record['protocol']} | {record['uid']}",
+        f"{record.get('manufacturer', 'Unknown')} | {record.get('tonie_status', 'Unclassified')}",
+        f"Source {record.get('capture_backend', record.get('backend', '?'))} | "
+        f"{record.get('captured_utc', record.get('last_seen_utc', ''))}",
+        record.get('chip', ''),
+        f"Geometry: {geom['blocks']} × {geom['size']} bytes ({geom.get('source', 'legacy')})"
+        if geom else 'Geometry: unknown',
+        f"Coverage: {record.get('dump_status', '?').replace('_', ' ')}",
+    ]
+    if record.get('blocks') and record.get('capture_format') != 2:
+        lines.append('Legacy capture. Check its raw record for the original coverage claims.')
+    if record.get('verification'):
+        lines.append(record['verification'])
+    if record.get('system_info', {}).get('error'):
+        lines.append('System Information: ' + record['system_info']['error']['error'])
+    if record.get('pm3_log'):
+        lines += ['', record['pm3_log']]
+    lines.append('')
+    for block in record.get('blocks', []):
+        data = bytes.fromhex(block['hex'])
+        printable = ''.join(chr(b) if 32 <= b < 127 else '.' for b in data)
+        lines.append(f"{block['index']:04d}   {data.hex(' ').upper():<24} {printable}")
+    for error in record.get('read_errors', []):
+        lines.append(f"{error['index']:04d}   {error.get('kind', 'failed')}: "
+                     f"{error.get('error', error.get('reason', '?'))}")
+    return '\n'.join(lines)
 
 
 class NFCWindow(tk.Tk):
-    def __init__(self):
+    def __init__(self, archive=DEFAULT_ARCHIVE):
         super().__init__()
-        self.title("PT35 NFC Reader")
-        self.geometry("850x620")
-        self.minsize(620, 440)
-        self.events = queue.Queue()
+        self.title('PT35 NFC Reader')
+        self.geometry(f'{min(900, self.winfo_screenwidth())}x{min(630, self.winfo_screenheight() - 60)}')
+        self.minsize(440, 330)
+        self.archive = archive
         self.proc = None
-        self.busy = False
-        self.backend = tk.StringVar(value="auto")
+        self.worker = None
+        self.events = queue.Queue(maxsize=128)
+        self.closing = False
+        self.stopping = False
+        self.had_fault = False
+        self.current = None
+        self.live = {}
+        self.saved = {}
+        self.backend = tk.StringVar(value='auto')
         self.auto_tonie = tk.BooleanVar(value=True)
+        self.auto_candidates = tk.BooleanVar(value=False)
         self.save_all = tk.BooleanVar(value=False)
         self.include_st = tk.BooleanVar(value=False)
-        self.blocks = tk.StringVar(value="0")
-        self.state = tk.StringVar(value="Ready")
+        self.exclude_uid = tk.StringVar(value=os.environ.get('PT35_NFC_ONBOARD_UID', ''))
+        self.blocks = tk.StringVar(value='0')
+        self.client = tk.StringVar()
+        self.port = tk.StringVar()
+        self.query = tk.StringVar()
+        self.status = tk.StringVar(value='Ready')
+        self.reader = tk.StringVar(value='Reader status unknown')
         self._build()
         self.refresh_archive()
-        self.after(POLL_MS, self._drain_events)
-        self.protocol("WM_DELETE_WINDOW", self.close)
-        if not BACKEND_SCRIPT.is_file():
-            messagebox.showerror("Missing backend", f"Cannot find {BACKEND_SCRIPT}")
+        self.after(50, self.drain)
+        self.protocol('WM_DELETE_WINDOW', self.close)
 
     def _build(self):
-        outer = ttk.Frame(self, padding=10)
-        outer.pack(fill="both", expand=True)
-        opts = ttk.LabelFrame(outer, text="Reader", padding=8)
-        opts.pack(fill="x")
-        ttk.Label(opts, text="Backend").grid(row=0, column=0, sticky="w")
-        ttk.Combobox(opts, textvariable=self.backend, state="readonly", width=13,
-                     values=("auto", "internal", "proxmark3")).grid(row=0, column=1, padx=6)
-        ttk.Label(opts, text="Blocks (0 = auto)").grid(row=0, column=2, sticky="w", padx=(10, 0))
-        ttk.Spinbox(opts, from_=0, to=256, textvariable=self.blocks, width=6).grid(row=0, column=3, padx=6)
-        ttk.Checkbutton(opts, text="Auto-save Tonie candidates", variable=self.auto_tonie).grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(9, 0))
-        ttk.Checkbutton(opts, text="Save every tag", variable=self.save_all).grid(
-            row=1, column=2, columnspan=2, sticky="w", pady=(9, 0))
-        ttk.Checkbutton(opts, text="Include built-in ST tag", variable=self.include_st).grid(
-            row=2, column=0, columnspan=3, sticky="w", pady=(5, 0))
-        bar = ttk.Frame(outer)
-        bar.pack(fill="x", pady=8)
-        self.start_button = ttk.Button(bar, text="Start scanning", command=self.start)
-        self.start_button.pack(side="left")
-        self.stop_button = ttk.Button(bar, text="Stop", command=self.stop, state="disabled")
-        self.stop_button.pack(side="left", padx=5)
-        ttk.Button(bar, text="Reader status", command=lambda: self.run_once("status")).pack(side="left", padx=5)
-        ttk.Button(bar, text="Identify (PM3)", command=lambda: self.run_once("identify")).pack(side="left", padx=5)
-        ttk.Label(bar, textvariable=self.state).pack(side="right")
-        logbox = ttk.LabelFrame(outer, text="Live scanner output", padding=5)
-        logbox.pack(fill="both", expand=True)
-        self.log = tk.Text(logbox, height=10, wrap="word", state="disabled")
-        log_scroll = ttk.Scrollbar(logbox, command=self.log.yview)
-        self.log.configure(yscrollcommand=log_scroll.set)
-        self.log.pack(side="left", fill="both", expand=True)
-        log_scroll.pack(side="right", fill="y")
-        archivebox = ttk.LabelFrame(outer, text="Saved tags", padding=5)
-        archivebox.pack(fill="both", expand=True, pady=(8, 0))
-        cols = ("uid", "type", "status", "reader")
-        self.tree = ttk.Treeview(archivebox, columns=cols, show="headings", height=7)
-        for col, width in (("uid", 185), ("type", 170), ("status", 175), ("reader", 90)):
-            self.tree.heading(col, text=col.capitalize())
-            self.tree.column(col, width=width, minwidth=70)
-        self.tree.pack(fill="both", expand=True)
-        self.tree.bind("<Double-1>", lambda _: self.show_selected())
-        bottom = ttk.Frame(outer)
-        bottom.pack(fill="x", pady=(7, 0))
-        ttk.Button(bottom, text="Refresh archive", command=self.refresh_archive).pack(side="left")
-        ttk.Button(bottom, text="View selected tag", command=self.show_selected).pack(side="left", padx=6)
-        ttk.Label(bottom, text=f"Archive: {ARCHIVE}").pack(side="right")
+        frame = ttk.Frame(self, padding=8)
+        frame.pack(fill='both', expand=True)
+        bar = ttk.Frame(frame)
+        bar.pack(fill='x', pady=(0, 6))
+        self.buttons = []
+        for label, action in (('Start', 'watch'), ('Reader status', 'status')):
+            button = ttk.Button(bar, text=label, command=lambda a=action: self.launch(a))
+            button.pack(side='left', padx=(0, 4))
+            self.buttons.append(button)
+        self.stop_button = ttk.Button(bar, text='Stop', state='disabled', command=self.stop)
+        self.stop_button.pack(side='left')
+        ttk.Label(frame, textvariable=self.reader).pack(fill='x')
+        status = ttk.Label(frame, textvariable=self.status, wraplength=410)
+        status.pack(fill='x', pady=(0, 4))
+        status.bind('<Configure>', lambda event: status.configure(wraplength=event.width))
+        self.tabs = ttk.Notebook(frame)
+        self.tabs.pack(fill='both', expand=True)
+        scan, self.data_tab, archive, proxmark, settings = [
+            ttk.Frame(self.tabs, padding=5) for _ in range(5)
+        ]
+        for pane, title in zip((scan, self.data_tab, archive, proxmark, settings),
+                               ('Scan', 'Data', 'Archive', 'Proxmark', 'Settings')):
+            self.tabs.add(pane, text=title)
+        self.live_tree = self.make_tree(scan, self.live)
+        self.log = ScrolledText(scan, height=5, wrap='word', state='disabled')
+        self.log.pack(fill='x', pady=(5, 0))
+        self.raw = tk.BooleanVar()
+        actions = ttk.Frame(self.data_tab)
+        actions.pack(fill='x')
+        ttk.Button(actions, text='Save tag', command=self.save_current).pack(side='left')
+        ttk.Button(actions, text='Export…', command=self.export_current).pack(side='left', padx=4)
+        ttk.Checkbutton(actions, text='Raw JSON', variable=self.raw, command=self.render).pack(side='left')
+        self.data = ScrolledText(self.data_tab, height=8, wrap='word', state='disabled')
+        self.data.pack(fill='both', expand=True, pady=(5, 0))
+        search = ttk.Frame(archive)
+        search.pack(fill='x', pady=(0, 5))
+        ttk.Label(search, text='Search').pack(side='left')
+        ttk.Entry(search, textvariable=self.query).pack(side='left', fill='x', expand=True, padx=4)
+        ttk.Button(search, text='Refresh', command=self.refresh_archive).pack(side='right')
+        self.archive_tree = self.make_tree(archive, self.saved)
+        self.query.trace_add('write', lambda *_: self.populate_archive())
+        ttk.Label(proxmark, text='Iceman must respond and match the connected firmware.',
+                  wraplength=400).pack(anchor='w')
+        identify = ttk.Button(proxmark, text='Identify HF / LF',
+                              command=lambda: self.launch('identify', force='proxmark3'))
+        identify.pack(anchor='w', pady=6)
+        self.buttons.append(identify)
+        ttk.Label(proxmark, text='Client path and serial port are configurable in Settings.',
+                  wraplength=400).pack(anchor='w')
+        settings.columnconfigure(1, weight=1)
+        ttk.Label(settings, text='Backend').grid(row=0, column=0, sticky='w')
+        ttk.Combobox(settings, textvariable=self.backend, state='readonly',
+                     values=('auto', 'internal', 'proxmark3')).grid(row=0, column=1, sticky='ew')
+        for row, (label, var) in enumerate((
+                ('Blocks (0 = auto)', self.blocks), ('Onboard ST25DV UID', self.exclude_uid),
+                ('Iceman client path', self.client), ('Proxmark3 serial port', self.port)), start=1):
+            ttk.Label(settings, text=label).grid(row=row, column=0, sticky='w', padx=(0, 6))
+            ttk.Entry(settings, textvariable=var).grid(row=row, column=1, sticky='ew')
+        for row, (label, var) in enumerate((
+                ('Include configured onboard tag', self.include_st), ('Save every tag', self.save_all),
+                ('Auto-save known Tonie UIDs', self.auto_tonie),
+                ('Also auto-save unverified NXP candidates', self.auto_candidates)), start=5):
+            ttk.Checkbutton(settings, text=label, variable=var).grid(row=row, columnspan=2, sticky='w')
 
-    def _append(self, msg):
-        self.log.configure(state="normal")
-        self.log.insert("end", msg.rstrip("\n") + "\n")
-        # Keep memory use bounded on long scans.
-        if int(self.log.index("end-1c").split(".")[0]) > 1800:
-            self.log.delete("1.0", "301.0")
-        self.log.see("end")
-        self.log.configure(state="disabled")
-        if "Archived:" in msg:
-            self.refresh_archive()
+    def make_tree(self, parent, records):
+        columns = ('uid', 'protocol', 'type', 'status')
+        tree = ttk.Treeview(parent, columns=columns, show='headings', selectmode='browse', height=5)
+        for col, width in zip(columns, (150, 90, 140, 155)):
+            tree.heading(col, text=col.capitalize())
+            tree.column(col, width=width, minwidth=50)
+        scroll = ttk.Scrollbar(parent, command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side='right', fill='y')
+        tree.pack(fill='both', expand=True)
+        tree.bind('<<TreeviewSelect>>', lambda _: self.select(tree, records))
+        tree.bind('<Double-1>', lambda _: self.tabs.select(self.data_tab))
+        tree.bind('<Return>', lambda _: self.tabs.select(self.data_tab))
+        return tree
 
-    def _command(self, action):
-        try:
-            count = int(self.blocks.get())
-        except ValueError as exc:
-            raise ValueError("Block count must be an integer from 0 to 256") from exc
-        if not 0 <= count <= 256:
-            raise ValueError("Block count must be between 0 and 256")
-        cmd = [sys.executable, "-u", str(BACKEND_SCRIPT), action,
-               "--backend", self.backend.get(), "--archive", str(ARCHIVE),
-               "--blocks", str(count)]
-        if self.auto_tonie.get(): cmd.append("--auto-tonie")
-        if self.save_all.get(): cmd.append("--save")
-        if self.include_st.get(): cmd.append("--include-st")
-        return cmd
+    def select(self, tree, records):
+        selected = tree.selection()
+        if selected and selected[0] in records:
+            self.current = records[selected[0]]
+            self.render()
 
-    def start(self):
-        self._launch("watch")
-
-    def run_once(self, action):
-        self._launch(action)
-
-    def _launch(self, action):
-        if self.proc is not None:
-            return
-        try:
-            cmd = self._command(action)
-        except ValueError as exc:
-            messagebox.showerror("Invalid setting", str(exc))
-            return
-        self._append(f"$ {' '.join(cmd)}")
-        try:
-            self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
-                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                         text=True, bufsize=1, start_new_session=True)
-        except OSError as exc:
-            self._append(f"Cannot launch scanner: {exc}")
-            self.proc = None
-            return
-        self.busy = True
-        self.state.set("Scanning" if action == "watch" else f"Running {action}")
-        self.start_button.configure(state="disabled")
-        self.stop_button.configure(state="normal")
-        proc = self.proc
-        threading.Thread(target=self._read_output, args=(proc,), daemon=True).start()
-
-    def _read_output(self, proc):
-        try:
-            for line in proc.stdout:
-                self.events.put(("line", line))
-            rc = proc.wait()
-            self.events.put(("exit", proc, rc))
-        except Exception as exc:
-            self.events.put(("line", f"Scanner output error: {exc}"))
-            self.events.put(("exit", proc, -1))
-
-    def _drain_events(self):
-        try:
-            while True:
-                entry = self.events.get_nowait()
-                if entry[0] == "line":
-                    self._append(entry[1])
-                elif entry[0] == "exit":
-                    _, proc, rc = entry
-                    if self.proc is proc:
-                        self.proc = None
-                        self.busy = False
-                        self.state.set(f"Stopped (exit {rc})")
-                        self.start_button.configure(state="normal")
-                        self.stop_button.configure(state="disabled")
-                        self.refresh_archive()
-        except queue.Empty:
-            pass
-        self.after(POLL_MS, self._drain_events)
-
-    def stop(self):
-        proc = self.proc
-        if proc is None or proc.poll() is not None:
-            return
-        self.state.set("Stopping...")
-        # Kill the process group after grace period; worker thread never touches Tk.
-        try:
-            os.killpg(proc.pid, signal.SIGINT)
-        except ProcessLookupError:
-            pass
-        self.after(2500, lambda: self._force_stop(proc))
-
-    def _force_stop(self, proc):
-        if proc.poll() is None:
+    def render(self):
+        if self.current:
             try:
-                os.killpg(proc.pid, signal.SIGTERM)
+                content = (record_bytes(self.current).decode() if self.raw.get() else format_record(self.current))
+            except (KeyError, TypeError, ValueError) as exc:
+                content = f'Cannot decode record: {exc}'
+            self.data.configure(state='normal')
+            self.data.delete('1.0', 'end')
+            self.data.insert('end', content)
+            self.data.configure(state='disabled')
+
+    def save_current(self):
+        if self.current:
+            try:
+                save_record(self.archive, self.current)
+                self.status.set(f"Saved {self.current['uid']}")
+                self.refresh_archive()
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                messagebox.showerror('Archive save failed', str(exc))
+
+    def export_current(self):
+        if not self.current:
+            return
+        try:
+            binary = range_bytes(self.current)
+            formats = [('JSON record', '*.json')]
+            if binary is not None:
+                formats.append(('Verified range binary', '*.bin'))
+            target = filedialog.asksaveasfilename(filetypes=formats, defaultextension='.json',
+                                                   initialfile=self.current['uid'])
+            if target:
+                path = Path(target)
+                if path.suffix.lower() == '.bin' and binary is None:
+                    raise ValueError('This capture has no verified complete binary range')
+                atomic_write(path, binary if path.suffix.lower() == '.bin' else record_bytes(self.current))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            messagebox.showerror('Export failed', str(exc))
+
+    @staticmethod
+    def values(record):
+        return (record['uid'], record['protocol'], record.get('tonie_status', record.get('manufacturer', '?')),
+                record.get('dump_status', '?').replace('_', ' '))
+
+    def refresh_archive(self):
+        self.saved.clear()
+        for path in sorted(self.archive.glob('*/record.json')):
+            try:
+                record = json.loads(path.read_text())
+                self.values(record)
+                self.saved[path.parent.name] = record
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                self.append_log(f'Cannot open archive record {path.parent.name}: {exc}')
+        self.populate_archive()
+
+    def populate_archive(self):
+        self.archive_tree.delete(*self.archive_tree.get_children())
+        query = self.query.get().strip().casefold()
+        for key, record in self.saved.items():
+            if not query or query in json.dumps(record, ensure_ascii=False).casefold():
+                self.archive_tree.insert('', 'end', iid=key, values=self.values(record))
+
+    def append_log(self, message):
+        self.log.configure(state='normal')
+        self.log.insert('end', message[-16000:] + '\n')
+        if int(self.log.index('end-1c').split('.')[0]) > 900:
+            self.log.delete('1.0', '301.0')
+        self.log.see('end')
+        self.log.configure(state='disabled')
+
+    def launch(self, action, force=None):
+        if self.proc is not None or self.closing:
+            return
+        cmd = [sys.executable, '-u', str(BACKEND_SCRIPT), action, '--json-lines',
+               '--backend', force or self.backend.get(), '--archive', str(self.archive),
+               '--blocks', self.blocks.get()]
+        for flag, value in (('--exclude-uid', self.exclude_uid), ('--client', self.client),
+                            ('--port', self.port)):
+            if value.get().strip():
+                cmd.extend((flag, value.get().strip()))
+        for flag, setting in (('--auto-tonie', self.auto_tonie), ('--auto-candidates', self.auto_candidates),
+                              ('--save', self.save_all), ('--include-st', self.include_st)):
+            if setting.get():
+                cmd.append(flag)
+        try:
+            self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                         stderr=subprocess.STDOUT, text=True, errors='replace',
+                                         start_new_session=True)
+        except OSError as exc:
+            self.status.set(f'Cannot start reader: {exc}')
+            return
+        self.status.set('Connecting…')
+        self.had_fault = False
+        self.stopping = False
+        for button in self.buttons:
+            button.configure(state='disabled')
+        self.stop_button.configure(state='normal')
+        self.worker = threading.Thread(target=read_events, args=(self.proc, self.events), daemon=True)
+        self.worker.start()
+
+    def drain(self):
+        for _ in range(40):
+            try:
+                event = self.events.get_nowait()
+            except queue.Empty:
+                break
+            kind = event['event']
+            message = event.get('message', '')
+            if kind == 'exit':
+                self.proc = None
+                self.worker.join()
+                self.worker = None
+                if self.closing:
+                    self.destroy()
+                    return
+                if self.stopping or not self.had_fault:
+                    self.status.set(f"Stopped (exit {event['code']})" if event['code'] not in (0, 130) else
+                                    'Stopped' if self.stopping else 'Ready')
+                self.stop_button.configure(state='disabled')
+                for button in self.buttons:
+                    button.configure(state='normal')
+                continue
+            if kind == 'tag':
+                record = event['record']
+                key = f"{record['protocol']}:{record['uid']}"
+                if self.live_tree.exists(key):
+                    self.live_tree.item(key, values=self.values(record))
+                else:
+                    if len(self.live) >= 256:
+                        old = next(iter(self.live))
+                        del self.live[old]
+                        self.live_tree.delete(old)
+                    self.live_tree.insert('', 0, iid=key, values=self.values(record))
+                self.live[key] = record
+                if not self.live_tree.selection() or key in self.live_tree.selection():
+                    self.live_tree.selection_set(key)
+                    self.select(self.live_tree, self.live)
+            elif kind == 'archived':
+                self.refresh_archive()
+            elif kind == 'backend':
+                self.reader.set(message)
+                self.append_log('Capabilities: ' + ', '.join(event.get('capabilities', [])))
+            elif kind == 'fault':
+                self.had_fault = True
+            if kind in ('backend', 'fault', 'scan_state', 'tag') and not self.stopping:
+                self.status.set(message)
+            if kind != 'scan_state':
+                self.append_log(message)
+        self.after(50, self.drain)
+
+    def signal_worker(self, proc, signum):
+        if self.proc is proc:
+            try:
+                os.killpg(proc.pid, signum)
             except ProcessLookupError:
                 pass
 
-    def refresh_archive(self):
-        selected = self.tree.selection()
-        selected_uid = self.tree.item(selected[0], "values")[0] if selected else None
-        self.tree.delete(*self.tree.get_children())
-        for path in sorted(ARCHIVE.glob("*/record.json")):
-            try:
-                record = json.loads(path.read_text(encoding="utf-8"))
-                uid = record.get("uid", path.parent.name)
-                kind = record.get("tonie_status", record.get("classification", "unknown"))
-                self.tree.insert("", "end", values=(
-                    uid, kind, record.get("dump_status", "unknown"), record.get("backend", "?")))
-            except (OSError, ValueError, TypeError):
-                continue
-        if selected_uid:
-            for item in self.tree.get_children():
-                if self.tree.item(item, "values")[0] == selected_uid:
-                    self.tree.selection_set(item)
-                    break
-
-    def show_selected(self):
-        selected = self.tree.selection()
-        if not selected:
-            messagebox.showinfo("Saved tags", "Select a tag first.")
+    def stop(self):
+        if self.proc is None or self.stopping:
             return
-        uid = self.tree.item(selected[0], "values")[0]
-        path = ARCHIVE / uid / "record.json"
-        try:
-            content = json.dumps(json.loads(path.read_text(encoding="utf-8")), indent=2)
-        except (OSError, ValueError) as exc:
-            messagebox.showerror("Cannot open record", str(exc))
-            return
-        window = tk.Toplevel(self)
-        window.title(f"Tag {uid}")
-        window.geometry("720x520")
-        body = tk.Text(window, wrap="none")
-        body.insert("1.0", content)
-        body.configure(state="disabled")
-        body.pack(fill="both", expand=True)
+        self.stopping = True
+        self.status.set('Stopping…')
+        self.stop_button.configure(state='disabled')
+        proc = self.proc
+        self.signal_worker(proc, signal.SIGINT)
+        self.after(1500, self.signal_worker, proc, signal.SIGTERM)
+        self.after(3000, self.signal_worker, proc, signal.SIGKILL)
 
     def close(self):
-        if self.proc is not None and self.proc.poll() is None:
-            self.stop()
-            self.after(400, self._finish_close)
-        else:
+        self.closing = True
+        if self.proc is None:
             self.destroy()
-
-    def _finish_close(self):
-        proc = self.proc
-        if proc and proc.poll() is None:
-            try: os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError: pass
-        self.destroy()
+        else:
+            self.stop()
 
 
-if __name__ == "__main__":
-    NFCWindow().mainloop()
+def main():
+    try:
+        window = NFCWindow()
+    except tk.TclError as exc:
+        raise SystemExit(f'Launch PT35 NFC from the graphical desktop: {exc}') from exc
+    window.after_idle(window.launch, 'status')
+    window.mainloop()
+
+
+if __name__ == '__main__':
+    main()
