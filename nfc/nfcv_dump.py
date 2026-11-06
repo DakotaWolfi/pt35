@@ -80,10 +80,12 @@ class Reader(Chip):
                 raise FrameError('framing', 'Invalid ST25DV extended geometry response')
             geometry = {'blocks': int.from_bytes(ext[10:12], 'little') + 1, 'size': 4,
                         'source': 'ST25DV Extended Get System Information'}
-        return {'flags': flags, 'ic_reference': ic_reference, 'geometry': geometry}
+        return {'flags': flags, 'dsfid': reply[10] if flags & 1 else None,
+                'afi': reply[10 + bool(flags & 1)] if flags & 2 else None,
+                'ic_reference': ic_reference, 'geometry': geometry}
 
 
-def read_memory(reader, uid, limit=0, verbose=False):
+def read_memory(reader, uid, limit=0, verbose=False, cap=2048):
     try:
         info = reader.system_info(uid, verbose)
     except (FrameError, TagError, TimeoutError) as exc:
@@ -92,7 +94,7 @@ def read_memory(reader, uid, limit=0, verbose=False):
     if geometry is None and is_sli_l(uid):
         geometry = dict(SLI_L_GEOMETRY)
     # Eight is a conservative probe limit for unknown tags, never a geometry claim.
-    count = (min(limit or 256, geometry['blocks']) if geometry else min(limit or 8, 256))
+    count = min(cap, min(limit or 256, geometry['blocks']) if geometry else min(limit or 8, 256))
     width = geometry['size'] if geometry else None
     blocks, errors = [], []
     for index in range(count):
@@ -108,9 +110,10 @@ def read_memory(reader, uid, limit=0, verbose=False):
                 blocks.append({'index': index, 'hex': data.hex().upper(), 'size': len(data)})
                 width = len(data)
                 break
-        if errors:
-            # A missing block is evidence about this attempt only. Never infer size from silence.
-            break
+        if errors and errors[-1]['index'] == index:
+            # Continue past explicit read protection only within known geometry.
+            if not geometry or errors[-1]['kind'] != 'read_protected':
+                break
     record = dict(blocks=blocks, read_errors=errors, system_info=info, memory_start=0,
                   verification='CRC-checked successful RF replies')
     set_coverage(record, count, geometry)

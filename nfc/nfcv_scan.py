@@ -215,7 +215,9 @@ class Chip:
                 if timer & 0x40 and not main & 0x20:
                     break
                 time.sleep(.001)
-            raise TimeoutError('Tag did not respond' if main & 0x08 else 'NFC transmit did not finish')
+            if not main & 0x08:
+                raise FrameError('tx_timeout', 'NFC transmit did not finish')
+            raise TimeoutError('Tag did not respond')
         finally:
             # STOP terminates the exchange without switching off the RF field.
             # Clear stale RX/IRQ state so the next inventory can start cleanly.

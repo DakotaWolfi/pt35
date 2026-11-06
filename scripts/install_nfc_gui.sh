@@ -2,6 +2,12 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="$ROOT/nfc/pt35_nfc_gui.py"
+case "${1:-}" in
+  ''|--autostart|--no-autostart) ;;
+  *) echo "Usage: $0 [--autostart|--no-autostart]" >&2; exit 2 ;;
+esac
+if [[ $# -gt 1 ]]; then exit 2; fi
+AUTOSTART="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/pt35-nfc.desktop"
 if [[ ! -f "$APP" ]]; then echo "Missing $APP" >&2; exit 1; fi
 PYTHON="$(command -v python3)"
 if ! "$PYTHON" -c 'import tkinter' >/dev/null 2>&1; then
@@ -21,8 +27,14 @@ Comment=Internal ST25R3916 and Proxmark3 tag reader and archive
 Exec="$DESKTOP_EXEC"
 Terminal=false
 Icon=network-wireless
-Categories=Utility;System;
+Categories=Utility;
 EOF
+if [[ "${1:-}" == --autostart ]]; then
+  mkdir -p "$(dirname "$AUTOSTART")"
+  cp "$HOME/.local/share/applications/pt35-nfc.desktop" "$AUTOSTART"
+elif [[ "${1:-}" == --no-autostart ]]; then
+  rm -f -- "$AUTOSTART"
+fi
 echo "PT35 NFC GUI installed."
 echo "Launch: $HOME/.local/bin/pt35-nfc-gui"
 echo "Desktop application menu entry: $HOME/.local/share/applications/pt35-nfc.desktop"

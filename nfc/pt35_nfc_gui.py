@@ -12,25 +12,31 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
-from nfc_archive import atomic_write, range_bytes, record_bytes, save_record
+from nfc_archive import atomic_write, range_bytes, record_bytes, record_path, save_record
+from nfc_pm3 import PM3_MODES, SIM_SECONDS, simulation_image
 from nfc_config import DEFAULT_ARCHIVE
 from nfc_ndef import decode_message, extract_message, ndef_area
 from nfc_poll import MODES
 
 BACKEND_SCRIPT = Path(__file__).resolve().with_name('pt35_nfc.py')
+SETTINGS = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'pt35-nfc' / 'settings.json'
 
 
 def read_events(proc, events):
-    with proc.stdout:
-        for line in proc.stdout:
-            try:
-                item = json.loads(line)
-                if not isinstance(item, dict) or 'event' not in item:
-                    raise ValueError
-            except ValueError:
-                item = {'event': 'log', 'message': line.strip()}
-            events.put(item)
-    events.put({'event': 'exit', 'code': proc.wait()})
+    try:
+        with proc.stdout:
+            for line in proc.stdout:
+                try:
+                    item = json.loads(line)
+                    if not isinstance(item, dict) or 'event' not in item:
+                        raise ValueError
+                except ValueError:
+                    item = {'event': 'log', 'message': line.strip()}
+                events.put(item)
+    except OSError as exc:
+        events.put({'event': 'fault', 'message': f'Scanner output unavailable: {exc}'})
+    finally:
+        events.put({'event': 'exit', 'code': proc.wait()})
 
 
 def format_record(record):
@@ -45,6 +51,10 @@ def format_record(record):
         if geom else 'Geometry: unknown',
         f"Coverage: {record.get('dump_status', '?').replace('_', ' ')}",
     ]
+    requested = record.get('requested_range')
+    if requested:
+        start, count = requested['start'], requested['count']
+        lines.append(f"Range {start}–{start + count - 1} | Readable {len(record.get('blocks', []))}/{count}")
     if record.get('blocks') and record.get('capture_format') != 2:
         lines.append('Legacy capture. Check its raw record for the original coverage claims.')
     if record.get('verification'):
@@ -78,12 +88,14 @@ def format_record(record):
 
 
 class NFCWindow(tk.Tk):
-    def __init__(self, archive=DEFAULT_ARCHIVE):
+    def __init__(self, archive=DEFAULT_ARCHIVE, settings=SETTINGS):
         super().__init__()
         self.title('PT35 NFC Reader')
         self.geometry(f'{min(900, self.winfo_screenwidth())}x{min(630, self.winfo_screenheight() - 60)}')
         self.minsize(440, 330)
         self.archive = archive
+        self.settings_path = settings
+        self.available_pm3_actions = set()
         self.proc = None
         self.worker = None
         self.events = queue.Queue(maxsize=128)
@@ -95,6 +107,7 @@ class NFCWindow(tk.Tk):
         self.saved = {}
         self.backend = tk.StringVar(value='auto')
         self.protocol_mode = tk.StringVar(value='ISO15693')
+        self.pm3_mode = tk.StringVar(value='HF')
         self.auto_tonie = tk.BooleanVar(value=True)
         self.auto_candidates = tk.BooleanVar(value=False)
         self.save_all = tk.BooleanVar(value=False)
@@ -106,7 +119,14 @@ class NFCWindow(tk.Tk):
         self.query = tk.StringVar()
         self.status = tk.StringVar(value='Ready')
         self.reader = tk.StringVar(value='Reader status unknown')
+        self.settings_vars = {
+            'backend': self.backend, 'protocol_mode': self.protocol_mode, 'pm3_mode': self.pm3_mode,
+            'auto_tonie': self.auto_tonie, 'auto_candidates': self.auto_candidates, 'save_all': self.save_all,
+            'include_st': self.include_st, 'exclude_uid': self.exclude_uid, 'blocks': self.blocks,
+            'client': self.client, 'port': self.port,
+        }
         self._build()
+        self.load_settings()
         self.refresh_archive()
         self.after(50, self.drain)
         self.protocol('WM_DELETE_WINDOW', self.close)
@@ -159,6 +179,16 @@ class NFCWindow(tk.Tk):
                               command=lambda: self.launch('identify', force='proxmark3'))
         identify.pack(anchor='w', pady=6)
         self.buttons.append(identify)
+        ttk.Label(proxmark, text='Watch mode').pack(anchor='w')
+        ttk.Combobox(proxmark, textvariable=self.pm3_mode, values=PM3_MODES,
+                     state='readonly', width=14).pack(anchor='w', pady=(0, 4))
+        self.pm3_actions = {}
+        for label, action in (('Read selected ISO15693 memory', 'pm3-dump'),
+                              ('Simulate saved ISO15693 tag…', 'pm3-simulate')):
+            button = ttk.Button(proxmark, text=label, command=lambda a=action: self.pm3_action(a),
+                                state='disabled')
+            button.pack(anchor='w', pady=(0, 4))
+            self.pm3_actions[action] = button
         ttk.Label(proxmark, text='Client path and serial port are configurable in Settings.',
                   wraplength=400).pack(anchor='w')
         settings.columnconfigure(1, weight=1)
@@ -178,6 +208,57 @@ class NFCWindow(tk.Tk):
                 ('Auto-save known Tonie UIDs', self.auto_tonie),
                 ('Also auto-save unverified NXP candidates', self.auto_candidates)), start=6):
             ttk.Checkbutton(settings, text=label, variable=var).grid(row=row, columnspan=2, sticky='w')
+        ttk.Button(settings, text='Save settings', command=self.save_settings).grid(row=10, column=0, sticky='w')
+
+    def load_settings(self):
+        try:
+            values = json.loads(self.settings_path.read_text(encoding='utf-8'))
+            if not isinstance(values, dict):
+                raise ValueError('Expected a settings object')
+            for key, var in self.settings_vars.items():
+                value = values.get(key)
+                if type(value) is type(var.get()):
+                    var.set(value)
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as exc:
+            self.append_log(f'Settings could not be read: {exc}')
+
+    def save_settings(self):
+        try:
+            self.settings_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            atomic_write(self.settings_path, record_bytes({key: var.get() for key, var in self.settings_vars.items()}))
+        except OSError as exc:
+            messagebox.showerror('Settings could not be saved', str(exc))
+        else:
+            self.status.set('Settings saved')
+
+    def update_pm3_actions(self):
+        for action, button in self.pm3_actions.items():
+            enabled = action in self.available_pm3_actions and self.proc is None
+            button.configure(state='normal' if enabled else 'disabled')
+
+    def pm3_action(self, action):
+        record = self.current
+        if not record or record.get('protocol') != 'ISO15693':
+            messagebox.showinfo('Select a tag', 'Select an ISO15693 tag in Scan or Archive.')
+            return
+        uid = record['uid']
+        if action == 'pm3-simulate':
+            try:
+                saved = json.loads(record_path(self.archive, uid).read_text(encoding='utf-8'))
+                simulation_image(saved)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                messagebox.showerror('Saved capture required', str(exc))
+                return
+            if not messagebox.askyesno(
+                    'Confirm experimental simulation',
+                    f'Load the saved user memory and simulate {uid} for {SIM_SECONDS} seconds? '
+                    'Use a bench tag and reader you are authorized to test. '
+                    'Protected configuration and authentication are outside the simulation.'):
+                return
+        self.tabs.select(0)
+        self.launch(action, force='proxmark3', uid=uid)
 
     def make_tree(self, parent, records):
         columns = ('uid', 'protocol', 'type', 'status')
@@ -269,12 +350,17 @@ class NFCWindow(tk.Tk):
         self.log.see('end')
         self.log.configure(state='disabled')
 
-    def launch(self, action, force=None):
+    def launch(self, action, force=None, uid=None):
         if self.proc is not None or self.closing:
             return
-        cmd = [sys.executable, '-u', str(BACKEND_SCRIPT), action, '--json-lines',
-               '--backend', force or self.backend.get(), '--archive', str(self.archive),
-               '--blocks', self.blocks.get(), '--protocol', self.protocol_mode.get()]
+        cmd = [sys.executable, '-u', str(BACKEND_SCRIPT), action]
+        if uid:
+            cmd.append(uid)
+        cmd.extend(('--json-lines', '--backend', force or self.backend.get(), '--archive', str(self.archive),
+                    '--blocks', self.blocks.get(), '--protocol', self.protocol_mode.get(),
+                    '--pm3-mode', self.pm3_mode.get()))
+        if action == 'pm3-simulate':
+            cmd.append('--confirm-emulation')
         for flag, value in (('--exclude-uid', self.exclude_uid), ('--client', self.client),
                             ('--port', self.port)):
             if value.get().strip():
@@ -296,6 +382,7 @@ class NFCWindow(tk.Tk):
         for button in self.buttons:
             button.configure(state='disabled')
         self.stop_button.configure(state='normal')
+        self.update_pm3_actions()
         self.worker = threading.Thread(target=read_events, args=(self.proc, self.events), daemon=True)
         self.worker.start()
 
@@ -320,6 +407,7 @@ class NFCWindow(tk.Tk):
                 self.stop_button.configure(state='disabled')
                 for button in self.buttons:
                     button.configure(state='normal')
+                self.update_pm3_actions()
                 continue
             if kind == 'tag':
                 record = event['record']
@@ -340,9 +428,13 @@ class NFCWindow(tk.Tk):
                 self.refresh_archive()
             elif kind == 'backend':
                 self.reader.set(message)
+                self.available_pm3_actions = set(event.get('pm3_actions', []))
                 self.append_log('Capabilities: ' + ', '.join(event.get('capabilities', [])))
             elif kind == 'fault':
                 self.had_fault = True
+                if event.get('backend') == 'proxmark3':
+                    self.available_pm3_actions = set()
+                    self.reader.set('Proxmark3 unavailable')
             if kind in ('backend', 'fault', 'scan_state', 'tag') and not self.stopping:
                 self.status.set(message)
             if kind != 'scan_state':
@@ -364,8 +456,8 @@ class NFCWindow(tk.Tk):
         self.stop_button.configure(state='disabled')
         proc = self.proc
         self.signal_worker(proc, signal.SIGINT)
-        self.after(1500, self.signal_worker, proc, signal.SIGTERM)
-        self.after(3000, self.signal_worker, proc, signal.SIGKILL)
+        self.after(3500, self.signal_worker, proc, signal.SIGTERM)
+        self.after(5000, self.signal_worker, proc, signal.SIGKILL)
 
     def close(self):
         self.closing = True

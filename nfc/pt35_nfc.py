@@ -18,7 +18,7 @@ from nfc_config import DEFAULT_ARCHIVE, LEGACY_ARCHIVE, handle_sigterm, reader_l
 from nfcv_dump import Reader, failure, is_sli_l, read_memory
 from nfcv_scan import FrameError
 
-VERSION = '0.3.0'
+VERSION = '0.4.0'
 INTERNAL_PROTOCOLS = ('ISO15693', *MODES)
 
 
@@ -53,7 +53,9 @@ class Events:
             print(message, flush=True)
 
 
-def backend_choice(args, emit):
+def backend_choice(args, emit, *, quiet=False):
+    if args.action in ('identify', 'pm3-shell', 'pm3-dump', 'pm3-simulate') and args.backend == 'auto':
+        args.backend = 'proxmark3'
     if args.backend != 'internal':
         client = pm3.pm3_client(args.client)
         ports = pm3.usb_ports()
@@ -64,16 +66,28 @@ def backend_choice(args, emit):
                   'No matching Proxmark3 USB descriptor' if not ports else '')
         if client:
             for port in ports:
+                actions = []
                 try:
                     with reader_lock(Path(port).name):
                         reason = pm3.probe(client, port)
+                        if reason is None:
+                            actions = pm3.iso15693_actions(client, port)
                 except RuntimeError as exc:
                     reason = str(exc)
                 if reason is None:
+                    if args.action in ('pm3-dump', 'pm3-simulate') and args.action not in actions:
+                        reason = 'Connected firmware does not advertise the requested ISO15693 operation'
+                        continue
+                    capabilities = ['HF/LF search']
+                    if 'pm3-dump' in actions:
+                        capabilities.append('ISO15693 addressed reads')
+                    if 'pm3-simulate' in actions:
+                        capabilities.append('Experimental manual ISO15693 simulation')
                     emit('backend', f'Proxmark3/Iceman connected on {port}', backend='proxmark3',
-                         capabilities=['ISO15693 inventory', 'HF/LF identify logs'], port=port)
+                         capabilities=capabilities, port=port, pm3_actions=actions)
                     return 'proxmark3', client, port
-        emit('fault', f'Proxmark3 unavailable: {reason}', backend='proxmark3')
+        if not quiet:
+            emit('fault', f'Proxmark3 unavailable: {reason}', backend='proxmark3')
         if args.backend == 'proxmark3':
             return None, None, None
     return 'internal', None, None
@@ -81,7 +95,7 @@ def backend_choice(args, emit):
 
 def tag_event(args, emit, record):
     candidate = record['classification'] == 'tonie_candidate'
-    known = candidate and is_known_tonie(record['uid'], args.archive)
+    known = record['protocol'] == 'ISO15693' and is_known_tonie(record['uid'], args.archive)
     record['tonie_status'] = ('known_tonie' if known else 'possible_tonie' if candidate else
                               'not_identified_as_tonie')
     if known:
@@ -97,7 +111,7 @@ def tag_event(args, emit, record):
             emit('archived', f'Archived {uid}', path=str(path))
 
 
-def internal_operation(args, emit):
+def internal_operation(args, emit, reselect=None):
     try:
         from smbus2 import SMBus
     except ImportError as exc:
@@ -123,6 +137,10 @@ def internal_operation(args, emit):
             attempts = 0
             last_error = None
             while args.watch or attempts < args.tries:
+                if reselect:
+                    selected = reselect()
+                    if selected:
+                        return selected
                 attempts += 1
                 error = None
                 details = {}
@@ -171,38 +189,125 @@ def internal_operation(args, emit):
 
 def pm3_operation(args, emit, client, port):
     with reader_lock(Path(port).name):
-        if args.action == 'identify':
-            for command in ('hf search', 'lf search'):
-                code, output = pm3.run_pm3(client, port, command)
-                emit('log', f'{command} (exit {code})\n{output}')
-            return
         if args.action == 'pm3-shell':
             subprocess.run([client, '-p', port], check=True)
             return
-        last = None
-        last_time = 0
-        attempts = 0
-        while args.watch or attempts < args.tries:
-            attempts += 1
-            if not Path(port).exists():
-                raise OSError(f'Proxmark3 disconnected ({port})')
-            uid, output, _ = pm3.pm3_inventory(client, port)
-            if args.verbose:
-                emit('log', output.strip())
-            if uid and (uid != last or time.monotonic() - last_time >= args.repeat_after):
-                last, last_time = uid, time.monotonic()
-                tag_event(args, emit, new_record(uid, 'proxmark3'))
-                if not args.watch:
+        if args.action == 'pm3-simulate':
+            record = json.loads(record_path(args.archive, args.uid).read_text(encoding='utf-8'))
+            if record['uid'] != args.uid:
+                raise ValueError('Archive UID does not match selected tag')
+            pm3.simulate(client, port, record, emit)
+            return
+        try:
+            if args.action == 'pm3-dump':
+                record = new_record(args.uid, 'proxmark3')
+                emit('scan_state', 'Reading addressed ISO15693 blocks with Iceman')
+                record.update(read_memory(pm3.PM3Reader(client, port), args.uid, args.blocks,
+                                          args.verbose, cap=32))
+                dsfid = record.get('system_info', {}).get('dsfid')
+                if dsfid is not None:
+                    record['dsfid'] = f'{dsfid:02X}'
+                tag_event(args, emit, record)
+                return
+            modes = ('HF', 'LF') if args.action == 'identify' else (args.pm3_mode,)
+            last = {}
+            attempts = 0
+            waiting = False
+            while args.watch or attempts < args.tries:
+                attempts += 1
+                if not Path(port).exists():
+                    raise OSError(f'Proxmark3 disconnected ({port})')
+                found = False
+                for mode in modes:
+                    tags, code, output = pm3.scan(client, port, mode)
+                    if args.action == 'identify' or args.verbose:
+                        emit('log', f'{mode} search (exit {code})\n{output.strip()}')
+                    for protocol, uid in tags:
+                        key = (protocol, uid)
+                        current = time.monotonic()
+                        if current - last.get(key, float('-inf')) >= args.repeat_after:
+                            if len(last) >= 256 and key not in last:
+                                last.pop(next(iter(last)))
+                            last[key] = current
+                            record = new_record(uid, 'proxmark3', protocol=protocol)
+                            record['pm3_log'] = output.strip()[-12000:]
+                            tag_event(args, emit, record)
+                        found = True
+                    if not tags and 'Valid ' in output and args.action != 'identify' and not args.verbose:
+                        emit('log', f'{mode} result has no supported structured identifier:\n{output.strip()}')
+                if args.action == 'identify' or found and not args.watch:
                     return
-            time.sleep(args.delay)
+                if not found and not waiting:
+                    emit('scan_state', 'Iceman waiting for a recognized tag', state='waiting')
+                waiting = not found
+                time.sleep(args.delay)
+        except (KeyboardInterrupt, subprocess.TimeoutExpired):
+            pm3.stop_rf(client, port, emit)
+            raise
+
+
+def run_reader(args, emit):
+    selected = backend_choice(args, emit)
+    next_probe = time.monotonic() + 4
+
+    def reselect():
+        nonlocal next_probe
+        if time.monotonic() >= next_probe:
+            next_probe = time.monotonic() + 4
+            candidate = backend_choice(args, emit, quiet=True)
+            if candidate[0] == 'proxmark3':
+                return candidate
+        return None
+
+    while True:
+        backend, client, port = selected
+        if backend is None:
+            if not args.watch:
+                return 2
+            time.sleep(2)
+            selected = backend_choice(args, emit)
+            continue
+        if backend == 'internal':
+            if args.action in ('identify', 'pm3-shell', 'pm3-dump', 'pm3-simulate'):
+                raise RuntimeError('This operation requires a responsive Proxmark3/Iceman')
+            try:
+                selected = internal_operation(args, emit, reselect if args.watch and args.backend == 'auto' else None)
+            except OSError as exc:
+                if not args.watch or args.backend != 'auto':
+                    raise
+                emit('fault', f'Internal reader unavailable: {exc}. Retrying reader selection.')
+                time.sleep(2)
+                selected = backend_choice(args, emit)
+            if not selected:
+                return 0
+        else:
+            try:
+                if args.action != 'status':
+                    pm3_operation(args, emit, client, port)
+                return 0
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                if args.action not in ('scan', 'watch'):
+                    raise
+                emit('fault', f'Proxmark3 unavailable: {exc}', backend='proxmark3')
+                if args.backend == 'auto':
+                    next_probe = time.monotonic() + 4
+                    selected = ('internal', None, None)
+                elif args.watch:
+                    time.sleep(2)
+                    selected = backend_choice(args, emit)
+                else:
+                    raise
 
 
 def main():
     p = argparse.ArgumentParser(description='PT35 NFC dual-reader and local archive')
+    p.add_argument('--version', action='version', version=f'PT35 NFC {VERSION}')
     p.add_argument('action', choices=['status', 'scan', 'watch', 'list', 'show', 'identify', 'pm3-shell',
-                                       'migrate-archive'], nargs='?', default='scan')
-    p.add_argument('uid', nargs='?', help='tag identifier for show')
+                                       'migrate-archive', 'pm3-dump', 'pm3-simulate'], nargs='?', default='scan')
+    p.add_argument('uid', nargs='?', help='tag identifier for show, pm3-dump or pm3-simulate')
     p.add_argument('--backend', choices=['auto', 'internal', 'proxmark3'], default='auto')
+    p.add_argument('--pm3-mode', choices=pm3.PM3_MODES, default='HF')
+    p.add_argument('--confirm-emulation', action='store_true', help='explicitly authorize a 10-second simulation')
     p.add_argument('--port', help='select a detected Proxmark3 serial port')
     p.add_argument('--client', help='path to the Iceman client executable')
     p.add_argument('--protocol', choices=INTERNAL_PROTOCOLS, default='ISO15693',
@@ -228,6 +333,12 @@ def main():
         p.error('Invalid block count, retry count or scan interval')
     if args.exclude_uid and not re.fullmatch(r'E002[0-9A-F]{12}', args.exclude_uid.upper()):
         p.error('--exclude-uid must be the exact onboard 16-digit ST25DV UID')
+    if args.action in ('pm3-dump', 'pm3-simulate'):
+        args.uid = (args.uid or '').upper()
+        if not re.fullmatch(r'E0[0-9A-F]{14}', args.uid):
+            p.error('This operation requires a 16-digit ISO15693 UID')
+    if args.action == 'pm3-simulate' and not args.confirm_emulation:
+        p.error('Simulation requires --confirm-emulation after selecting an authorized bench tag')
     emit = Events(args.json_lines)
     handle_sigterm()
     try:
@@ -247,28 +358,13 @@ def main():
                 p.error('show requires a UID')
             print(record_path(args.archive, args.uid, args.protocol).read_text(encoding='utf-8'))
             return 0
-        backend, client, port = backend_choice(args, emit)
-        if backend is None:
-            return 2
-        if backend == 'internal':
-            if args.action in ('identify', 'pm3-shell'):
-                raise RuntimeError('This operation requires a responsive Proxmark3/Iceman')
-            internal_operation(args, emit)
-        elif args.action != 'status':
-            try:
-                pm3_operation(args, emit, client, port)
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                if args.backend != 'auto' or args.action not in ('scan', 'watch'):
-                    raise
-                emit('fault', f'Proxmark3 unavailable: {exc}. Switching to internal reader.')
-                internal_operation(args, emit)
+        return run_reader(args, emit)
     except KeyboardInterrupt:
         emit('stopped', 'Stopped')
         return 130
-    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
+    except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
         emit('fault', str(exc))
         return 2
-    return 0
 
 
 if __name__ == '__main__':

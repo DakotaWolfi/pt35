@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'nfc'))
@@ -161,7 +162,12 @@ class LaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             save_record(root, new_record(UID, 'internal'))
-            app = NFCWindow(root)
+            worker = root / 'fake_reader.py'
+            worker.write_text(
+                'import json, time\n'
+                'print(json.dumps(dict(event="backend", message="Synthetic reader", backend="internal")), flush=True)\n'
+                'try:\n    time.sleep(30)\nexcept KeyboardInterrupt:\n    pass\n')
+            app = NFCWindow(root, root / 'settings.json')
             try:
                 app.query.set(UID)
                 self.assertEqual(app.archive_tree.get_children(), (UID,))
@@ -169,8 +175,18 @@ class LaunchTests(unittest.TestCase):
                 app.select(app.archive_tree, app.saved)
                 self.assertIn(UID, app.data.get('1.0', 'end'))
                 app.backend.set('internal')
-                app.launch('watch')
+                app.save_settings()
+                app.backend.set('auto')
+                app.load_settings()
+                self.assertEqual(app.backend.get(), 'internal')
+                with patch('pt35_nfc_gui.BACKEND_SCRIPT', worker):
+                    app.launch('watch')
                 self.assertIsNotNone(app.proc)
+                deadline = time.monotonic() + 5
+                while app.reader.get() != 'Synthetic reader' and time.monotonic() < deadline:
+                    app.update()
+                    time.sleep(.02)
+                self.assertEqual(app.reader.get(), 'Synthetic reader')
                 app.stop()
                 deadline = time.monotonic() + 5
                 while app.proc is not None and time.monotonic() < deadline:

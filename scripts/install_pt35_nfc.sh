@@ -2,6 +2,10 @@
 # Use the Git checkout as the source of truth. Keep existing live scripts and data.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${1:-}" == --install-iceman ]]; then
+  shift
+  exec bash "$ROOT/scripts/install_iceman.sh" "$@"
+fi
 if [[ $# -gt 0 ]]; then
   echo "Run without arguments to install the NFC launcher." >&2
   exit 2
