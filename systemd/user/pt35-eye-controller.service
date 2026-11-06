@@ -1,0 +1,12 @@
+[Unit]
+Description=PT35 Remote Eye controller/cache
+After=graphical-session.target network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/pt35-eye-control --serve
+Restart=on-failure
+RestartSec=2
+Environment=PYTHONUNBUFFERED=1
+[Install]
+WantedBy=default.target

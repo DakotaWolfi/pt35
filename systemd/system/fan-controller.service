@@ -1,0 +1,12 @@
+[Unit]
+Description=Raspberry Pi PWM Fan Controller
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/fan_controller.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
