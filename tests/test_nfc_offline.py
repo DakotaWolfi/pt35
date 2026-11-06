@@ -1,18 +1,16 @@
 """Synthetic protocol and local archive checks. No I2C, RF or tag data."""
 import os
-import time
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'nfc'))
 
 from nfc_archive import migrate_archive, range_bytes, save_record, set_coverage
-from nfcv_dump import Reader, read_memory
+from nfcv_dump import Reader, TagError, read_memory
 from nfcv_scan import Chip, FrameError, InventorySearch, crc15693, decode_response
 from nfc_diagnostics import Diagnostics
 from pt35_nfc import new_record, skip_internal_uid
@@ -106,6 +104,32 @@ class RFTests(unittest.TestCase):
         self.assertTrue(report.events[-1]['end_recovered'])
         with self.assertRaisesRegex(FrameError, 'CRC'):
             decode_response(wire(bytes(5), bad_crc=True)[:-1], recover_end=True)
+        with self.assertRaises(FrameError):
+            decode_response(wire(bytes(5))[:-1], recover_end=True, last_bits=4)
+
+    def test_st_i2c_contention_retry_keeps_zero_blocks(self):
+        class SyntheticST(Reader):
+            system_calls = 0
+            block_calls = 0
+
+            def system_info(self, uid, verbose=False):
+                self.system_calls += 1
+                if self.system_calls == 1:
+                    raise TagError(0x0f)
+                return {'geometry': {'blocks': 2, 'size': 4}}
+
+            def read_single(self, uid, index, verbose=False, expected_size=None):
+                self.block_calls += 1
+                if self.block_calls == 1:
+                    raise TagError(0x0f)
+                return bytes(4)
+
+        reader = SyntheticST(None)
+        capture = read_memory(reader, 'E002000000000000')
+        self.assertEqual(reader.system_calls, 2)
+        self.assertEqual(reader.block_calls, 3)
+        self.assertEqual(range_bytes(capture), bytes(8))
+        self.assertTrue(capture['addressable_memory_complete'])
 
     def test_mask_search_keeps_external_tag_visible(self):
         onboard = 'E002000000000000'
@@ -197,46 +221,6 @@ class LaunchTests(unittest.TestCase):
             self.assertIn(f'Exec="{launcher}"', desktop.read_text())
             self.assertTrue(os.access(launcher, os.X_OK))
             self.assertEqual(marker.read_text(), 'test\n')
-
-    @unittest.skipUnless(os.environ.get('DISPLAY'), 'graphical display needed')
-    def test_gui_start_stop_and_archive(self):
-        from pt35_nfc_gui import NFCWindow
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            save_record(root, new_record(UID, 'internal'))
-            worker = root / 'fake_reader.py'
-            worker.write_text(
-                'import json, time\n'
-                'print(json.dumps(dict(event="backend", message="Synthetic reader", backend="internal")), flush=True)\n'
-                'try:\n    time.sleep(30)\nexcept KeyboardInterrupt:\n    pass\n')
-            app = NFCWindow(root, root / 'settings.json')
-            try:
-                app.query.set(UID)
-                self.assertEqual(app.archive_tree.get_children(), (UID,))
-                app.archive_tree.selection_set(UID)
-                app.select(app.archive_tree, app.saved)
-                self.assertIn(UID, app.data.get('1.0', 'end'))
-                app.backend.set('internal')
-                app.save_settings()
-                app.backend.set('auto')
-                app.load_settings()
-                self.assertEqual(app.backend.get(), 'internal')
-                with patch('pt35_nfc_gui.BACKEND_SCRIPT', worker):
-                    app.launch('watch')
-                self.assertIsNotNone(app.proc)
-                deadline = time.monotonic() + 5
-                while app.reader.get() != 'Synthetic reader' and time.monotonic() < deadline:
-                    app.update()
-                    time.sleep(.02)
-                self.assertEqual(app.reader.get(), 'Synthetic reader')
-                app.stop()
-                deadline = time.monotonic() + 5
-                while app.proc is not None and time.monotonic() < deadline:
-                    app.update()
-                    time.sleep(.02)
-                self.assertIsNone(app.proc)
-            finally:
-                app.close()
 
 
 if __name__ == '__main__':

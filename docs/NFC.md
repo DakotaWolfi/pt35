@@ -11,25 +11,28 @@ sudo apt install python3-tk python3-smbus2
 bash scripts/install_nfc_gui.sh
 ```
 
-Open **PT35 NFC Reader** in the application menu. The launcher runs the current checkout. Run the installer again if you move that checkout or switch to another worktree. The installer writes the user's launcher and menu entry. Settings are saved only when you click **Save settings** and live at `~/.config/pt35-nfc/settings.json` by default. The app starts idle. To open it automatically on graphical login, run the installer with `--autostart`. Use `--no-autostart` to remove that login entry. Plain SSH normally has no graphical session. Use `python3 nfc/pt35_nfc.py status --backend internal` from SSH to check the reader without enabling RF.
+Open **PT35 NFC Reader** in the application menu. The launcher runs the current checkout. Run the installer again if you move that checkout or switch to another worktree. The installer writes the user's launcher and menu entry. Settings are saved only when you click **Save settings** and live at `~/.config/pt35-nfc/settings.json` by default. The app starts idle in full screen. Use **Tools → Toggle full screen** to switch to a window. To open it automatically on graphical login, run the installer with `--autostart`. Use `--no-autostart` to remove that login entry. Plain SSH normally has no graphical session. Use `python3 nfc/pt35_nfc.py status --backend internal` from SSH to check the reader without enabling RF.
 
 To roll back, stop the app, switch to the earlier checkout, and run its GUI installer. Archive paths are independent of the checkout. The legacy entry points `nfc/nfcv_scan.py`, `nfc/nfcv_dump.py`, and `nfc/pt35_nfc.py` still run directly.
 
 ## Scan and archive
 
-Start a scan, select a tag, then open Data or double-click its row. Data shows geometry, readable blocks, ASCII/UTF-8 previews, decoded NDEF text/URIs where available and read failures. Save captures the displayed record. Export offers JSON and a binary for a verified complete requested range. The Archive tab searches saved records, including labels. Set the **Onboard ST25DV UID** to filter only that UID. Use **Include configured onboard tag** to bypass the filter. Single-slot NFC-V inventory can still collide when two tags reply, so use one tag at a time during verification.
+Tap **Start scan** and tap the latest tag to open its coverage summary. **Hex / data** opens readable memory in scrollable pages. **Save tag** adds the capture to the archive. **Export** writes a JSON record or verified binary range to `~/pt35-nfc/exports`. In **Archive**, tap **Search tags** to type with the on-screen keyboard, then tap a result to inspect it.
+
+In **Settings**, swipe vertically or use the wide scrollbar. **Back** and **Save settings** stay on screen. Backend, protocol and presets are tap selections. Tap a field to open its on-screen editor. Changes take effect on the next scan. While a scan is running, **Stop scan** remains available on the other screens. Set the exact **Onboard ST25DV UID** to filter that one tag, or enable **Include onboard ST25DV** to see it. **Use latest ST tag as onboard UID** is available after detecting an ST tag. Use it only when you know which tag you just scanned.
 
 The archive defaults to `~/pt35-nfc/archive` for CLI and GUI. Keep existing files there. If earlier CLI captures live under `nfc/archive`, run `python3 nfc/pt35_nfc.py migrate-archive` to copy missing files. Original files and destination conflicts are preserved. `known_tonies.txt` in the archive accepts one confirmed UID per line. Auto-save for unverified NXP candidates is separate and off by default.
 
 The archive has one current JSON record per protocol and identifier. A later degraded read retains the better capture and its timestamp, source and coverage while updating sighting metadata. Data from different reads is kept separate. JSON is published atomically under an archive lock. Newly verified binaries use content-addressed filenames and the record references the matching binary. Repeated reads retain at most one managed binary per tag after a successful save. Legacy files remain intact.
 
-`requested_range_complete` requires all requested indices and consistent byte lengths. `addressable_memory_complete` also requires known geometry and an exact range covering it from block zero. System Information may provide geometry. NXP UID tag type `03` uses the published SLI-L/SLIX-L user-memory geometry when System Information is unavailable. Other tags default to a conservative eight-block probe when geometry is unknown. ST25DV16K/64K extended geometry is queried when standard System Information identifies that family. Automatic scans read at most 256 blocks. Request 512 or 2048 explicitly to read the larger addressable ranges. All-zero blocks are valid when framing, CRC, response flags and lengths agree. A timeout leaves the cause unknown. Tag-reported unavailable, locked and read-protected blocks are recorded separately. Addressable user memory does not include protected configuration, passwords or authentication secrets.
+`requested_range_complete` requires all requested indices and consistent byte lengths. `addressable_memory_complete` also requires known geometry and an exact range covering it from block zero. System Information may provide geometry. NXP UID tag type `03` uses the published SLI-L/SLIX-L user-memory geometry when System Information is unavailable. Other tags default to a conservative eight-block probe when geometry is unknown. ST25DV16K/64K extended geometry is queried when standard System Information identifies that family. Auto reads at most 32 known blocks or probes eight when geometry is unknown. Choose **All known** (CLI `--blocks -1`) or enter a specific count for larger ranges. With an unverified size, **All known** still probes eight. All-zero blocks are valid when framing, CRC, response flags and lengths agree. A timeout leaves the cause unknown. Tag-reported unavailable, locked and read-protected blocks are recorded separately. Addressable user memory does not include protected configuration, passwords or authentication secrets.
 
 ## Verification status
 
 | Backend / mode | Status |
 | --- | --- |
-| Internal NFC-V inventory and addressed read | Legacy path bench-proven. Changes in this branch require PT35 verification. |
+| Internal NFC-V inventory and addressed read | The prior PR failed physical checks. Baseline-compatible receive recovery, masked inventory and diagnostics are awaiting a PT35 retest. |
+| Touch GUI | Synthetic tap/swipe tests passed at a reduced usable height. The prior UI failed the PT35 test. Physical touch verification is pending. |
 | Internal NFC-A | Implemented single-tag discovery and NTAG213/215/216 user-page reads. Bench check pending. |
 | Internal NFC-B | Implemented one-slot ATQB/PUPI discovery. Bench check pending. |
 | Internal NFC-F | Implemented one-slot FeliCa polling at 212 kbit/s. Bench check pending. |
@@ -37,7 +40,7 @@ The archive has one current JSON record per protocol and identifier. A later deg
 | Proxmark3/Iceman ISO15693 memory | Implemented addressed raw reads with CRC verification and a 32-block cap per capture. Bench check pending. |
 | Proxmark3/Iceman ISO15693 simulation | Experimental, explicit confirmation for a saved verified capture. Bench check pending. |
 
-Offline tests use synthetic frames and temporary archives.
+Offline tests use synthetic frames and temporary archives. Run with a graphical display or `xvfb-run -s '-screen 0 800x480x24'` to exercise touch navigation with synthetic pointer events.
 
 ```sh
 python3 -m unittest discover -s tests -p 'test_nfc*.py' -v
@@ -45,23 +48,53 @@ python3 -m unittest discover -s tests -p 'test_nfc*.py' -v
 
 ### Raspberry Pi bench checklist
 
-1. On the PT35 desktop, open the app. Check **Reader status**, then **Start** with the Internal backend. Confirm Start, Stop, and window close work with no tag, a tag held in place, and a tag removed during a read. After Stop, immediately start a second scan and confirm it can use the same reader.
-2. Scan one Tonie, one blank ISO15693 tag, and the onboard ST25DV. Compare the Tonie UID and blocks with a known-good read. On a blank tag, confirm valid zero blocks display as readable. Configure the exact onboard UID and verify both filter settings. If geometry is unavailable, confirm coverage stays limited to the requested range.
-3. Save a good capture, then remove the tag during a repeat read and save the partial result. Verify the good capture still opens from Archive, labels remain intact, and the binary size matches its recorded range. Confirm the local archive was available before and after launching.
-4. Verify RF is off after Stop. With no scanner running, read ST25R3916 Operation Control using the read-only command below. TX/RX bits `0x48` must both be clear. Run the status check and note whether buttons, LEDs, fan and Remote Eye still behave normally.
-5. Send back the per-tag coverage/status, any error text and the Operation Control byte. Leave out tag identifiers and captured bytes.
+Use the same tag, alignment and antenna position in both inventory runs. Stop all other NFC scans first. Repeat with an external known-good Tonie, a generic ISO15693 tag and the onboard ST25DV on its own. Keep other PT35 services running.
+
+**1. Compare inventory with the original scanner.** The baseline is the original `main` scanner from the handoff. The filter below prints counts and discards private UID and frame output. Run this from the PR checkout in Bash.
+
+```bash
+(
+  set -o pipefail
+  baseline="$(mktemp)"
+  trap 'rm -f "$baseline"' EXIT
+  git show 73751297a6f78e87a4e7d9ecb4e526b7a15510a5:nfc/nfcv_scan.py > "$baseline" || exit
+  python3 "$baseline" --count 20 --delay .35 --verbose |
+    awk '/^Attempt [0-9]+: no valid tag/{miss++}
+         END{printf "Baseline: %d/20 inventory replies (%d missed)\n", 20-miss, miss}'
+)
+
+python3 nfc/pt35_nfc.py rf-bench --inventory-only --include-st --tries 20 --delay .35
+```
+
+If either command exits with an error, keep the error alongside the count. The comparable counts are the baseline's inventory replies and the new scan's `inventory.ok`. The original and comparison runs both use unmasked inventory and the same NFC-V register profile, 300 ms inventory timeout and high-rate single-subcarrier framing. The new receive path accumulates clear-on-read IRQs. If RX-end is absent, it checks the FIFO within a fixed deadline. Compatibility recovery requires all data and CRC symbols, even when the stream tail was clipped.
+
+**2. Check addressed reads on each tag.** Use this once per tag with a different output filename. The report contains per-stage counts and recent events, including RF register setup, CRC and symbol failures, FIFO/IRQ state, geometry, block retries, tag error codes and RF shutdown. Reports omit UIDs, payloads and raw samples. For a tag that reports reliable geometry, try **All known** separately if full memory is needed.
 
 ```sh
-python3 nfc/pt35_nfc.py status --backend internal
-python3 - <<'PY'
+python3 nfc/pt35_nfc.py rf-bench --include-st --tries 10 --delay .35 --blocks 8 \
+  --diagnostics "$HOME/pt35-rf-addressed.json"
+```
+
+Compare `inventory.ok`, `geometry.ok`, `geometry.unknown_geometry`, and the `coverage.*` counts. A verified eight-block range can be complete with the tag's full size still unknown. An ST25DV can return a generic `0x0f` error or withhold some RF replies during I²C activity. Record the error code and timing rather than assuming bus contention from a timeout. See [ST25DV datasheet, section 7.6.3](https://www.st.com/resource/en/datasheet/st25dv16k.pdf).
+
+**3. Check both tags in the field.** Use the GUI in Internal / NFC-V mode. Save the exact onboard UID in Settings and try the external tag with **Include onboard ST25DV** off, then turn it on and try both. The live scanner can try a bounded series of UID masks after a bad unmasked reply or a reply from the configured onboard tag. Each mask is an inventory request. This step needs the physical antenna and both tags present.
+
+**4. Verify touch and shutdown.** With the actual 800×480 touch display and no keyboard or mouse, open and edit all settings, save, exit, and reopen. Start a scan, open a tag, view its memory, save it, search the archive and export by touch. Verify that settings and tag actions are reachable while scanning. Use **Stop scan** and then **Tools → RF diagnostics**. It should show `Last shutdown RF bits: 0x00`. Try several Start/Stop cycles and a five-minute scan with tag removal and re-presentation. Export a redacted report from this screen if any step fails.
+
+For an independent readback with the scanner stopped:
+
+```sh
+python3 - <<'PYCODE'
 from smbus2 import SMBus, i2c_msg
 with SMBus(1) as bus:
     value = i2c_msg.read(0x50, 1)
     bus.i2c_rdwr(i2c_msg.write(0x50, [0x42]), value)
     op = bytes(value)[0]
 print(f'ST25R3916 operation control 0x{op:02X}, RF bits 0x{op & 0x48:02X}')
-PY
+PYCODE
 ```
+
+Send the per-tag counts, any touch step that fails, and the RF-off result. Keep tag identifiers and contents local. The draft stays open for physical sign-off.
 
 References for the driver include the [ST25R3916 datasheet](https://www.st.com/resource/en/datasheet/st25r3916.pdf), [M5Stack stream decoder](https://github.com/m5stack/M5Unit-NFC/blob/471a6e02e8052264d39b3ac97005ce4de9d1cb91/src/nfc/v/nfcv.cpp), and [NXP SLIX-L datasheet](https://www.nxp.com/docs/en/data-sheet/SL2S5002_SL2S5102.pdf).
 
@@ -90,7 +123,7 @@ python3 nfc/pt35_nfc.py status --backend proxmark3
 
 The installer asks before installing packages and builds the userspace client under `~/.local/lib/pt35-iceman`. It performs no device flashing. If you already have a matching client, use **Iceman client path** in Settings, `--client` or `PT35_PM3_CLIENT`. Port selection accepts a detected Proxmark3 device path or its stable `/dev/serial/by-id/` symlink. The app requires a PM3 USB descriptor, an Iceman hardware ping with matching content, and a matching firmware revision. An Iceman mismatch should be addressed by selecting or building the matching client. An unplugged PM3 falls back to the internal reader in Auto mode, and a later responsive PM3 is picked up during a watch.
 
-In the **Proxmark** tab, select HF, LF or ISO15693 as the watch mode. **Identify HF / LF** shows Iceman's logs for both bands. Supported structured rows include NFC-A UID, NFC-B PUPI, NFC-F IDm, NFC-V UID and EM410x ID. Other detected protocols may appear only in the log. B PUPIs can be temporary and may change between sessions.
+In **Settings**, select HF, LF or NFC-V as the Proxmark watch mode. Open **Tools → Proxmark3** for device actions. **Identify HF / LF** shows Iceman's logs for both bands. Supported structured rows include NFC-A UID, NFC-B PUPI, NFC-F IDm, NFC-V UID and EM410x ID. Other detected protocols may appear only in the log. B PUPIs can be temporary and may change between sessions.
 
 When the connected firmware advertises ISO15693 raw reads, select a tag and choose **Read selected ISO15693 memory**. This uses addressed, CRC-checked reads. For slower USB polling it limits each operation to 32 blocks. The CLI equivalent is `python3 nfc/pt35_nfc.py pm3-dump UID --save`. Discovery by itself is a metadata capture.
 

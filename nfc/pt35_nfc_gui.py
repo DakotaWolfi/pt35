@@ -1,478 +1,801 @@
 #!/usr/bin/env python3
-"""Standalone Tk application for the PT35 NFC worker and local archive."""
+"""PT35 NFC reader and archive for the 800×480 touch display."""
+import argparse
 import json
 import os
 import queue
+import re
 import signal
 import subprocess
 import sys
 import threading
 import tkinter as tk
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
-from tkinter.scrolledtext import ScrolledText
 
-from nfc_archive import atomic_write, range_bytes, record_bytes, record_path, save_record
-from nfc_pm3 import PM3_MODES, SIM_SECONDS, simulation_image
+from nfc_archive import atomic_write, range_bytes, record_bytes, save_record
 from nfc_config import DEFAULT_ARCHIVE
+from nfc_diagnostics import Diagnostics
 from nfc_ndef import decode_message, extract_message, ndef_area
-from nfc_poll import MODES
+from nfc_pm3 import SIM_SECONDS, simulation_image
+from nfc_touch import BG, FG, LARGE, MONO, MUTED, PANEL, SMALL, Button, ScrollArea, label, row
 
 BACKEND_SCRIPT = Path(__file__).resolve().with_name('pt35_nfc.py')
 SETTINGS = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'pt35-nfc' / 'settings.json'
+PROTOCOLS = {'ISO15693': 'NFC-V', 'NFC-A': 'NFC-A', 'NFC-B': 'NFC-B', 'NFC-F': 'NFC-F'}
+BACKENDS = {'auto': 'Auto', 'internal': 'Internal', 'proxmark3': 'Proxmark3'}
+PAGE_SIZE = 24
+DEFAULTS = dict(backend='auto', protocol_mode='ISO15693', pm3_mode='HF', blocks='0',
+                include_st=False, exclude_uid=os.environ.get('PT35_NFC_ONBOARD_UID', ''),
+                auto_tonie=True, auto_candidates=False, save_all=False, client='', port='')
 
 
-def read_events(proc, events):
+def write_local(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    atomic_write(path, data)
+    return path
+
+
+def load_settings(path):
+    values = dict(DEFAULTS)
     try:
-        with proc.stdout:
-            for line in proc.stdout:
-                try:
-                    item = json.loads(line)
-                    if not isinstance(item, dict) or 'event' not in item:
-                        raise ValueError
-                except ValueError:
-                    item = {'event': 'log', 'message': line.strip()}
-                events.put(item)
-    except OSError as exc:
-        events.put({'event': 'fault', 'message': f'Scanner output unavailable: {exc}'})
-    finally:
-        events.put({'event': 'exit', 'code': proc.wait()})
+        stored = json.loads(path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return values
+    if not isinstance(stored, dict):
+        raise ValueError('Settings must be a JSON object')
+    for key, default in values.items():
+        value = stored.get(key)
+        if type(value) is type(default):
+            values[key] = value
+    for key, options in (('backend', BACKENDS), ('protocol_mode', PROTOCOLS), ('pm3_mode', ('HF', 'LF', 'ISO15693'))):
+        if values[key] not in options:
+            values[key] = DEFAULTS[key]
+    if not re.fullmatch(r'-1|[0-9]{1,4}', values['blocks']) or int(values['blocks']) > 2048:
+        values['blocks'] = '0'
+    if values['exclude_uid'] and not re.fullmatch(r'E002[0-9A-F]{12}', values['exclude_uid'], re.I):
+        values['exclude_uid'] = ''
+    return values
 
 
-def format_record(record):
-    geom = record.get('geometry')
-    lines = [
-        f"{record['protocol']} | {record['uid']}",
-        f"{record.get('manufacturer', 'Unknown')} | {record.get('tonie_status', 'Unclassified')}",
-        f"Source {record.get('capture_backend', record.get('backend', '?'))} | "
-        f"{record.get('captured_utc', record.get('last_seen_utc', ''))}",
-        record.get('chip', ''),
-        f"Geometry: {geom['blocks']} × {geom['size']} bytes ({geom.get('source', 'legacy')})"
-        if geom else 'Geometry: unknown',
-        f"Coverage: {record.get('dump_status', '?').replace('_', ' ')}",
-    ]
-    requested = record.get('requested_range')
-    if requested:
-        start, count = requested['start'], requested['count']
-        lines.append(f"Range {start}–{start + count - 1} | Readable {len(record.get('blocks', []))}/{count}")
-    if record.get('blocks') and record.get('capture_format') != 2:
-        lines.append('Legacy capture. Check its raw record for the original coverage claims.')
-    if record.get('verification'):
-        lines.append(record['verification'])
-    if record.get('system_info', {}).get('error'):
-        lines.append('System Information: ' + record['system_info']['error']['error'])
-    if record.get('discovery'):
-        lines.append('Discovery: ' + json.dumps(record['discovery']))
+def read_archive(archive):
+    records = []
+    for path in archive.glob('*/record.json'):
+        try:
+            record = json.loads(path.read_text(encoding='utf-8'))
+            if isinstance(record['uid'], str) and isinstance(record['protocol'], str):
+                records.append(record)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return sorted(records, key=lambda item: str(item.get('last_seen_utc') or ''), reverse=True)
+
+
+def coverage(record):
+    geometry = record.get('geometry') or {}
+    requested = record.get('requested_range') or {}
+    readable = len(record.get('blocks') or [])
+    if not requested:
+        return f'{readable} readable blocks' if readable else 'Tag identified'
+    status = {'addressable_memory_complete': 'Full memory', 'requested_range_complete': 'Range complete',
+              'partial': 'Partial read', 'failed': 'Read failed'}.get(record.get('dump_status'), 'Captured')
+    total = f" · {geometry['blocks']} on tag" if geometry else ' · size unknown'
+    return f"{status} · {readable}/{requested['count']} blocks{total}"
+
+
+def summary(record):
+    result = [f"{record.get('manufacturer', 'Unknown maker')} · {record.get('backend', '?')}", coverage(record)]
+    if record.get('chip'):
+        result.append(record['chip'])
+    geometry = record.get('geometry')
+    if geometry:
+        result.append(f"{geometry['blocks']} blocks × {geometry['size']} bytes · {geometry.get('source', 'reported size')}")
+    for key in ('error', 'extended_error'):
+        if (problem := (record.get('system_info') or {}).get(key)):
+            result.append(f"System Information · {problem['error']}")
+    for err in (record.get('read_errors') or [])[:4]:
+        result.append(f"Block {err.get('index', '?')} · {err.get('error', err.get('kind', 'unreadable'))}")
     data = range_bytes(record)
     if data is not None:
         message = extract_message(ndef_area(record, data))
         if message is not None:
-            lines.extend(decode_message(message) or ['NDEF message present (no supported preview)'])
+            result.extend(decode_message(message) or ['NDEF message present'])
+    return '\n\n'.join(result)
+
+
+class ScanWorker:
+    """One RF process group. Launch and pipe reads stay off the Tk thread."""
+    def __init__(self, command, events):
+        self.events = events
+        self.process = None
+        self.pending_signal = None
+        self.lock = threading.Lock()
+        self.thread = threading.Thread(target=self.run, args=(command,), daemon=True)
+
+    def start(self):
+        self.thread.start()
+
+    def send_signal(self, signum):
+        with self.lock:
+            if self.process is None:
+                self.pending_signal = signum
+            else:
+                self.signal_group(signum)
+
+    def signal_group(self, signum):
         try:
-            preview = data.rstrip(b'\0').decode('utf-8')
-            if preview and all(char.isprintable() or char in '\r\n\t' for char in preview):
-                lines.append('UTF-8: ' + preview)
-        except UnicodeDecodeError:
+            os.killpg(self.process.pid, signum)
+        except ProcessLookupError:
             pass
-    if record.get('pm3_log'):
-        lines += ['', record['pm3_log']]
-    lines.append('')
-    for block in record.get('blocks', []):
-        data = bytes.fromhex(block['hex'])
-        printable = ''.join(chr(b) if 32 <= b < 127 else '.' for b in data)
-        lines.append(f"{block['index']:04d}   {data.hex(' ').upper():<24} {printable}")
-    for error in record.get('read_errors', []):
-        lines.append(f"{error['index']:04d}   {error.get('kind', 'failed')}: "
-                     f"{error.get('error', error.get('reason', '?'))}")
-    return '\n'.join(lines)
+
+    def run(self, command):
+        code = 2
+        try:
+            proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, errors='replace',
+                                    start_new_session=True)
+            with self.lock:
+                self.process = proc
+                if self.pending_signal is not None:
+                    self.signal_group(self.pending_signal)
+            with proc.stdout:
+                for line in proc.stdout:
+                    try:
+                        item = json.loads(line)
+                        if not isinstance(item, dict) or 'event' not in item:
+                            raise ValueError
+                    except ValueError:
+                        item = {'event': 'log', 'message': line.strip()}
+                    self.events.put(item)
+            code = proc.wait()
+        except OSError as exc:
+            self.events.put({'event': 'fault', 'message': str(exc)})
+            if self.process is not None:
+                self.send_signal(signal.SIGTERM)
+                code = self.process.wait()
+        finally:
+            self.events.put({'event': 'exit', 'code': code})
 
 
 class NFCWindow(tk.Tk):
-    def __init__(self, archive=DEFAULT_ARCHIVE, settings=SETTINGS):
+    def __init__(self, archive=DEFAULT_ARCHIVE, settings=SETTINGS, *, fullscreen=True):
         super().__init__()
         self.title('PT35 NFC Reader')
-        self.geometry(f'{min(900, self.winfo_screenwidth())}x{min(630, self.winfo_screenheight() - 60)}')
-        self.minsize(440, 330)
-        self.archive = archive
-        self.settings_path = settings
-        self.available_pm3_actions = set()
-        self.proc = None
+        self.configure(bg=BG)
+        self.geometry(f'{min(800, self.winfo_screenwidth())}x{min(480, self.winfo_screenheight())}')
+        self.minsize(480, 320)
+        self.attributes('-fullscreen', fullscreen)
+        self.archive = Path(archive)
+        self.settings_path = Path(settings)
+        self.exports = self.archive.parent / 'exports'
+        self.settings = dict(DEFAULTS)
+        self.draft = None
+        self.ready = False
         self.worker = None
-        self.events = queue.Queue(maxsize=128)
-        self.closing = False
         self.stopping = False
+        self.closing = False
         self.had_fault = False
-        self.current = None
-        self.live = {}
-        self.saved = {}
-        self.backend = tk.StringVar(value='auto')
-        self.protocol_mode = tk.StringVar(value='ISO15693')
-        self.pm3_mode = tk.StringVar(value='HF')
-        self.auto_tonie = tk.BooleanVar(value=True)
-        self.auto_candidates = tk.BooleanVar(value=False)
-        self.save_all = tk.BooleanVar(value=False)
-        self.include_st = tk.BooleanVar(value=False)
-        self.exclude_uid = tk.StringVar(value=os.environ.get('PT35_NFC_ONBOARD_UID', ''))
-        self.blocks = tk.StringVar(value='0')
-        self.client = tk.StringVar()
-        self.port = tk.StringVar()
-        self.query = tk.StringVar()
-        self.status = tk.StringVar(value='Ready')
-        self.reader = tk.StringVar(value='Reader status unknown')
-        self.settings_vars = {
-            'backend': self.backend, 'protocol_mode': self.protocol_mode, 'pm3_mode': self.pm3_mode,
-            'auto_tonie': self.auto_tonie, 'auto_candidates': self.auto_candidates, 'save_all': self.save_all,
-            'include_st': self.include_st, 'exclude_uid': self.exclude_uid, 'blocks': self.blocks,
-            'client': self.client, 'port': self.port,
-        }
-        self._build()
-        self.load_settings()
-        self.refresh_archive()
-        self.after(50, self.drain)
+        self.available_pm3_actions = set()
+        self.events = queue.Queue(maxsize=128)
+        self.io = ThreadPoolExecutor(max_workers=1, thread_name_prefix='nfc-files')
+        self.tasks = {}
+        self.rf = Diagnostics()
+        self.last_rf_bits = None
+        self.pm3_log = ''
+        self.newest = self.current = self.latest_st = None
+        self.saved = []
+        self.query = ''
+        self.archive_page = 0
+        self.archive_dirty = True
+        self.status = tk.StringVar(self, value='Loading settings…')
+        self.reader = tk.StringVar(self, value='Ready to scan')
+        self.notice = tk.StringVar(self)
+        self.layout = tk.Frame(self, bg=BG)
+        self.layout.pack(fill='both', expand=True)
+        self.home()
+        self.submit('load settings', lambda: load_settings(self.settings_path), self.loaded)
+        self.after(40, self.drain)
         self.protocol('WM_DELETE_WINDOW', self.close)
 
-    def _build(self):
-        frame = ttk.Frame(self, padding=8)
-        frame.pack(fill='both', expand=True)
-        bar = ttk.Frame(frame)
-        bar.pack(fill='x', pady=(0, 6))
-        self.buttons = []
-        for label, action in (('Start', 'watch'), ('Reader status', 'status')):
-            button = ttk.Button(bar, text=label, command=lambda a=action: self.launch(a))
-            button.pack(side='left', padx=(0, 4))
-            self.buttons.append(button)
-        self.stop_button = ttk.Button(bar, text='Stop', state='disabled', command=self.stop)
-        self.stop_button.pack(side='left')
-        ttk.Label(frame, textvariable=self.reader).pack(fill='x')
-        status = ttk.Label(frame, textvariable=self.status, wraplength=410)
-        status.pack(fill='x', pady=(0, 4))
-        status.bind('<Configure>', lambda event: status.configure(wraplength=event.width))
-        self.tabs = ttk.Notebook(frame)
-        self.tabs.pack(fill='both', expand=True)
-        scan, self.data_tab, archive, proxmark, settings = [
-            ttk.Frame(self.tabs, padding=5) for _ in range(5)
-        ]
-        for pane, title in zip((scan, self.data_tab, archive, proxmark, settings),
-                               ('Scan', 'Data', 'Archive', 'Proxmark', 'Settings')):
-            self.tabs.add(pane, text=title)
-        self.live_tree = self.make_tree(scan, self.live)
-        self.log = ScrolledText(scan, height=5, wrap='word', state='disabled')
-        self.log.pack(fill='x', pady=(5, 0))
-        self.raw = tk.BooleanVar()
-        actions = ttk.Frame(self.data_tab)
-        actions.pack(fill='x')
-        ttk.Button(actions, text='Save tag', command=self.save_current).pack(side='left')
-        ttk.Button(actions, text='Export…', command=self.export_current).pack(side='left', padx=4)
-        ttk.Checkbutton(actions, text='Raw JSON', variable=self.raw, command=self.render).pack(side='left')
-        self.data = ScrolledText(self.data_tab, height=8, wrap='word', state='disabled')
-        self.data.pack(fill='both', expand=True, pady=(5, 0))
-        search = ttk.Frame(archive)
-        search.pack(fill='x', pady=(0, 5))
-        ttk.Label(search, text='Search').pack(side='left')
-        ttk.Entry(search, textvariable=self.query).pack(side='left', fill='x', expand=True, padx=4)
-        ttk.Button(search, text='Refresh', command=self.refresh_archive).pack(side='right')
-        self.archive_tree = self.make_tree(archive, self.saved)
-        self.query.trace_add('write', lambda *_: self.populate_archive())
-        ttk.Label(proxmark, text='Iceman must respond and match the connected firmware.',
-                  wraplength=400).pack(anchor='w')
-        identify = ttk.Button(proxmark, text='Identify HF / LF',
-                              command=lambda: self.launch('identify', force='proxmark3'))
-        identify.pack(anchor='w', pady=6)
-        self.buttons.append(identify)
-        ttk.Label(proxmark, text='Watch mode').pack(anchor='w')
-        ttk.Combobox(proxmark, textvariable=self.pm3_mode, values=PM3_MODES,
-                     state='readonly', width=14).pack(anchor='w', pady=(0, 4))
-        self.pm3_actions = {}
-        for label, action in (('Read selected ISO15693 memory', 'pm3-dump'),
-                              ('Simulate saved ISO15693 tag…', 'pm3-simulate')):
-            button = ttk.Button(proxmark, text=label, command=lambda a=action: self.pm3_action(a),
-                                state='disabled')
-            button.pack(anchor='w', pady=(0, 4))
-            self.pm3_actions[action] = button
-        ttk.Label(proxmark, text='Client path and serial port are configurable in Settings.',
-                  wraplength=400).pack(anchor='w')
-        settings.columnconfigure(1, weight=1)
-        ttk.Label(settings, text='Backend').grid(row=0, column=0, sticky='w')
-        ttk.Combobox(settings, textvariable=self.backend, state='readonly',
-                     values=('auto', 'internal', 'proxmark3')).grid(row=0, column=1, sticky='ew')
-        ttk.Label(settings, text='Internal protocol').grid(row=1, column=0, sticky='w')
-        ttk.Combobox(settings, textvariable=self.protocol_mode, state='readonly',
-                     values=('ISO15693', *MODES)).grid(row=1, column=1, sticky='ew')
-        for row, (label, var) in enumerate((
-                ('Blocks (0 = auto)', self.blocks), ('Onboard ST25DV UID', self.exclude_uid),
-                ('Iceman client path', self.client), ('Proxmark3 serial port', self.port)), start=2):
-            ttk.Label(settings, text=label).grid(row=row, column=0, sticky='w', padx=(0, 6))
-            ttk.Entry(settings, textvariable=var).grid(row=row, column=1, sticky='ew')
-        for row, (label, var) in enumerate((
-                ('Include configured onboard tag', self.include_st), ('Save every tag', self.save_all),
-                ('Auto-save known Tonie UIDs', self.auto_tonie),
-                ('Also auto-save unverified NXP candidates', self.auto_candidates)), start=6):
-            ttk.Checkbutton(settings, text=label, variable=var).grid(row=row, columnspan=2, sticky='w')
-        ttk.Button(settings, text='Save settings', command=self.save_settings).grid(row=10, column=0, sticky='w')
+    def loaded(self, values):
+        self.settings = values or dict(DEFAULTS)
+        self.ready = True
+        self.status.set('Ready · tap Start scan')
+        if self.screen == 'home':
+            self.home()
 
-    def load_settings(self):
-        try:
-            values = json.loads(self.settings_path.read_text(encoding='utf-8'))
-            if not isinstance(values, dict):
-                raise ValueError('Expected a settings object')
-            for key, var in self.settings_vars.items():
-                value = values.get(key)
-                if type(value) is type(var.get()):
-                    var.set(value)
-        except FileNotFoundError:
-            pass
-        except (OSError, ValueError) as exc:
-            self.append_log(f'Settings could not be read: {exc}')
+    def submit(self, key, work, done=lambda _: None):
+        if key not in self.tasks and not self.closing:
+            self.tasks[key] = self.io.submit(work), done
+
+    def page(self, title, back=None, *, scroll=True, footer=()):
+        for widget in self.layout.winfo_children():
+            widget.destroy()
+        self.notice.set('')
+        header = tk.Frame(self.layout, bg=BG)
+        header.pack(fill='x', padx=10, pady=(6, 2))
+        if back:
+            Button(header, '‹ Back', back, width=7).pack(side='left', padx=(0, 10))
+        else:
+            Button(header, 'Exit', self.close, width=6).pack(side='right')
+        self.header_stop = None
+        if back:
+            self.header_stop = Button(header, 'Stop scan', self.stop)
+            self.update_header_stop()
+        label(header, title, font=LARGE).pack(side='left', fill='x', expand=True)
+        if footer:
+            row(self.layout, footer).pack(side='bottom', fill='x', padx=10, pady=(4, 8))
+        notice = label(self.layout, textvariable=self.notice, font=SMALL, fg=MUTED)
+        notice.pack(side='bottom', fill='x', padx=12)
+        notice.bind('<Configure>', lambda e: notice.configure(wraplength=e.width))
+        if scroll:
+            self.scroll = ScrollArea(self.layout)
+            self.scroll.pack(fill='both', expand=True, padx=10)
+            self.body = self.scroll.content
+        else:
+            self.scroll = None
+            self.body = tk.Frame(self.layout, bg=BG)
+            self.body.pack(fill='both', expand=True, padx=10)
+        return self.body
+
+    def update_header_stop(self):
+        if self.header_stop:
+            if self.worker and not self.header_stop.winfo_manager():
+                self.header_stop.pack(side='right')
+            elif not self.worker and self.header_stop.winfo_manager():
+                self.header_stop.pack_forget()
+            self.header_stop.configure(state='disabled' if self.stopping else 'normal')
+
+    def wrap(self, parent, text='', **kwargs):
+        widget = label(parent, text, **kwargs)
+        widget.pack(fill='x', pady=(2, 5))
+        widget.bind('<Configure>', lambda e: widget.configure(wraplength=max(40, e.width - 4)))
+        return widget
+
+    def finish_page(self, position=0):
+        if self.scroll:
+            scroll = self.scroll
+            scroll.enable_swipe()
+            if position:
+                self.after_idle(lambda: scroll.winfo_exists() and scroll.canvas.yview_moveto(position))
+
+    def scroll_position(self):
+        return self.scroll.canvas.yview()[0] if self.scroll else 0
+
+    def home(self):
+        self.screen = 'home'
+        body = self.page('PT35 NFC', footer=(
+            ('Archive', self.open_archive, {}), ('Settings', self.open_settings, {'state': 'normal' if self.ready else 'disabled'}),
+            ('Tools', self.tools, {})))
+        self.wrap(body, textvariable=self.reader, font=LARGE)
+        self.wrap(body, textvariable=self.status, fg=MUTED)
+        self.scan_button = Button(body, '', self.toggle_scan, primary=True)
+        self.scan_button.pack(fill='x', pady=(7, 10))
+        self.sync_scan()
+        self.wrap(body, 'LATEST TAG', font=SMALL, fg=MUTED)
+        self.latest = Button(body, '', self.open_latest, lines=2, anchor='w')
+        self.latest.pack(fill='x')
+        self.update_latest()
+        self.finish_page()
+
+    def update_latest(self):
+        if self.screen != 'home':
+            return
+        if self.newest:
+            item = self.newest
+            self.latest.configure(text=f"{PROTOCOLS.get(item['protocol'], item['protocol'])}  {item['uid']}\n{coverage(item)}",
+                                  state='normal')
+        else:
+            self.latest.configure(text='No tag captured yet\nHold one tag against the antenna', state='disabled')
+
+    def sync_scan(self):
+        if self.screen == 'home':
+            self.scan_button.configure(text='Stopping…' if self.stopping else 'Stop scan' if self.worker else 'Start scan',
+                                       state='normal' if self.ready and not self.stopping else 'disabled')
+        self.update_header_stop()
+
+    def open_latest(self):
+        if self.newest:
+            self.current = self.newest
+            self.detail(self.home)
+
+    def open_settings(self):
+        self.draft = dict(self.settings)
+        self.show_settings()
+
+    def show_settings(self, position=0):
+        self.screen = 'settings'
+        body = self.page('Settings', self.home, footer=(('Save settings', self.save_settings, {'primary': True}),))
+        self.wrap(body, 'Changes apply to the next scan.', fg=MUTED)
+        self.options(body, 'Reader backend', 'backend', BACKENDS)
+        self.options(body, 'Internal protocol', 'protocol_mode', PROTOCOLS)
+        self.options(body, 'NFC-V block count', 'blocks', {'0': 'Auto', '8': '8', '32': '32', '-1': 'All known'})
+        block_value = self.draft['blocks']
+        self.setting_edit(body, 'Custom block count', 'blocks', 'number', 'Auto' if block_value == '0' else
+                          'All known' if block_value == '-1' else block_value)
+        self.options(body, 'Proxmark watch mode', 'pm3_mode', {'HF': 'HF', 'LF': 'LF', 'ISO15693': 'NFC-V'})
+        for title, key in (('Include onboard ST25DV', 'include_st'), ('Save all tags', 'save_all'),
+                           ('Auto-save known Tonies', 'auto_tonie'), ('Auto-save unverified NXP tags', 'auto_candidates')):
+            enabled = self.draft[key]
+            Button(body, f"{title}   {'ON' if enabled else 'OFF'}", lambda k=key: self.change(k, not self.draft[k]),
+                   selected=enabled, anchor='w').pack(fill='x', pady=3)
+        self.setting_edit(body, 'Onboard ST25DV UID', 'exclude_uid', 'hex')
+        if self.latest_st:
+            Button(body, 'Use latest ST tag as onboard UID', lambda: self.change('exclude_uid', self.latest_st)).pack(fill='x', pady=3)
+        self.setting_edit(body, 'Iceman client path', 'client')
+        self.setting_edit(body, 'Proxmark serial port', 'port')
+        self.finish_page(position)
+
+    def options(self, parent, title, key, choices):
+        self.wrap(parent, title, fg=MUTED)
+        row(parent, [(name, lambda v=value: self.change(key, v), {'selected': self.draft[key] == value})
+                     for value, name in choices.items()]).pack(fill='x', pady=(0, 6))
+
+    def change(self, key, value):
+        position = self.scroll_position()
+        self.draft[key] = value
+        self.show_settings(position)
+
+    def setting_edit(self, parent, title, key, mode='text', display=None):
+        value = self.draft[key]
+        display = display or value or 'Automatic / unset'
+        if len(display) > 48:
+            display = '…' + display[-47:]
+        Button(parent, f'{title}\n{display}', lambda: self.edit_setting(title, key, mode),
+               lines=2, anchor='w').pack(fill='x', pady=3)
+
+    def edit_setting(self, title, key, mode):
+        position = self.scroll_position()
+        initial = self.draft[key]
+        if mode == 'number' and initial == '-1':
+            initial = ''
+        def apply(value):
+            value = value.strip()
+            if mode == 'number':
+                if not value.isdigit() or len(value) > 4 or not 0 <= int(value) <= 2048:
+                    return 'Enter 0–2048. Zero selects Auto.'
+                value = str(int(value))
+            if mode == 'hex' and value and not re.fullmatch(r'E002[0-9A-F]{12}', value, re.I):
+                return 'Enter the 16-digit ST UID beginning E002, or clear it.'
+            self.draft[key] = value.upper() if mode == 'hex' else value
+            self.show_settings(position)
+            return None
+        self.keyboard(title, initial, apply, lambda: self.show_settings(position), mode)
 
     def save_settings(self):
-        try:
-            self.settings_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            atomic_write(self.settings_path, record_bytes({key: var.get() for key, var in self.settings_vars.items()}))
-        except OSError as exc:
-            messagebox.showerror('Settings could not be saved', str(exc))
-        else:
-            self.status.set('Settings saved')
+        snapshot = dict(self.draft)
+        self.submit('save settings', lambda: write_local(self.settings_path, record_bytes(snapshot)),
+                    lambda path: self.settings_saved(snapshot, path))
 
-    def update_pm3_actions(self):
-        for action, button in self.pm3_actions.items():
-            enabled = action in self.available_pm3_actions and self.proc is None
-            button.configure(state='normal' if enabled else 'disabled')
+    def settings_saved(self, snapshot, path):
+        if path:
+            self.settings = snapshot
+            self.notice.set('Saved · applies to the next scan')
 
-    def pm3_action(self, action):
+    def keyboard(self, title, initial, apply, cancel, mode='text'):
+        self.screen = 'keyboard'
+        value = tk.StringVar(self, value=initial)
+        keyset = 'letters'
+        shifted = False
+
+        def done():
+            error = apply(value.get())
+            if error:
+                self.notice.set(error)
+
+        def add(char):
+            limit = 4 if mode == 'number' else 16 if mode == 'hex' else 512
+            if len(value.get()) < limit:
+                value.set(value.get() + char)
+
+        def erase():
+            value.set(value.get()[:-1])
+
+        def redraw():
+            body = self.page(title, cancel, footer=(('Clear', lambda: value.set(''), {}),
+                                                    ('Done', done, {'primary': True})))
+            preview = tk.StringVar(self)
+
+            def show_value(*_):
+                text = value.get()
+                preview.set(('…' + text[-47:]) if len(text) > 48 else text or '—')
+            show_value()
+            display = label(body, textvariable=preview, font=MONO, bg=PANEL, padx=8, pady=6)
+            display.pack(fill='x', pady=(1, 4))
+            display.bind('<Destroy>', lambda _: value.trace_remove('write', observer))
+            observer = value.trace_add('write', show_value)
+            layouts = {
+                'number': ('123', '456', '789'),
+                'hex': ('1234567890', 'ABCDEF'),
+                'letters': ('qwertyuiop', 'asdfghjkl', 'zxcvbnm'),
+                'symbols': ('1234567890', '/.-_:@+~=', '[]()!#$%&?'),
+                'extra': ('<>{}*^|\\;', '"\'\x60,'),
+            }
+            lines = layouts[mode if mode != 'text' else keyset]
+            for line in lines:
+                chars = line.upper() if mode == 'text' and shifted and keyset == 'letters' else line
+                row(body, [(char, lambda c=char: add(c), {}) for char in chars], gap=4).pack(fill='x', pady=2)
+            if mode == 'text':
+                actions = [('Shift', shift, {'selected': shifted}),
+                           ('ABC' if keyset != 'letters' else '123 / symbols', switch, {}),
+                           ('More', more, {}), ('Space', lambda: add(' '), {}), ('⌫ Delete', erase, {})]
+                row(body, actions, gap=4).pack(fill='x', pady=2)
+            elif mode == 'hex':
+                Button(body, '⌫ Delete', erase).pack(fill='x', pady=2)
+            else:
+                row(body, [('0', lambda: add('0'), {}), ('⌫ Delete', erase, {})]).pack(fill='x', pady=2)
+            self.finish_page()
+
+        def shift():
+            nonlocal shifted
+            shifted = not shifted
+            redraw()
+
+        def switch():
+            nonlocal keyset
+            keyset = 'letters' if keyset != 'letters' else 'symbols'
+            redraw()
+
+        def more():
+            nonlocal keyset
+            keyset = 'symbols' if keyset == 'extra' else 'extra'
+            redraw()
+
+        redraw()
+
+    def open_archive(self):
+        self.archive_view()
+        if self.archive_dirty:
+            self.submit('read archive', lambda: read_archive(self.archive), self.archive_loaded)
+
+    def archive_loaded(self, records):
+        if records is not None:
+            self.saved = records
+            self.archive_dirty = False
+            if self.screen == 'archive':
+                self.archive_view(self.scroll_position())
+
+    def archive_view(self, position=0):
+        self.screen = 'archive'
+        query = self.query.casefold()
+        matches = [record for record in self.saved if not query or query in ' '.join(
+            str(record.get(key, '')) for key in ('uid', 'protocol', 'manufacturer', 'labels', 'tonie_status')).casefold()
+            or query == PROTOCOLS.get(record['protocol'], '').casefold()]
+        self.archive_page = min(self.archive_page, max(0, (len(matches) - 1) // PAGE_SIZE))
+        offset = self.archive_page * PAGE_SIZE
+        pages = []
+        if offset:
+            pages.append(('‹ Previous', lambda: self.move_archive(-1), {}))
+        if offset + PAGE_SIZE < len(matches):
+            pages.append(('Next ›', lambda: self.move_archive(1), {}))
+        body = self.page('Archive', self.home, footer=pages)
+        query_label = ('Search: ' + (self.query if len(self.query) <= 13 else self.query[:13] + '…')) if query else 'Search tags'
+        row(body, [(query_label, self.search_archive, {'primary': True}),
+                   ('Clear search', lambda: self.set_search(''), {'state': 'normal' if query else 'disabled'}),
+                   ('Refresh', self.reload_archive, {})]).pack(fill='x', pady=(1, 6))
+        self.wrap(body, f'{len(matches)} matching tags' if self.saved else
+                  'Loading archive…' if self.archive_dirty else 'Archive is empty', fg=MUTED)
+        for record in matches[offset:offset + PAGE_SIZE]:
+            title = f"{PROTOCOLS.get(record['protocol'], record['protocol'])}   {record['uid']}"
+            try:
+                subtitle = coverage(record)
+            except (TypeError, KeyError):
+                subtitle = 'Open saved record'
+            Button(body, title + '\n' + subtitle, lambda item=record: self.open_saved(item),
+                   lines=2, anchor='w').pack(fill='x', pady=(0, 5))
+        self.finish_page(position)
+
+    def reload_archive(self):
+        self.archive_dirty = True
+        self.open_archive()
+
+    def move_archive(self, delta):
+        self.archive_page += delta
+        self.archive_view()
+
+    def set_search(self, query):
+        self.query = query.strip()
+        self.archive_page = 0
+        self.archive_view()
+
+    def search_archive(self):
+        self.keyboard('Search archive', self.query, self.set_search, self.open_archive)
+
+    def open_saved(self, record):
+        position = self.scroll_position()
+        self.current = record
+        self.detail(lambda: self.archive_view(position), saved=True)
+
+    def detail(self, back, saved=False):
+        self.screen = 'detail'
         record = self.current
-        if not record or record.get('protocol') != 'ISO15693':
-            messagebox.showinfo('Select a tag', 'Select an ISO15693 tag in Scan or Archive.')
-            return
-        uid = record['uid']
-        if action == 'pm3-simulate':
-            try:
-                saved = json.loads(record_path(self.archive, uid).read_text(encoding='utf-8'))
-                simulation_image(saved)
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                messagebox.showerror('Saved capture required', str(exc))
-                return
-            if not messagebox.askyesno(
-                    'Confirm experimental simulation',
-                    f'Load the saved user memory and simulate {uid} for {SIM_SECONDS} seconds? '
-                    'Use a bench tag and reader you are authorized to test. '
-                    'Protected configuration and authentication are outside the simulation.'):
-                return
-        self.tabs.select(0)
-        self.launch(action, force='proxmark3', uid=uid)
-
-    def make_tree(self, parent, records):
-        columns = ('uid', 'protocol', 'type', 'status')
-        tree = ttk.Treeview(parent, columns=columns, show='headings', selectmode='browse', height=5)
-        for col, width in zip(columns, (150, 90, 140, 155)):
-            tree.heading(col, text=col.capitalize())
-            tree.column(col, width=width, minwidth=50)
-        scroll = ttk.Scrollbar(parent, command=tree.yview)
-        tree.configure(yscrollcommand=scroll.set)
-        scroll.pack(side='right', fill='y')
-        tree.pack(fill='both', expand=True)
-        tree.bind('<<TreeviewSelect>>', lambda _: self.select(tree, records))
-        tree.bind('<Double-1>', lambda _: self.tabs.select(self.data_tab))
-        tree.bind('<Return>', lambda _: self.tabs.select(self.data_tab))
-        return tree
-
-    def select(self, tree, records):
-        selected = tree.selection()
-        if selected and selected[0] in records:
-            self.current = records[selected[0]]
-            self.render()
-
-    def render(self):
-        if self.current:
-            try:
-                content = (record_bytes(self.current).decode() if self.raw.get() else format_record(self.current))
-            except (KeyError, TypeError, ValueError) as exc:
-                content = f'Cannot decode record: {exc}'
-            self.data.configure(state='normal')
-            self.data.delete('1.0', 'end')
-            self.data.insert('end', content)
-            self.data.configure(state='disabled')
-
-    def save_current(self):
-        if self.current:
-            try:
-                save_record(self.archive, self.current)
-                self.status.set(f"Saved {self.current['uid']}")
-                self.refresh_archive()
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                messagebox.showerror('Archive save failed', str(exc))
-
-    def export_current(self):
-        if not self.current:
-            return
+        protocol = PROTOCOLS.get(record['protocol'], record['protocol'])
+        footer = (('Save tag', self.save_tag, {'primary': True}), ('Export', lambda: self.export_screen(back, saved), {}),
+                  ('Hex / data', lambda: self.hex_view(back, saved), {}))
+        body = self.page(f'{protocol} tag', back, footer=footer)
+        self.wrap(body, record['uid'], font=LARGE)
         try:
-            binary = range_bytes(self.current)
-            formats = [('JSON record', '*.json')]
-            if binary is not None:
-                formats.append(('Verified range binary', '*.bin'))
-            target = filedialog.asksaveasfilename(filetypes=formats, defaultextension='.json',
-                                                   initialfile=self.current['uid'])
-            if target:
-                path = Path(target)
-                if path.suffix.lower() == '.bin' and binary is None:
-                    raise ValueError('This capture has no verified complete binary range')
-                atomic_write(path, binary if path.suffix.lower() == '.bin' else record_bytes(self.current))
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            messagebox.showerror('Export failed', str(exc))
+            text = summary(record)
+        except (ValueError, KeyError, TypeError) as exc:
+            text = f'Record summary unavailable · {exc}'
+        self.wrap(body, text, fg=MUTED)
+        if record.get('pm3_log'):
+            Button(body, 'Show local Iceman output', lambda: self.log_view(
+                record['pm3_log'], lambda: self.detail(back, saved))).pack(fill='x')
+        self.finish_page()
 
-    @staticmethod
-    def values(record):
-        return (record['uid'], record['protocol'], record.get('tonie_status', record.get('manufacturer', '?')),
-                record.get('dump_status', '?').replace('_', ' '))
-
-    def refresh_archive(self):
-        self.saved.clear()
-        for path in sorted(self.archive.glob('*/record.json')):
+    def hex_view(self, back, saved, offset=0):
+        self.screen = 'hex'
+        record = self.current
+        blocks = record.get('blocks') or []
+        width = 24
+        footer = []
+        if offset:
+            footer.append(('‹ Previous blocks', lambda: self.hex_view(back, saved, offset - width), {}))
+        if offset + width < len(blocks):
+            footer.append(('Next blocks ›', lambda: self.hex_view(back, saved, offset + width), {}))
+        body = self.page('Tag memory', lambda: self.detail(back, saved), footer=footer)
+        self.wrap(body, coverage(record), fg=MUTED)
+        if not blocks:
+            self.wrap(body, 'No memory blocks captured.')
+        for block in blocks[offset:offset + width]:
             try:
-                record = json.loads(path.read_text())
-                self.values(record)
-                self.saved[path.parent.name] = record
-            except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-                self.append_log(f'Cannot open archive record {path.parent.name}: {exc}')
-        self.populate_archive()
+                data = bytes.fromhex(block['hex'])
+                printable = ''.join(chr(b) if 32 <= b < 127 else '.' for b in data)
+                self.wrap(body, f"{block['index']:04d}  {data.hex(' ').upper()}   {printable}", font=MONO)
+            except (KeyError, TypeError, ValueError):
+                self.wrap(body, 'Invalid saved block', fg=MUTED)
+        self.finish_page()
 
-    def populate_archive(self):
-        self.archive_tree.delete(*self.archive_tree.get_children())
-        query = self.query.get().strip().casefold()
-        for key, record in self.saved.items():
-            if not query or query in json.dumps(record, ensure_ascii=False).casefold():
-                self.archive_tree.insert('', 'end', iid=key, values=self.values(record))
+    def save_tag(self):
+        record = self.current
+        def saved(path):
+            if path:
+                self.archive_dirty = True
+                self.notice.set('Tag saved to the archive')
+        self.submit('save tag', lambda: save_record(self.archive, record), saved)
 
-    def append_log(self, message):
-        self.log.configure(state='normal')
-        self.log.insert('end', message[-16000:] + '\n')
-        if int(self.log.index('end-1c').split('.')[0]) > 900:
-            self.log.delete('1.0', '301.0')
-        self.log.see('end')
-        self.log.configure(state='disabled')
+    def export_screen(self, back, saved):
+        self.screen = 'export'
+        record = self.current
+        body = self.page('Export tag', lambda: self.detail(back, saved))
+        self.wrap(body, f'Files are saved in {self.exports}', fg=MUTED)
+        Button(body, 'Export JSON record', lambda: self.export_tag(record, False), primary=True).pack(fill='x', pady=4)
+        try:
+            binary = range_bytes(record)
+        except (ValueError, KeyError, TypeError):
+            binary = None
+        Button(body, 'Export verified binary range', lambda: self.export_tag(record, True),
+               state='normal' if binary is not None else 'disabled').pack(fill='x', pady=4)
+        if binary is None:
+            self.wrap(body, 'Binary export requires a complete verified range.', fg=MUTED)
+        self.finish_page()
+
+    def export_tag(self, record, binary):
+        def work():
+            uid = record['uid']
+            if not re.fullmatch(r'[0-9a-fA-F]{2,64}', uid):
+                raise ValueError('Invalid identifier in the archive record')
+            data = range_bytes(record) if binary else record_bytes(record)
+            if data is None:
+                raise ValueError('Binary export requires a complete verified range')
+            return self.write_export('tag-' + uid, 'bin' if binary else 'json', data)
+        self.submit('export tag', work, self.exported)
+
+    def write_export(self, prefix, suffix, data):
+        stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-%f')
+        return write_local(self.exports / f'{prefix}-{stamp}.{suffix}', data)
+
+    def exported(self, path):
+        if path:
+            self.notice.set(f'Saved {path.name}')
+
+    def tools(self):
+        self.screen = 'tools'
+        body = self.page('Tools', self.home)
+        for title, action in (('RF diagnostics', self.diagnostics), ('Proxmark3', self.pm3),
+                              ('Reader status', lambda: self.launch('status')),
+                              ('Toggle full screen', self.toggle_fullscreen)):
+            Button(body, title, action, anchor='w').pack(fill='x', pady=4)
+        self.finish_page()
+
+    def toggle_fullscreen(self):
+        self.attributes('-fullscreen', not self.attributes('-fullscreen'))
+
+    def diagnostics(self):
+        self.screen = 'diagnostics'
+        body = self.page('RF diagnostics', self.tools,
+                         footer=(('Refresh counts', self.diagnostics, {}),
+                                 ('Export redacted log', self.export_diagnostics, {'primary': True})))
+        self.wrap(body, 'Only RF metadata is exported. Tag identifiers and memory are omitted.', fg=MUTED)
+        if self.last_rf_bits is not None:
+            self.wrap(body, f'Last shutdown RF bits: 0x{self.last_rf_bits:02X}', font=LARGE)
+        if not self.rf.counts:
+            self.wrap(body, 'No internal reader events collected this session.')
+        for key, count in sorted(self.rf.counts.items()):
+            self.wrap(body, f"{key.replace('_', ' ')}   {count}")
+        self.finish_page()
+
+    def export_diagnostics(self):
+        report = self.rf.export()
+        self.submit('export RF log', lambda: self.write_export('nfc-v-diagnostics', 'json', record_bytes(report)),
+                    self.exported)
+
+    def pm3(self):
+        self.screen = 'pm3'
+        body = self.page('Proxmark3', self.tools)
+        self.wrap(body, textvariable=self.reader, fg=MUTED)
+        self.wrap(body, textvariable=self.status, fg=MUTED)
+        enabled = 'disabled' if self.worker else 'normal'
+        target = self.current or self.newest
+        iso_v = bool(target and target['protocol'] == 'ISO15693')
+        self.wrap(body, f"Selected tag: {target['uid']}" if iso_v else 'Open an ISO15693 tag to select it.', fg=MUTED)
+        for title, action, state in (
+            ('Check Iceman connection', lambda: self.launch('status', 'proxmark3'), enabled),
+            ('Identify HF / LF', lambda: self.launch('identify', 'proxmark3'), enabled),
+            ('Read selected NFC-V tag', lambda: self.launch('pm3-dump', 'proxmark3', target['uid']),
+             enabled if iso_v and 'pm3-dump' in self.available_pm3_actions else 'disabled'),
+            ('Simulate saved NFC-V tag', lambda: self.confirm_simulation(target),
+             enabled if iso_v and 'pm3-simulate' in self.available_pm3_actions else 'disabled'),
+            ('View last Iceman output', lambda: self.log_view(self.pm3_log, self.pm3),
+             'normal' if self.pm3_log else 'disabled'),
+        ):
+            Button(body, title, action, state=state, anchor='w').pack(fill='x', pady=4)
+        self.finish_page()
+
+    def confirm_simulation(self, record):
+        try:
+            simulation_image(record)
+        except (ValueError, KeyError, TypeError) as exc:
+            self.notice.set(str(exc))
+            return
+        self.screen = 'confirm'
+        body = self.page('Confirm simulation', self.pm3, footer=(
+            ('Cancel', self.pm3, {}), ('Start simulation', lambda: self.begin_simulation(record['uid']), {'primary': True})))
+        self.wrap(body, f"Simulate the saved tag {record['uid']} for {SIM_SECONDS} seconds.")
+        self.wrap(body, 'Use a tag and reader you are authorized to test. Authentication is outside this simulation.', fg=MUTED)
+        self.finish_page()
+
+    def begin_simulation(self, uid):
+        self.pm3()
+        self.launch('pm3-simulate', 'proxmark3', uid)
+
+    def log_view(self, output, back):
+        self.screen = 'log'
+        body = self.page('Local reader output', back)
+        self.wrap(body, output[-12000:], font=MONO)
+        self.finish_page()
+
+    def toggle_scan(self):
+        if self.worker:
+            self.stop()
+        else:
+            self.launch('watch')
 
     def launch(self, action, force=None, uid=None):
-        if self.proc is not None or self.closing:
+        if self.worker or self.closing or not self.ready:
             return
+        values = dict(self.settings)
         cmd = [sys.executable, '-u', str(BACKEND_SCRIPT), action]
         if uid:
             cmd.append(uid)
-        cmd.extend(('--json-lines', '--backend', force or self.backend.get(), '--archive', str(self.archive),
-                    '--blocks', self.blocks.get(), '--protocol', self.protocol_mode.get(),
-                    '--pm3-mode', self.pm3_mode.get()))
+        cmd.extend(('--json-lines', '--backend', force or values['backend'], '--archive', str(self.archive),
+                    '--protocol', values['protocol_mode'], '--blocks', values['blocks'], '--pm3-mode', values['pm3_mode']))
+        cmd.append(f"--exclude-uid={values['exclude_uid']}")
+        for key, flag in (('client', '--client'), ('port', '--port')):
+            if values[key]:
+                cmd.append(f'{flag}={values[key]}')
+        for key, flag in (('auto_tonie', '--auto-tonie'), ('auto_candidates', '--auto-candidates'),
+                          ('save_all', '--save'), ('include_st', '--include-st')):
+            if values[key]:
+                cmd.append(flag)
         if action == 'pm3-simulate':
             cmd.append('--confirm-emulation')
-        for flag, value in (('--exclude-uid', self.exclude_uid), ('--client', self.client),
-                            ('--port', self.port)):
-            if value.get().strip():
-                cmd.extend((flag, value.get().strip()))
-        for flag, setting in (('--auto-tonie', self.auto_tonie), ('--auto-candidates', self.auto_candidates),
-                              ('--save', self.save_all), ('--include-st', self.include_st)):
-            if setting.get():
-                cmd.append(flag)
-        try:
-            self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT, text=True, errors='replace',
-                                         start_new_session=True)
-        except OSError as exc:
-            self.status.set(f'Cannot start reader: {exc}')
-            return
-        self.status.set('Connecting…')
+        if action == 'watch':
+            self.last_rf_bits = None
+        self.worker = ScanWorker(cmd, self.events)
         self.had_fault = False
         self.stopping = False
-        for button in self.buttons:
-            button.configure(state='disabled')
-        self.stop_button.configure(state='normal')
-        self.update_pm3_actions()
-        self.worker = threading.Thread(target=read_events, args=(self.proc, self.events), daemon=True)
+        self.status.set('Connecting to reader…')
+        if self.screen == 'pm3':
+            self.pm3()
+        self.sync_scan()
         self.worker.start()
 
+    def stop(self):
+        if self.worker and not self.stopping:
+            self.stopping = True
+            self.status.set('Stopping · waiting for RF shutdown…')
+            worker = self.worker
+            worker.send_signal(signal.SIGINT)
+            self.sync_scan()
+            self.after(3500, self.escalate, worker, signal.SIGTERM)
+            self.after(5000, self.escalate, worker, signal.SIGKILL)
+
+    def escalate(self, worker, signum):
+        if self.worker is worker:
+            worker.send_signal(signum)
+
+    def event(self, item):
+        kind = item['event']
+        message = item.get('message', '')
+        if kind == 'exit':
+            self.worker = None
+            code = item['code']
+            if self.stopping or not self.had_fault:
+                if self.last_rf_bits == 0:
+                    self.status.set('Stopped · RF off')
+                elif code not in (0, 130):
+                    self.status.set(f'Reader exited ({code})')
+                else:
+                    self.status.set('Stopped' if self.stopping else 'Ready')
+            self.stopping = False
+            if self.screen == 'pm3' and not self.closing:
+                self.pm3()
+            self.sync_scan()
+        elif kind == 'tag':
+            self.newest = item['record']
+            if self.newest['protocol'] == 'ISO15693' and self.newest['uid'].startswith('E002'):
+                self.latest_st = self.newest['uid']
+            self.update_latest()
+            self.status.set(coverage(self.newest))
+        elif kind == 'archived':
+            self.archive_dirty = True
+        elif kind == 'backend':
+            self.reader.set(message)
+            self.available_pm3_actions = set(item.get('pm3_actions', []))
+            self.status.set('Scanning · hold a tag by the antenna')
+        elif kind == 'fault':
+            self.had_fault = True
+            if item.get('backend') == 'proxmark3':
+                self.available_pm3_actions.clear()
+            self.status.set(message[:180])
+        elif kind == 'scan_state' and not self.stopping:
+            self.status.set(message[:180])
+        elif kind == 'diagnostic':
+            stage, result = item['stage'], item['result']
+            self.rf.add(stage, result, **{k: v for k, v in item.items() if k not in ('stage', 'result')})
+            if stage == 'shutdown':
+                self.last_rf_bits = item.get('rf_bits')
+        elif kind == 'log':
+            self.pm3_log = (self.pm3_log + '\n' + message)[-12000:]
+
     def drain(self):
-        for _ in range(40):
+        for _ in range(80):
             try:
-                event = self.events.get_nowait()
+                item = self.events.get_nowait()
             except queue.Empty:
                 break
-            kind = event['event']
-            message = event.get('message', '')
-            if kind == 'exit':
-                self.proc = None
-                self.worker.join()
-                self.worker = None
-                if self.closing:
-                    self.destroy()
-                    return
-                if self.stopping or not self.had_fault:
-                    self.status.set(f"Stopped (exit {event['code']})" if event['code'] not in (0, 130) else
-                                    'Stopped' if self.stopping else 'Ready')
-                self.stop_button.configure(state='disabled')
-                for button in self.buttons:
-                    button.configure(state='normal')
-                self.update_pm3_actions()
-                continue
-            if kind == 'tag':
-                record = event['record']
-                key = f"{record['protocol']}:{record['uid']}"
-                if self.live_tree.exists(key):
-                    self.live_tree.item(key, values=self.values(record))
-                else:
-                    if len(self.live) >= 256:
-                        old = next(iter(self.live))
-                        del self.live[old]
-                        self.live_tree.delete(old)
-                    self.live_tree.insert('', 0, iid=key, values=self.values(record))
-                self.live[key] = record
-                if not self.live_tree.selection() or key in self.live_tree.selection():
-                    self.live_tree.selection_set(key)
-                    self.select(self.live_tree, self.live)
-            elif kind == 'archived':
-                self.refresh_archive()
-            elif kind == 'backend':
-                self.reader.set(message)
-                self.available_pm3_actions = set(event.get('pm3_actions', []))
-                self.append_log('Capabilities: ' + ', '.join(event.get('capabilities', [])))
-            elif kind == 'fault':
-                self.had_fault = True
-                if event.get('backend') == 'proxmark3':
-                    self.available_pm3_actions = set()
-                    self.reader.set('Proxmark3 unavailable')
-            if kind in ('backend', 'fault', 'scan_state', 'tag') and not self.stopping:
-                self.status.set(message)
-            if kind != 'scan_state':
-                self.append_log(message)
-        self.after(50, self.drain)
-
-    def signal_worker(self, proc, signum):
-        if self.proc is proc:
-            try:
-                os.killpg(proc.pid, signum)
-            except ProcessLookupError:
-                pass
-
-    def stop(self):
-        if self.proc is None or self.stopping:
-            return
-        self.stopping = True
-        self.status.set('Stopping…')
-        self.stop_button.configure(state='disabled')
-        proc = self.proc
-        self.signal_worker(proc, signal.SIGINT)
-        self.after(3500, self.signal_worker, proc, signal.SIGTERM)
-        self.after(5000, self.signal_worker, proc, signal.SIGKILL)
+            self.event(item)
+        for key, (task, done) in list(self.tasks.items()):
+            if task.done():
+                del self.tasks[key]
+                try:
+                    result = task.result()
+                except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+                    self.notice.set(f'{key.capitalize()} failed · {exc}')
+                    result = None
+                if not self.closing:
+                    done(result)
+        if self.closing and not self.worker and not self.tasks:
+            self.io.shutdown(wait=False, cancel_futures=True)
+            self.destroy()
+        else:
+            self.after(40, self.drain)
 
     def close(self):
         self.closing = True
-        if self.proc is None:
-            self.destroy()
-        else:
-            self.stop()
+        self.stop()
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--windowed', action='store_true', help='open with a desktop title bar')
+    args = parser.parse_args()
     try:
-        window = NFCWindow()
+        window = NFCWindow(fullscreen=not args.windowed)
     except tk.TclError as exc:
         raise SystemExit(f'Launch PT35 NFC from the graphical desktop: {exc}') from exc
-    window.after_idle(window.launch, 'status')
     window.mainloop()
 
 
