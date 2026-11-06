@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PT35 NFC reader and archive for the 800×480 touch display."""
+"""PT35 NFC reader and archive for touch navigation and keyboard input."""
 import argparse
 import json
 import os
@@ -19,7 +19,7 @@ from nfc_config import DEFAULT_ARCHIVE
 from nfc_diagnostics import Diagnostics
 from nfc_ndef import decode_message, extract_message, ndef_area
 from nfc_pm3 import SIM_SECONDS, simulation_image
-from nfc_touch import BG, FG, LARGE, MONO, MUTED, PANEL, SMALL, Button, ScrollArea, label, row
+from nfc_touch import FONT, LARGE, MONO, SMALL, THEMES, Button, ScrollArea, label, row
 
 BACKEND_SCRIPT = Path(__file__).resolve().with_name('pt35_nfc.py')
 SETTINGS = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'pt35-nfc' / 'settings.json'
@@ -28,7 +28,7 @@ BACKENDS = {'auto': 'Auto', 'internal': 'Internal', 'proxmark3': 'Proxmark3'}
 PAGE_SIZE = 24
 DEFAULTS = dict(backend='auto', protocol_mode='ISO15693', pm3_mode='HF', blocks='0',
                 include_st=False, exclude_uid=os.environ.get('PT35_NFC_ONBOARD_UID', ''),
-                auto_tonie=True, auto_candidates=False, save_all=False, client='', port='')
+                auto_tonie=True, auto_candidates=False, save_all=False, client='', port='', theme='dark')
 
 
 def write_local(path, data):
@@ -45,11 +45,13 @@ def load_settings(path):
         return values
     if not isinstance(stored, dict):
         raise ValueError('Settings must be a JSON object')
-    for key, default in values.items():
+    values = {**stored, **values}
+    for key, default in DEFAULTS.items():
         value = stored.get(key)
         if type(value) is type(default):
             values[key] = value
-    for key, options in (('backend', BACKENDS), ('protocol_mode', PROTOCOLS), ('pm3_mode', ('HF', 'LF', 'ISO15693'))):
+    for key, options in (('backend', BACKENDS), ('protocol_mode', PROTOCOLS),
+                         ('pm3_mode', ('HF', 'LF', 'ISO15693')), ('theme', THEMES)):
         if values[key] not in options:
             values[key] = DEFAULTS[key]
     if not re.fullmatch(r'-1|[0-9]{1,4}', values['blocks']) or int(values['blocks']) > 2048:
@@ -161,7 +163,8 @@ class NFCWindow(tk.Tk):
     def __init__(self, archive=DEFAULT_ARCHIVE, settings=SETTINGS, *, fullscreen=True):
         super().__init__()
         self.title('PT35 NFC Reader')
-        self.configure(bg=BG)
+        self.palette = THEMES['dark']
+        self.configure(bg=self.palette.background)
         self.geometry(f'{min(800, self.winfo_screenwidth())}x{min(480, self.winfo_screenheight())}')
         self.minsize(480, 320)
         self.attributes('-fullscreen', fullscreen)
@@ -190,7 +193,7 @@ class NFCWindow(tk.Tk):
         self.status = tk.StringVar(self, value='Loading settings…')
         self.reader = tk.StringVar(self, value='Ready to scan')
         self.notice = tk.StringVar(self)
-        self.layout = tk.Frame(self, bg=BG)
+        self.layout = tk.Frame(self, bg=self.palette.background)
         self.layout.pack(fill='both', expand=True)
         self.home()
         self.submit('load settings', lambda: load_settings(self.settings_path), self.loaded)
@@ -212,7 +215,10 @@ class NFCWindow(tk.Tk):
         for widget in self.layout.winfo_children():
             widget.destroy()
         self.notice.set('')
-        header = tk.Frame(self.layout, bg=BG)
+        self.palette = THEMES[(self.draft if self.draft is not None else self.settings)['theme']]
+        self.configure(bg=self.palette.background)
+        self.layout.configure(bg=self.palette.background)
+        header = tk.Frame(self.layout, bg=self.palette.background)
         header.pack(fill='x', padx=10, pady=(6, 2))
         if back:
             Button(header, '‹ Back', back, width=7).pack(side='left', padx=(0, 10))
@@ -225,7 +231,7 @@ class NFCWindow(tk.Tk):
         label(header, title, font=LARGE).pack(side='left', fill='x', expand=True)
         if footer:
             row(self.layout, footer).pack(side='bottom', fill='x', padx=10, pady=(4, 8))
-        notice = label(self.layout, textvariable=self.notice, font=SMALL, fg=MUTED)
+        notice = label(self.layout, textvariable=self.notice, font=SMALL, muted=True)
         notice.pack(side='bottom', fill='x', padx=12)
         notice.bind('<Configure>', lambda e: notice.configure(wraplength=e.width))
         if scroll:
@@ -234,7 +240,7 @@ class NFCWindow(tk.Tk):
             self.body = self.scroll.content
         else:
             self.scroll = None
-            self.body = tk.Frame(self.layout, bg=BG)
+            self.body = tk.Frame(self.layout, bg=self.palette.background)
             self.body.pack(fill='both', expand=True, padx=10)
         return self.body
 
@@ -263,16 +269,17 @@ class NFCWindow(tk.Tk):
         return self.scroll.canvas.yview()[0] if self.scroll else 0
 
     def home(self):
+        self.draft = None
         self.screen = 'home'
         body = self.page('PT35 NFC', footer=(
             ('Archive', self.open_archive, {}), ('Settings', self.open_settings, {'state': 'normal' if self.ready else 'disabled'}),
             ('Tools', self.tools, {})))
         self.wrap(body, textvariable=self.reader, font=LARGE)
-        self.wrap(body, textvariable=self.status, fg=MUTED)
+        self.wrap(body, textvariable=self.status, muted=True)
         self.scan_button = Button(body, '', self.toggle_scan, primary=True)
         self.scan_button.pack(fill='x', pady=(7, 10))
         self.sync_scan()
-        self.wrap(body, 'LATEST TAG', font=SMALL, fg=MUTED)
+        self.wrap(body, 'LATEST TAG', font=SMALL, muted=True)
         self.latest = Button(body, '', self.open_latest, lines=2, anchor='w')
         self.latest.pack(fill='x')
         self.update_latest()
@@ -306,28 +313,29 @@ class NFCWindow(tk.Tk):
     def show_settings(self, position=0):
         self.screen = 'settings'
         body = self.page('Settings', self.home, footer=(('Save settings', self.save_settings, {'primary': True}),))
-        self.wrap(body, 'Changes apply to the next scan.', fg=MUTED)
+        self.wrap(body, 'Changes apply to the next scan.', muted=True)
         self.options(body, 'Reader backend', 'backend', BACKENDS)
         self.options(body, 'Internal protocol', 'protocol_mode', PROTOCOLS)
         self.options(body, 'NFC-V block count', 'blocks', {'0': 'Auto', '8': '8', '32': '32', '-1': 'All known'})
         block_value = self.draft['blocks']
-        self.setting_edit(body, 'Custom block count', 'blocks', 'number', 'Auto' if block_value == '0' else
-                          'All known' if block_value == '-1' else block_value)
+        self.setting_edit(body, 'Custom block count', 'blocks',
+                          {'0': 'Auto', '-1': 'All known'}.get(block_value, block_value))
         self.options(body, 'Proxmark watch mode', 'pm3_mode', {'HF': 'HF', 'LF': 'LF', 'ISO15693': 'NFC-V'})
         for title, key in (('Include onboard ST25DV', 'include_st'), ('Save all tags', 'save_all'),
                            ('Auto-save known Tonies', 'auto_tonie'), ('Auto-save unverified NXP tags', 'auto_candidates')):
             enabled = self.draft[key]
             Button(body, f"{title}   {'ON' if enabled else 'OFF'}", lambda k=key: self.change(k, not self.draft[k]),
                    selected=enabled, anchor='w').pack(fill='x', pady=3)
-        self.setting_edit(body, 'Onboard ST25DV UID', 'exclude_uid', 'hex')
+        self.setting_edit(body, 'Onboard ST25DV UID', 'exclude_uid')
         if self.latest_st:
             Button(body, 'Use latest ST tag as onboard UID', lambda: self.change('exclude_uid', self.latest_st)).pack(fill='x', pady=3)
         self.setting_edit(body, 'Iceman client path', 'client')
         self.setting_edit(body, 'Proxmark serial port', 'port')
+        self.options(body, 'Appearance', 'theme', {'dark': 'Dark', 'light': 'Light'})
         self.finish_page(position)
 
     def options(self, parent, title, key, choices):
-        self.wrap(parent, title, fg=MUTED)
+        self.wrap(parent, title, muted=True)
         row(parent, [(name, lambda v=value: self.change(key, v), {'selected': self.draft[key] == value})
                      for value, name in choices.items()]).pack(fill='x', pady=(0, 6))
 
@@ -336,31 +344,40 @@ class NFCWindow(tk.Tk):
         self.draft[key] = value
         self.show_settings(position)
 
-    def setting_edit(self, parent, title, key, mode='text', display=None):
+    def setting_edit(self, parent, title, key, display=None):
         value = self.draft[key]
         display = display or value or 'Automatic / unset'
         if len(display) > 48:
             display = '…' + display[-47:]
-        Button(parent, f'{title}\n{display}', lambda: self.edit_setting(title, key, mode),
+        Button(parent, f'{title}\n{display}', lambda: self.edit_setting(title, key),
                lines=2, anchor='w').pack(fill='x', pady=3)
 
-    def edit_setting(self, title, key, mode):
+    def edit_setting(self, title, key):
         position = self.scroll_position()
         initial = self.draft[key]
-        if mode == 'number' and initial == '-1':
-            initial = ''
+        hint = None
+        if key == 'blocks':
+            hint = 'Enter 0–2048. Zero selects Auto.'
+            if initial == '-1':
+                initial = ''
+        elif key == 'exclude_uid':
+            hint = 'Enter the 16-digit ST UID beginning E002, or clear it.'
+
         def apply(value):
             value = value.strip()
-            if mode == 'number':
-                if not value.isdigit() or len(value) > 4 or not 0 <= int(value) <= 2048:
-                    return 'Enter 0–2048. Zero selects Auto.'
+            if key == 'blocks':
+                if not re.fullmatch(r'[0-9]{1,4}', value) or int(value) > 2048:
+                    return hint
                 value = str(int(value))
-            if mode == 'hex' and value and not re.fullmatch(r'E002[0-9A-F]{12}', value, re.I):
-                return 'Enter the 16-digit ST UID beginning E002, or clear it.'
-            self.draft[key] = value.upper() if mode == 'hex' else value
+            elif key == 'exclude_uid':
+                if value and not re.fullmatch(r'E002[0-9A-F]{12}', value, re.I):
+                    return hint
+                value = value.upper()
+            self.draft[key] = value
             self.show_settings(position)
             return None
-        self.keyboard(title, initial, apply, lambda: self.show_settings(position), mode)
+
+        self.edit_field(title, initial, apply, lambda: self.show_settings(position), hint=hint)
 
     def save_settings(self):
         snapshot = dict(self.draft)
@@ -372,76 +389,41 @@ class NFCWindow(tk.Tk):
             self.settings = snapshot
             self.notice.set('Saved · applies to the next scan')
 
-    def keyboard(self, title, initial, apply, cancel, mode='text'):
-        self.screen = 'keyboard'
-        value = tk.StringVar(self, value=initial)
-        keyset = 'letters'
-        shifted = False
+    def edit_field(self, title, initial, apply, cancel, *, hint=None):
+        self.screen = 'editor'
 
-        def done():
-            error = apply(value.get())
+        def clear():
+            entry.delete(0, 'end')
+            entry.focus_set()
+
+        def done(_event=None):
+            error = apply(entry.get())
             if error:
                 self.notice.set(error)
+                entry.focus_set()
+            return 'break'
 
-        def add(char):
-            limit = 4 if mode == 'number' else 16 if mode == 'hex' else 512
-            if len(value.get()) < limit:
-                value.set(value.get() + char)
+        def cancel_edit(_event=None):
+            cancel()
+            return 'break'
 
-        def erase():
-            value.set(value.get()[:-1])
-
-        def redraw():
-            body = self.page(title, cancel, footer=(('Clear', lambda: value.set(''), {}),
-                                                    ('Done', done, {'primary': True})))
-            preview = tk.StringVar(self)
-
-            def show_value(*_):
-                text = value.get()
-                preview.set(('…' + text[-47:]) if len(text) > 48 else text or '—')
-            show_value()
-            display = label(body, textvariable=preview, font=MONO, bg=PANEL, padx=8, pady=6)
-            display.pack(fill='x', pady=(1, 4))
-            display.bind('<Destroy>', lambda _: value.trace_remove('write', observer))
-            observer = value.trace_add('write', show_value)
-            layouts = {
-                'number': ('123', '456', '789'),
-                'hex': ('1234567890', 'ABCDEF'),
-                'letters': ('qwertyuiop', 'asdfghjkl', 'zxcvbnm'),
-                'symbols': ('1234567890', '/.-_:@+~=', '[]()!#$%&?'),
-                'extra': ('<>{}*^|\\;', '"\'\x60,'),
-            }
-            lines = layouts[mode if mode != 'text' else keyset]
-            for line in lines:
-                chars = line.upper() if mode == 'text' and shifted and keyset == 'letters' else line
-                row(body, [(char, lambda c=char: add(c), {}) for char in chars], gap=4).pack(fill='x', pady=2)
-            if mode == 'text':
-                actions = [('Shift', shift, {'selected': shifted}),
-                           ('ABC' if keyset != 'letters' else '123 / symbols', switch, {}),
-                           ('More', more, {}), ('Space', lambda: add(' '), {}), ('⌫ Delete', erase, {})]
-                row(body, actions, gap=4).pack(fill='x', pady=2)
-            elif mode == 'hex':
-                Button(body, '⌫ Delete', erase).pack(fill='x', pady=2)
-            else:
-                row(body, [('0', lambda: add('0'), {}), ('⌫ Delete', erase, {})]).pack(fill='x', pady=2)
-            self.finish_page()
-
-        def shift():
-            nonlocal shifted
-            shifted = not shifted
-            redraw()
-
-        def switch():
-            nonlocal keyset
-            keyset = 'letters' if keyset != 'letters' else 'symbols'
-            redraw()
-
-        def more():
-            nonlocal keyset
-            keyset = 'symbols' if keyset == 'extra' else 'extra'
-            redraw()
-
-        redraw()
+        body = self.page(title, cancel_edit, scroll=False,
+                         footer=(('Clear', clear, {}), ('Done', done, {'primary': True})))
+        palette = self.palette
+        entry = tk.Entry(body, font=FONT, bg=palette.panel, fg=palette.text,
+                         insertbackground=palette.text, selectbackground=palette.accent,
+                         selectforeground=palette.accent_text, highlightbackground=palette.border,
+                         highlightcolor=palette.border, highlightthickness=2, relief='flat')
+        entry.pack(fill='x', ipady=12, pady=(12, 6))
+        entry.insert(0, initial)
+        entry.selection_range(0, 'end')
+        entry.bind('<Return>', done)
+        entry.bind('<KP_Enter>', done)
+        entry.bind('<Escape>', cancel_edit)
+        self.wrap(body, 'Type on the built-in keyboard. Enter confirms · Esc cancels.', muted=True)
+        if hint:
+            self.wrap(body, hint, muted=True)
+        self.after_idle(lambda: entry.winfo_exists() and entry.focus_set())
 
     def open_archive(self):
         self.archive_view()
@@ -474,7 +456,7 @@ class NFCWindow(tk.Tk):
                    ('Clear search', lambda: self.set_search(''), {'state': 'normal' if query else 'disabled'}),
                    ('Refresh', self.reload_archive, {})]).pack(fill='x', pady=(1, 6))
         self.wrap(body, f'{len(matches)} matching tags' if self.saved else
-                  'Loading archive…' if self.archive_dirty else 'Archive is empty', fg=MUTED)
+                  'Loading archive…' if self.archive_dirty else 'Archive is empty', muted=True)
         for record in matches[offset:offset + PAGE_SIZE]:
             title = f"{PROTOCOLS.get(record['protocol'], record['protocol'])}   {record['uid']}"
             try:
@@ -499,7 +481,7 @@ class NFCWindow(tk.Tk):
         self.archive_view()
 
     def search_archive(self):
-        self.keyboard('Search archive', self.query, self.set_search, self.open_archive)
+        self.edit_field('Search archive', self.query, self.set_search, self.open_archive)
 
     def open_saved(self, record):
         position = self.scroll_position()
@@ -518,7 +500,7 @@ class NFCWindow(tk.Tk):
             text = summary(record)
         except (ValueError, KeyError, TypeError) as exc:
             text = f'Record summary unavailable · {exc}'
-        self.wrap(body, text, fg=MUTED)
+        self.wrap(body, text, muted=True)
         if record.get('pm3_log'):
             Button(body, 'Show local Iceman output', lambda: self.log_view(
                 record['pm3_log'], lambda: self.detail(back, saved))).pack(fill='x')
@@ -535,7 +517,7 @@ class NFCWindow(tk.Tk):
         if offset + width < len(blocks):
             footer.append(('Next blocks ›', lambda: self.hex_view(back, saved, offset + width), {}))
         body = self.page('Tag memory', lambda: self.detail(back, saved), footer=footer)
-        self.wrap(body, coverage(record), fg=MUTED)
+        self.wrap(body, coverage(record), muted=True)
         if not blocks:
             self.wrap(body, 'No memory blocks captured.')
         for block in blocks[offset:offset + width]:
@@ -544,7 +526,7 @@ class NFCWindow(tk.Tk):
                 printable = ''.join(chr(b) if 32 <= b < 127 else '.' for b in data)
                 self.wrap(body, f"{block['index']:04d}  {data.hex(' ').upper()}   {printable}", font=MONO)
             except (KeyError, TypeError, ValueError):
-                self.wrap(body, 'Invalid saved block', fg=MUTED)
+                self.wrap(body, 'Invalid saved block', muted=True)
         self.finish_page()
 
     def save_tag(self):
@@ -559,7 +541,7 @@ class NFCWindow(tk.Tk):
         self.screen = 'export'
         record = self.current
         body = self.page('Export tag', lambda: self.detail(back, saved))
-        self.wrap(body, f'Files are saved in {self.exports}', fg=MUTED)
+        self.wrap(body, f'Files are saved in {self.exports}', muted=True)
         Button(body, 'Export JSON record', lambda: self.export_tag(record, False), primary=True).pack(fill='x', pady=4)
         try:
             binary = range_bytes(record)
@@ -568,7 +550,7 @@ class NFCWindow(tk.Tk):
         Button(body, 'Export verified binary range', lambda: self.export_tag(record, True),
                state='normal' if binary is not None else 'disabled').pack(fill='x', pady=4)
         if binary is None:
-            self.wrap(body, 'Binary export requires a complete verified range.', fg=MUTED)
+            self.wrap(body, 'Binary export requires a complete verified range.', muted=True)
         self.finish_page()
 
     def export_tag(self, record, binary):
@@ -607,7 +589,7 @@ class NFCWindow(tk.Tk):
         body = self.page('RF diagnostics', self.tools,
                          footer=(('Refresh counts', self.diagnostics, {}),
                                  ('Export redacted log', self.export_diagnostics, {'primary': True})))
-        self.wrap(body, 'Only RF metadata is exported. Tag identifiers and memory are omitted.', fg=MUTED)
+        self.wrap(body, 'Only RF metadata is exported. Tag identifiers and memory are omitted.', muted=True)
         if self.last_rf_bits is not None:
             self.wrap(body, f'Last shutdown RF bits: 0x{self.last_rf_bits:02X}', font=LARGE)
         if not self.rf.counts:
@@ -624,12 +606,12 @@ class NFCWindow(tk.Tk):
     def pm3(self):
         self.screen = 'pm3'
         body = self.page('Proxmark3', self.tools)
-        self.wrap(body, textvariable=self.reader, fg=MUTED)
-        self.wrap(body, textvariable=self.status, fg=MUTED)
+        self.wrap(body, textvariable=self.reader, muted=True)
+        self.wrap(body, textvariable=self.status, muted=True)
         enabled = 'disabled' if self.worker else 'normal'
         target = self.current or self.newest
         iso_v = bool(target and target['protocol'] == 'ISO15693')
-        self.wrap(body, f"Selected tag: {target['uid']}" if iso_v else 'Open an ISO15693 tag to select it.', fg=MUTED)
+        self.wrap(body, f"Selected tag: {target['uid']}" if iso_v else 'Open an ISO15693 tag to select it.', muted=True)
         for title, action, state in (
             ('Check Iceman connection', lambda: self.launch('status', 'proxmark3'), enabled),
             ('Identify HF / LF', lambda: self.launch('identify', 'proxmark3'), enabled),
@@ -653,7 +635,7 @@ class NFCWindow(tk.Tk):
         body = self.page('Confirm simulation', self.pm3, footer=(
             ('Cancel', self.pm3, {}), ('Start simulation', lambda: self.begin_simulation(record['uid']), {'primary': True})))
         self.wrap(body, f"Simulate the saved tag {record['uid']} for {SIM_SECONDS} seconds.")
-        self.wrap(body, 'Use a tag and reader you are authorized to test. Authentication is outside this simulation.', fg=MUTED)
+        self.wrap(body, 'Use a tag and reader you are authorized to test. Authentication is outside this simulation.', muted=True)
         self.finish_page()
 
     def begin_simulation(self, uid):

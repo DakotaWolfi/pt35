@@ -17,9 +17,9 @@ To roll back, stop the app, switch to the earlier checkout, and run its GUI inst
 
 ## Scan and archive
 
-Tap **Start scan** and tap the latest tag to open its coverage summary. **Hex / data** opens readable memory in scrollable pages. **Save tag** adds the capture to the archive. **Export** writes a JSON record or verified binary range to `~/pt35-nfc/exports`. In **Archive**, tap **Search tags** to type with the on-screen keyboard, then tap a result to inspect it.
+Tap **Start scan** and tap the latest tag to open its coverage summary. **Hex / data** opens readable memory in scrollable pages. **Save tag** adds the capture to the archive. **Export** writes a JSON record or verified binary range to `~/pt35-nfc/exports`. In **Archive**, tap **Search tags** and type on the PT35’s built-in keyboard. The field is focused automatically. Press Enter to apply the search or Esc to cancel, then tap a result to inspect it.
 
-In **Settings**, swipe vertically or use the wide scrollbar. **Back** and **Save settings** stay on screen. Backend, protocol and presets are tap selections. Tap a field to open its on-screen editor. Changes take effect on the next scan. While a scan is running, **Stop scan** remains available on the other screens. Set the exact **Onboard ST25DV UID** to filter that one tag, or enable **Include onboard ST25DV** to see it. **Use latest ST tag as onboard UID** is available after detecting an ST tag. Use it only when you know which tag you just scanned.
+In **Settings**, swipe vertically or use the wide scrollbar. **Back** and **Save settings** stay on screen. Backend, protocol and presets are tap selections. Tap a field to open a focused text input. Press Enter to accept the value or Esc to go back. Reader settings take effect on the next scan. Under **Appearance**, select **Dark** or **Light** to preview the theme and tap **Save settings** to keep it. Dark is the default. While a scan is running, **Stop scan** remains available on the other screens. Set the exact **Onboard ST25DV UID** to filter that one tag, or enable **Include onboard ST25DV** to see it. **Use latest ST tag as onboard UID** is available after detecting an ST tag. Use it only when you know which tag you just scanned.
 
 The archive defaults to `~/pt35-nfc/archive` for CLI and GUI. Keep existing files there. If earlier CLI captures live under `nfc/archive`, run `python3 nfc/pt35_nfc.py migrate-archive` to copy missing files. Original files and destination conflicts are preserved. `known_tonies.txt` in the archive accepts one confirmed UID per line. Auto-save for unverified NXP candidates is separate and off by default.
 
@@ -32,7 +32,7 @@ The archive has one current JSON record per protocol and identifier. A later deg
 | Backend / mode | Status |
 | --- | --- |
 | Internal NFC-V inventory and addressed read | The prior PR failed physical checks. Baseline-compatible receive recovery, masked inventory and diagnostics are awaiting a PT35 retest. |
-| Touch GUI | Synthetic tap/swipe tests passed at a reduced usable height. The prior UI failed the PT35 test. Physical touch verification is pending. |
+| Touch and keyboard GUI | Synthetic tap, swipe and key-event tests passed at 800×480 and 800×390. Physical PT35 verification is pending. |
 | Internal NFC-A | Implemented single-tag discovery and NTAG213/215/216 user-page reads. Bench check pending. |
 | Internal NFC-B | Implemented one-slot ATQB/PUPI discovery. Bench check pending. |
 | Internal NFC-F | Implemented one-slot FeliCa polling at 212 kbit/s. Bench check pending. |
@@ -40,7 +40,7 @@ The archive has one current JSON record per protocol and identifier. A later deg
 | Proxmark3/Iceman ISO15693 memory | Implemented addressed raw reads with CRC verification and a 32-block cap per capture. Bench check pending. |
 | Proxmark3/Iceman ISO15693 simulation | Experimental, explicit confirmation for a saved verified capture. Bench check pending. |
 
-Offline tests use synthetic frames and temporary archives. Run with a graphical display or `xvfb-run -s '-screen 0 800x480x24'` to exercise touch navigation with synthetic pointer events.
+Offline tests use synthetic frames and temporary archives. Run with a graphical display or `xvfb-run -s '-screen 0 800x480x24'` to exercise touch navigation and text entry with synthetic pointer and key events.
 
 ```sh
 python3 -m unittest discover -s tests -p 'test_nfc*.py' -v
@@ -79,7 +79,7 @@ Compare `inventory.ok`, `geometry.ok`, `geometry.unknown_geometry`, and the `cov
 
 **3. Check both tags in the field.** Use the GUI in Internal / NFC-V mode. Save the exact onboard UID in Settings and try the external tag with **Include onboard ST25DV** off, then turn it on and try both. The live scanner can try a bounded series of UID masks after a bad unmasked reply or a reply from the configured onboard tag. Each mask is an inventory request. This step needs the physical antenna and both tags present.
 
-**4. Verify touch and shutdown.** With the actual 800×480 touch display and no keyboard or mouse, open and edit all settings, save, exit, and reopen. Start a scan, open a tag, view its memory, save it, search the archive and export by touch. Verify that settings and tag actions are reachable while scanning. Use **Stop scan** and then **Tools → RF diagnostics**. It should show `Last shutdown RF bits: 0x00`. Try several Start/Stop cycles and a five-minute scan with tag removal and re-presentation. Export a redacted report from this screen if any step fails.
+**4. Verify the touchscreen, keyboard and shutdown.** On the actual 800×480 display, tap through settings and type in each field on the built-in keyboard. Check autofocus, Enter, and Esc. Save a theme and settings, exit, and reopen to verify persistence. Start a scan, open a tag, view its memory, save it, search the archive, and export using touch for controls and the built-in keyboard for text. Verify that settings and tag actions are reachable while scanning. Use **Stop scan** and then **Tools → RF diagnostics**. It should show `Last shutdown RF bits: 0x00`. Try several Start/Stop cycles and a five-minute scan with tag removal and re-presentation. Export a redacted report from this screen if any step fails.
 
 For an independent readback with the scanner stopped:
 

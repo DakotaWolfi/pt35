@@ -1,35 +1,60 @@
 """Small Tk widgets for PT35's touch screens."""
 import tkinter as tk
+from dataclasses import dataclass
 
-BG = '#101923'
-PANEL = '#1d2c3a'
-FG = '#f2f7fb'
-MUTED = '#becfdf'
-ACCENT = '#76e8bb'
-INK = '#0c241c'
-BORDER = '#456076'
+
+@dataclass(frozen=True)
+class Palette:
+    background: str
+    panel: str
+    text: str
+    muted: str
+    accent: str
+    accent_text: str
+    border: str
+    pressed: str
+    accent_pressed: str
+    disabled: str
+
+
+THEMES = {
+    'dark': Palette(background='#101923', panel='#1d2c3a', text='#f2f7fb', muted='#becfdf',
+                    accent='#76e8bb', accent_text='#0c241c', border='#456076',
+                    pressed='#456076', accent_pressed='#a3f3d4', disabled='#8295a8'),
+    'light': Palette(background='#f5f8fb', panel='#e4ecf3', text='#152738', muted='#41586d',
+                     accent='#9ae8c7', accent_text='#0c241c', border='#61798b',
+                     pressed='#cbdbe9', accent_pressed='#b3f1d8', disabled='#506879'),
+}
 FONT = ('DejaVu Sans', -17)
 SMALL = ('DejaVu Sans', -15)
 LARGE = ('DejaVu Sans', -23, 'bold')
 MONO = ('DejaVu Sans Mono', -16)
 
 
+def palette_for(parent):
+    return getattr(parent.winfo_toplevel(), 'palette', THEMES['dark'])
+
+
 class Button(tk.Button):
     def __init__(self, parent, text, command, *, primary=False, selected=False, lines=1, **kwargs):
-        light = primary or selected
-        super().__init__(parent, text=text, command=command, bg=ACCENT if light else PANEL,
-                         fg=INK if light else FG, activebackground='#a3f3d4' if light else BORDER,
-                         activeforeground=INK if light else FG, disabledforeground='#8295a8',
+        palette = palette_for(parent)
+        accent = primary or selected
+        text_color = palette.accent_text if accent else palette.text
+        super().__init__(parent, text=text, command=command, bg=palette.accent if accent else palette.panel,
+                         fg=text_color, activebackground=palette.accent_pressed if accent else palette.pressed,
+                         activeforeground=text_color, disabledforeground=palette.disabled,
                          font=FONT, justify='left', relief='flat', borderwidth=0, highlightthickness=0,
                          padx=8, pady=15, height=lines, takefocus=True, **kwargs)
 
 
-def label(parent, text='', *, font=FONT, fg=FG, bg=BG, **kwargs):
-    return tk.Label(parent, text=text, bg=bg, fg=fg, font=font, anchor='w', justify='left', **kwargs)
+def label(parent, text='', *, font=FONT, muted=False, **kwargs):
+    palette = palette_for(parent)
+    return tk.Label(parent, text=text, bg=palette.background, fg=palette.muted if muted else palette.text,
+                    font=font, anchor='w', justify='left', **kwargs)
 
 
 def row(parent, buttons, gap=6):
-    bar = tk.Frame(parent, bg=BG)
+    bar = tk.Frame(parent, bg=palette_for(parent).background)
     for index, (title, action, options) in enumerate(buttons):
         bar.grid_columnconfigure(index, weight=1, uniform='touch')
         Button(bar, title, action, **options).grid(row=0, column=index, sticky='nsew',
@@ -40,14 +65,15 @@ def row(parent, buttons, gap=6):
 class ScrollArea(tk.Frame):
     """Vertical swipe with drag suppression for buttons and a wide scrollbar."""
     def __init__(self, parent):
-        super().__init__(parent, bg=BG)
-        self.canvas = tk.Canvas(self, bg=BG, highlightthickness=0, yscrollincrement=1)
+        palette = palette_for(parent)
+        super().__init__(parent, bg=palette.background)
+        self.canvas = tk.Canvas(self, bg=palette.background, highlightthickness=0, yscrollincrement=1)
         self.scrollbar = tk.Scrollbar(self, orient='vertical', command=self.canvas.yview,
-                                     width=44, bg=BORDER, troughcolor=PANEL,
-                                     activebackground=ACCENT, borderwidth=0, highlightthickness=0)
+                                     width=44, bg=palette.border, troughcolor=palette.panel,
+                                     activebackground=palette.accent, borderwidth=0, highlightthickness=0)
         self.canvas.configure(yscrollcommand=self.set_scrollbar)
         self.canvas.pack(side='left', fill='both', expand=True)
-        self.content = tk.Frame(self.canvas, bg=BG)
+        self.content = tk.Frame(self.canvas, bg=palette.background)
         self.window = self.canvas.create_window(0, 0, window=self.content, anchor='nw')
         self.content.bind('<Configure>', self.update_scrollregion)
         self.canvas.bind('<Configure>', lambda event: self.canvas.itemconfigure(self.window, width=event.width))

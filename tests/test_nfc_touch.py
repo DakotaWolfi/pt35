@@ -1,4 +1,4 @@
-"""Tk touch-path checks with synthetic taps/swipes and a fake reader process."""
+"""Tk touch and physical-keyboard paths with synthetic events and a fake reader."""
 import json
 import os
 import sys
@@ -25,13 +25,19 @@ class TouchTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
+        self.legacy = {'backend': 'auto', 'blocks': '8', 'client': '/existing path/bin/pm3',
+                       'exclude_uid': '', 'legacy_option': {'retained': True}}
+        (self.root / 'settings.json').write_text(json.dumps(self.legacy))
         self.app = NFCWindow(self.root / 'archive', self.root / 'settings.json', fullscreen=False)
         self.addCleanup(self.close)
         self.app.geometry('800x390')
         self.wait(lambda: self.app.ready)
+        self.app.focus_force()
+        self.app.update()
 
     def close(self):
         import tkinter as tk
+
         try:
             self.app.close()
             self.wait(lambda: self.app.closing and self.app.worker is None and not self.app.tasks)
@@ -101,7 +107,29 @@ class TouchTests(unittest.TestCase):
         self.gesture(button)
         self.app.update()
 
-    def test_settings_touch_keyboard_and_persistence(self):
+    def focused_entry(self):
+        import tkinter as tk
+
+        self.assertEqual(self.app.screen, 'editor')
+        fields = [widget for widget in self.app.body.winfo_children() if isinstance(widget, tk.Entry)]
+        self.assertEqual(len(fields), 1)
+        field = fields[0]
+        self.assertIs(self.app.focus_get(), field)
+        self.assertTrue(field.winfo_ismapped())
+        self.assertGreaterEqual(field.winfo_height(), 44)
+        return field
+
+    def key(self, keysym):
+        self.focused_entry().event_generate('<KeyPress>', keysym=keysym)
+        self.app.update()
+
+    def type_text(self, value):
+        names = {' ': 'space', '/': 'slash', '-': 'minus', '.': 'period'}
+        for char in value:
+            self.key(names.get(char, char))
+        self.assertEqual(self.focused_entry().get(), value)
+
+    def test_settings_touch_and_physical_keyboard(self):
         self.tap('Settings')
         # Drag over a choice. Release should scroll without changing it.
         backend = self.button('Internal')
@@ -115,10 +143,15 @@ class TouchTests(unittest.TestCase):
         self.tap('Auto', index=1)
         self.assertEqual(self.app.draft['blocks'], '0')
         self.tap('Custom block count')
+        self.type_text('9999')
+        self.key('Return')
+        self.assertIn('0–2048', self.app.notice.get())
+        self.key('Escape')
+        self.assertEqual(self.app.draft['blocks'], '0')
+        self.tap('Custom block count')
         self.tap('Clear')
-        self.tap('1')
-        self.tap('2')
-        self.tap('Done')
+        self.type_text('12')
+        self.key('Return')
         self.assertEqual(self.app.draft['blocks'], '12')
         self.tap('LF')
         self.tap('Include onboard ST25DV   OFF')
@@ -126,30 +159,48 @@ class TouchTests(unittest.TestCase):
         self.tap('Auto-save known Tonies   ON')
         self.tap('Auto-save unverified NXP tags   OFF')
         self.tap('Onboard ST25DV UID')
-        for digit in UID:
-            self.tap(digit)
-        self.tap('Done')
-        for title in ('Iceman client path', 'Proxmark serial port'):
-            self.tap(title)
-            self.tap('123 / symbols')
-            self.tap('/')
-            self.tap('ABC')
-            self.tap('p')
-            self.tap('Done')
+        self.type_text(UID.lower())
+        self.key('KP_Enter')
+        self.tap('Iceman client path')
+        self.assertEqual(self.focused_entry().get(), self.legacy['client'])
+        self.type_text('/opt/Iceman v4/bin/pm3')
+        self.tap('Done', reveal=False)
+        self.tap('Proxmark serial port')
+        self.type_text('/dev/ttyACM0')
+        self.key('Return')
         self.tap('Save settings', reveal=False)
         self.wait(lambda: 'Saved' in self.app.notice.get())
         saved = json.loads((self.root / 'settings.json').read_text())
         self.assertEqual({key: saved[key] for key in ('backend', 'protocol_mode', 'blocks', 'exclude_uid',
                                                       'client', 'port', 'pm3_mode')},
                          dict(backend='internal', protocol_mode='ISO15693', blocks='12', exclude_uid=UID,
-                              client='/p', port='/p', pm3_mode='LF'))
+                              client='/opt/Iceman v4/bin/pm3', port='/dev/ttyACM0', pm3_mode='LF'))
+        self.assertEqual(saved['legacy_option'], self.legacy['legacy_option'])
+
+    def test_theme_previews_and_persists(self):
+        from nfc_touch import THEMES
+        self.assertEqual(self.app.settings['theme'], 'dark')
+        self.assertEqual(json.loads((self.root / 'settings.json').read_text()), self.legacy)
+        self.assertEqual(self.app.cget('bg'), THEMES['dark'].background)
+        self.tap('Settings')
+        self.tap('Light')
+        self.assertEqual(self.app.cget('bg'), THEMES['light'].background)
+        self.tap('‹ Back', reveal=False)
+        self.assertEqual(self.app.cget('bg'), THEMES['dark'].background)
+        self.tap('Settings')
+        self.tap('Light')
+        self.tap('Save settings', reveal=False)
+        self.wait(lambda: 'Saved' in self.app.notice.get())
         self.tap('‹ Back', reveal=False)
         self.tap('Exit', reveal=False)
         self.close()
         from pt35_nfc_gui import NFCWindow
         self.app = NFCWindow(self.root / 'archive', self.root / 'settings.json', fullscreen=False)
         self.wait(lambda: self.app.ready)
-        self.assertEqual(self.app.settings, saved)
+        self.assertEqual(self.app.settings['theme'], 'light')
+        self.assertEqual(self.app.cget('bg'), THEMES['light'].background)
+        for key, value in self.legacy.items():
+            self.assertEqual(self.app.settings[key], value)
 
     def test_scan_touch_navigation_archive_exports_and_diagnostics(self):
         self.app.geometry('800x480')
@@ -188,10 +239,13 @@ class TouchTests(unittest.TestCase):
         self.tap('Archive', reveal=False)
         self.wait(lambda: len(self.app.saved) == 1)
         self.tap('Search tags')
-        self.tap('123 / symbols')
-        self.tap('0')
-        self.tap('0')
-        self.tap('Done', reveal=False)
+        self.type_text('no match')
+        self.key('Escape')
+        self.assertEqual(self.app.query, '')
+        self.tap('Search tags')
+        self.type_text('00')
+        self.key('Return')
+        self.assertEqual(self.app.query, '00')
         self.tap(f'NFC-V   {UID}')
         self.tap('‹ Back', reveal=False)
         self.tap('‹ Back', reveal=False)
