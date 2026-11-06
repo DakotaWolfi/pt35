@@ -1,0 +1,41 @@
+# Local archives, captured tag data, credentials
+archive/
+dumps/
+**/archive/
+**/dumps/
+known_tonies.txt
+*.bin
+*.dump
+*.eml
+*.key
+*.pem
+*.p12
+*.pcap
+*.pcapng
+.env
+.env.*
+*.sqlite
+*.sqlite3
+*.db
+*.log
+secrets/
+private/
+config.local.*
+*credentials*
+*token*
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+# Runtime/system backups and snapshots
+inventory/
+backups/
+*.tar
+*.tar.gz
+*.zip
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
