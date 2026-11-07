@@ -143,7 +143,7 @@ class Link:
     actions: tuple = ()
 
 
-def connect(client_override=None, port_override=None, cancel=None):
+def connect(client_override=None, port_override=None, cancel=None, *, allow_simulation_mismatch=False):
     ports = usb_ports()
     if port_override:
         requested = str(Path(port_override).expanduser().resolve())
@@ -171,11 +171,13 @@ def connect(client_override=None, port_override=None, cancel=None):
                     # tested independently. Never offer emulation with an
                     # unverified custom/client combination.
                     actions = tuple(action for action in iso15693_actions(client, port, cancel)
-                                    if not warning or action != 'pm3-simulate')
+                                    if not warning or allow_simulation_mismatch or action != 'pm3-simulate')
                     if Path(port).exists():
                         message = f'Proxmark3 connected · {Path(port).name} · {firmware}'
                         if warning:
-                            message += f' · Caution: {warning}; simulation disabled'
+                            message += (f' · Caution: {warning}; ' +
+                                        ('experimental emulation override enabled'
+                                         if allow_simulation_mismatch else 'simulation disabled'))
                         return Link('connected', message, client, port, firmware, actions)
                     link = Link('unresponsive', 'Proxmark3 disconnected during setup')
                 elif re.search(r'permission denied|could not open.*permission', output, re.I):
