@@ -303,7 +303,16 @@ class SpectrumWindow(tk.Tk):
         if self.closing:
             return
         self.closing = True
+        self.status.set("Stopping sensor · switching illumination LED off…")
         self.worker.close()
+        self.shutdown_started = time.monotonic()
+        self.after(60, self.finish_close)
+
+    def finish_close(self):
+        # Let the sensor owner thread disable its LED before the GUI process exits.
+        if self.worker.thread.is_alive() and time.monotonic() - self.shutdown_started < 3:
+            self.after(60, self.finish_close)
+            return
         self.destroy()
 
 
