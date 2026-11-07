@@ -131,7 +131,11 @@ def save_record(root, record):
             history.append(summary(digest, capture, comparison))
         merged = {**old, **{k: v for k, v in record.items() if v is not None}}
         merged['capture_history'] = history
-        merged['scan_count'] = int(old.get('scan_count') or 0) + 1
+        # Saving the same GUI observation again must not count as a new RF scan.
+        same_observation = bool(old.get('last_scan_utc') and
+                                old['last_scan_utc'] == record.get('last_seen_utc'))
+        merged['scan_count'] = int(old.get('scan_count') or 0) + (not same_observation)
+        merged['last_scan_utc'] = record.get('last_seen_utc') or old.get('last_scan_utc')
         merged['last_comparison'] = comparison
         merged['first_seen_utc'] = old.get('first_seen_utc') or record.get('last_seen_utc') or now()
         merged['last_seen_utc'] = max(filter(None, (old.get('last_seen_utc'),
