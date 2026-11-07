@@ -299,6 +299,15 @@ def simulation_image(record):
             'blocks': {str(block['index']): block['hex'] for block in record['blocks']}}
 
 
+def simulation_eligibility(record):
+    """Explain whether a saved ISO15693 capture has enough verified data."""
+    try:
+        image = simulation_image(record)
+    except (ValueError, KeyError, TypeError) as exc:
+        return False, str(exc)
+    return True, f"ISO15693 · {image['Card']['pagescount']} blocks × 4 bytes · 10 s maximum"
+
+
 def simulate(client, port, record, emit):
     image = simulation_image(record)
     for command, flag in (('hf 15 eload -h', '--file'), ('hf 15 sim -h', '--timeout')):
