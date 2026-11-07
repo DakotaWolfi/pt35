@@ -167,17 +167,15 @@ def connect(client_override=None, port_override=None, cancel=None, *, allow_simu
                 if fault is None:
                     firmware = revisions(output)[1]
                     warning = revision_warning(output)
-                    # Discovery is read-only; an advertised raw reader can be
-                    # tested independently. Never offer emulation with an
-                    # unverified custom/client combination.
-                    actions = tuple(action for action in iso15693_actions(client, port, cancel)
-                                    if not warning or allow_simulation_mismatch or action != 'pm3-simulate')
+                    # A working hardware ping plus actual command capability
+                    # governs availability. Different Git revisions are an
+                    # advisory only: custom firmware need not match the stock
+                    # userspace client's source revision.
+                    actions = tuple(iso15693_actions(client, port, cancel))
                     if Path(port).exists():
                         message = f'Proxmark3 connected · {Path(port).name} · {firmware}'
                         if warning:
-                            message += (f' · Caution: {warning}; ' +
-                                        ('experimental emulation override enabled'
-                                         if allow_simulation_mismatch else 'simulation disabled'))
+                            message += f' · Caution: {warning} (capabilities probed separately)'
                         return Link('connected', message, client, port, firmware, actions)
                     link = Link('unresponsive', 'Proxmark3 disconnected during setup')
                 elif re.search(r'permission denied|could not open.*permission', output, re.I):
