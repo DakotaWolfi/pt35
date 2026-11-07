@@ -17,6 +17,30 @@ To roll back, stop the app, switch to the earlier checkout, and run its GUI inst
 
 ## Scan and archive
 
+### Repeat reads, safe evidence history, and NDEF previews
+
+Every successfully identified tag is now stored **locally**, even if the memory read is partial, failed, or discovery-only. RF-corrupted frames are never accepted as verified data; an unidentified failed inventory has no reliable UID to archive. Identical observations increment a scan count without duplicating capture files. Distinct observations are saved as immutable, per-tag `captures/<SHA-256>.json` evidence alongside the preferred `record.json` under `~/pt35-nfc/archive`. Do not publish this folder: it may contain private NFC UIDs, contact cards and memory contents.
+
+The preferred capture is still selected conservatively. A new partial read cannot replace an existing complete verified capture. If **both captures have verified complete ranges but disagree in overlapping bytes**, the earlier preferred data stays intact; the differing later capture is retained separately and marked **changed verified**. A different partial read is marked **different partial**, not treated as proof of a changed tag. All captured blocks still require the ordinary protocol CRC, response and length checks. Nothing writes to the NFC tags.
+
+Present a tag again after removal to trigger a new read. With the PM3, repeated held-tag reads are throttled (typically 15 seconds, or about 3 seconds following a partial/failed read) and `hf search` polling has a minimum one-second pause. The internal reader retains its previous absence-triggered reread handling. For PM3 NFC-V, a raw addressed memory read is attempted **only if that connected client advertises the ISO15693 raw command**, with a 32-block cap; PM3 NFC-A/B/F remain discovery-only. Internal NFC-A NTAG21x and NFC-V readers can capture memory for further decoding.
+
+On the small touchscreen, open the latest tag or an Archive record, select **Scan history / compare captures**, and tap an observation to view classification, quality and bytes. A complete verified NFC NDEF message now previews text, URLs and a simple vCard business card (name, organization, phone, email, title, address and website). Unsupported NDEF formats remain visible as MIME/type descriptions, and partial records remain available as hex without being misidentified as valid NDEF.
+
+Optional PT35 **top LED row** gives approximately 0.6-second status feedback: same capture = cyan/blue, improved coverage = lime, different fully verified bytes = purple, differing incomplete evidence = amber, new complete read = green, partial/failure = amber, general fault = red. The **bottom row** retains the tag technology color and available relative RSSI. The LED service and GPIO ownership remain unchanged; no live daemon installation/restart is performed by these commits. The GUI settings continue to default NFC LED effects to off.
+
+Offline regression commands, before touching any live daemon:
+
+```sh
+cd ~/pt35-nfc-bench
+python3 -m unittest discover -s tests -p 'test_nfc_capture_history.py' -v
+python3 -m unittest discover -s tests -p 'test_nfc_led.py' -v
+python3 -m unittest discover -s tests -p 'test_nfc_pm3.py' -v
+```
+
+**Caution:** Automatic local capture of all identified tags is a new behavior; review available disk space and sensitivity of NFC contents. Archive versions are additive and the scanner does not upload tag data to GitHub. Physical re-presentation timing, PM3 NFC-V block reads, NDEF card decoding and LED colors require actual PT35 bench testing.
+
+
 Tap **Start scan** and tap the latest tag to open its coverage summary. **Hex / data** opens readable memory in scrollable pages. **Save tag** adds the capture to the archive. **Export** writes a JSON record or verified binary range to `~/pt35-nfc/exports`. In **Archive**, tap **Search tags** and type on the PT35’s built-in keyboard. The field is focused automatically. Press Enter to apply the search or Esc to cancel, then tap a result to inspect it.
 
 In **Settings**, swipe vertically or use the wide scrollbar. **Back** and **Save settings** stay on screen. Backend, protocol and presets are tap selections. Tap a field to open a focused text input. Press Enter to accept the value or Esc to go back. Reader settings take effect on the next scan. NFC LED settings take effect when saved. Under **Appearance**, select **Dark** or **Light** to preview the theme and tap **Save settings** to keep it. Dark is the default. While a scan is running, **Stop scan** remains available on the other screens. Set the exact **Onboard ST25DV UID** to filter that one tag, or enable **Include onboard ST25DV** to see it. **Use latest ST tag as onboard UID** is available after detecting an ST tag. Use it only when you know which tag you just scanned.
