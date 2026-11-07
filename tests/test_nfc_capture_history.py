@@ -33,12 +33,21 @@ class HistoryTests(unittest.TestCase):
             root = Path(directory)
             tag = capture(['00000000', '01020304'])
             save_record(root, tag)
-            save_record(root, tag)
+            next_scan = {**tag, 'last_seen_utc': '2026-11-07T12:00:01+00:00'}
+            save_record(root, next_scan)
             saved = json.loads(record_path(root, UID).read_text())
             self.assertEqual(saved['scan_count'], 2)
             self.assertEqual(len(saved['capture_history']), 1)
             self.assertEqual(saved['last_comparison'], 'same')
             self.assertEqual(len(list((root / UID / 'captures').glob('*.json'))), 1)
+
+    def test_gui_save_same_timestamp_does_not_increment_rf_scan_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tag = capture(['00000000', '01020304'])
+            save_record(root, tag)
+            save_record(root, tag)
+            self.assertEqual(json.loads(record_path(root, UID).read_text())['scan_count'], 1)
 
     def test_two_valid_conflicting_reads_are_retained_without_replacing_primary(self):
         with tempfile.TemporaryDirectory() as directory:
