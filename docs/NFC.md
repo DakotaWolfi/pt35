@@ -129,6 +129,8 @@ Profile references are the upstream [NFC-A](https://github.com/m5stack/M5Unit-NF
 
 ### Proxmark3 and Iceman
 
+**Custom firmware compatibility:** The PT35 now automatically searches `~/proxmark3-iceman/client/proxmark3` as well as the original paths. A responsive hardware ping can connect even when the Iceman client and custom PM3 OS report different Git revisions. The mismatch remains visible as an advisory; it is *not* a requirement to flash the PM3. The application probes ISO15693 read-command availability independently, but disables **PM3 simulation** when revisions differ or are unknown. Read-only discovery is suitable for a compatibility test; validate raw reads against a known blank tag before relying on them. Test via `python3 nfc/pt35_nfc.py status --backend proxmark3` after closing the interactive Iceman shell, which otherwise owns the serial device.
+
 First identify the exact Iceman revision already on your device, using its working client or your existing firmware records. Build a matching client from that revision and select the platform of the physical device. For example, after substituting your actual release tag or full commit hash:
 
 ```sh
