@@ -15,6 +15,7 @@ MEMORY_FIELDS = (
     'requested_blocks', 'requested_range', 'requested_range_complete',
     'addressable_memory_complete', 'system_info', 'verification', 'memory_binary',
     'capture_backend', 'captured_utc', 'capture_format', 'memory_start', 'cc',
+    'content_preview',
 )
 
 
