@@ -55,7 +55,8 @@ def pm3_client(configured=None):
     override = configured or os.environ.get('PT35_PM3_CLIENT')
     paths = [Path.home() / '.local/lib/pt35-iceman/current/client/proxmark3',
              Path.home() / 'proxmark3/client/proxmark3',
-             Path.home() / 'proxmark3/client/build/proxmark3', '/usr/local/bin/proxmark3',
+             Path.home() / 'proxmark3/client/build/proxmark3',
+             Path.home() / 'proxmark3-iceman/client/proxmark3', '/usr/local/bin/proxmark3',
              Path.home() / '.local/bin/proxmark3', shutil.which('proxmark3')]
     for value in ([override] if override else paths):
         if value:
@@ -105,24 +106,31 @@ def revisions(output):
 
 
 def version_fault(code, output):
-    if re.search(r'firmware does not match|device\s*/\s*fw mismatch|client.*firmware mismatch', output, re.I):
-        return 'Iceman client and firmware mismatch'
-    if (code or not re.search(r'Ping response received\b', output, re.I) or
-            re.search(r'content\s*\(\s*fail', output, re.I)):
+    """Reject broken communications, not merely different source revisions.
+
+    Custom PM3 firmware commonly has a deliberately different revision from
+    its userspace client. A working hardware ping is the connection gate.
+    """
+    if (code or not re.search(r'Ping response received\\b', output, re.I) or
+            re.search(r'content\\s*\\(\\s*fail', output, re.I)):
         return 'Iceman did not receive a valid hardware ping'
-    client, firmware = revisions(output)
-    if any(not re.fullmatch(r'[\w-]+(?:\.[\w-]+)*', revision) or
-           revision.lower() in ('release', 'unknown') or 'dirty' in revision.lower()
-           for revision in (client, firmware)):
-        return 'No verified Iceman client or firmware revision'
-    commit_hashes = [re.search(r'(?:^|-g)([a-f0-9]{7,40})$', revision, re.I) for revision in (client, firmware)]
-    if all(commit_hashes):
-        first, second = (match[1].lower() for match in commit_hashes)
-        if first.startswith(second) or second.startswith(first):
-            return None
-    if client != firmware:
-        return f'Iceman revision mismatch · client {client}, firmware {firmware}'
     return None
+
+
+def revision_warning(output):
+    """Advisory warning, never silently claim custom firmware is identical."""
+    client, firmware = revisions(output)
+    if not client or not firmware:
+        return 'firmware revision unknown'
+    if client == firmware:
+        return ''
+    hashes = [re.search(r'(?:^|-g)([a-f0-9]{7,40})(?:-suspect)?$', value, re.I)
+              for value in (client, firmware)]
+    if all(hashes):
+        a, b = (item[1].lower() for item in hashes)
+        if a.startswith(b) or b.startswith(a):
+            return ''
+    return f'client/firmware revisions differ ({client} / {firmware})'
 
 
 @dataclass(frozen=True)
@@ -158,15 +166,20 @@ def connect(client_override=None, port_override=None, cancel=None):
                 fault = version_fault(code, output)
                 if fault is None:
                     firmware = revisions(output)[1]
-                    actions = tuple(iso15693_actions(client, port, cancel))
+                    warning = revision_warning(output)
+                    # Discovery is read-only; an advertised raw reader can be
+                    # tested independently. Never offer emulation with an
+                    # unverified custom/client combination.
+                    actions = tuple(action for action in iso15693_actions(client, port, cancel)
+                                    if not warning or action != 'pm3-simulate')
                     if Path(port).exists():
-                        return Link('connected', f'Proxmark3 connected · {Path(port).name} · {firmware}',
-                                    client, port, firmware, actions)
+                        message = f'Proxmark3 connected · {Path(port).name} · {firmware}'
+                        if warning:
+                            message += f' · Caution: {warning}; simulation disabled'
+                        return Link('connected', message, client, port, firmware, actions)
                     link = Link('unresponsive', 'Proxmark3 disconnected during setup')
                 elif re.search(r'permission denied|could not open.*permission', output, re.I):
                     link = Link('inaccessible', f'{Path(port).name} inaccessible · check Debian dialout access')
-                elif 'revision' in fault or 'mismatch' in fault:
-                    link = Link('mismatch', fault)
                 else:
                     link = Link('unresponsive', f'{fault} · check USB and port availability')
         except PermissionError:
