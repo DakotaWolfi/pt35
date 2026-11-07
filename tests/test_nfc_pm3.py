@@ -21,14 +21,16 @@ UID = 'E004030000000000'
 
 
 class IcemanTests(unittest.TestCase):
-    def test_probe_requires_ping_and_matching_revision(self):
+    def test_probe_requires_ping_and_reports_revision_warning(self):
         output = ('[+] Ping response received in 1 ms and content ( ok )\n'
                   ' [ Client ]\n  Iceman/HEAD/v4.123 2026-01-02 12:00:00\n'
                   'OS......... Iceman/master/v4.123 2026-01-01 12:00:00 123456789\n')
         self.assertIsNone(pm3.version_fault(0, output))
         self.assertIsNotNone(pm3.version_fault(0, 'Proxmark3 Iceman firmware online'))
         self.assertIsNotNone(pm3.version_fault(0, output.replace('content ( ok )', 'content ( fail )')))
-        self.assertIsNotNone(pm3.version_fault(0, output.replace('master/v4.123', 'master/v4.122')))
+        mismatched = output.replace('master/v4.123', 'master/v4.122')
+        self.assertIsNone(pm3.version_fault(0, mismatched))
+        self.assertIn('revisions differ', pm3.revision_warning(mismatched))
 
     def test_classify_hf_and_lf(self):
         output = ('Searching for ISO14443-A tag...\n[+] UID: 04 11 22 33 44 55 66 (fixed)\n'
@@ -83,7 +85,7 @@ class IcemanTests(unittest.TestCase):
         result = ('[+] Ping response received in 2 ms\n'
                   'Client.... Iceman/HEAD/cafebad1\nOS........ Iceman/master/v4.123-9-gcafebad1\n')
         self.assertIsNone(pm3.version_fault(0, result))
-        self.assertIn('mismatch', pm3.version_fault(0, result.replace('-gcafebad1', '-gbedface0')))
+        self.assertIn('revisions differ', pm3.revision_warning(result.replace('-gcafebad1', '-gbedface0')))
 
     def test_build_binary_is_preferred_to_upstream_shell_launcher(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -111,7 +113,7 @@ class IcemanTests(unittest.TestCase):
                 (parent / 'product').write_text('USB Serial Device')
             self.assertEqual(pm3.usb_ports(dev, sys_tty), [str(dev / 'ttyACM0')])
 
-    def test_no_client_inaccessible_and_mismatch_states(self):
+    def test_no_client_inaccessible_and_failed_ping_states(self):
         with patch.object(pm3, 'usb_ports', return_value=[]):
             self.assertEqual(pm3.connect().state, 'absent')
         with patch.object(pm3, 'usb_ports', return_value=['/dev/ttyACM5']):
@@ -122,7 +124,35 @@ class IcemanTests(unittest.TestCase):
                     self.assertEqual(pm3.connect().state, 'inaccessible')
                 with patch('nfc_pm3.os.access', return_value=True), patch.object(
                         pm3, 'run_pm3', return_value=(0, 'ARM firmware does not match')):
-                    self.assertEqual(pm3.connect().state, 'mismatch')
+                    self.assertEqual(pm3.connect().state, 'unresponsive')
+
+    def test_verified_ping_allows_custom_firmware_and_disables_simulation(self):
+        output = ('[+] Ping response received in 1 ms and content ( ok )\\n'
+                  'Client.... Iceman/master/v4.23346-275-g770cf1268\\n'
+                  'OS........ Iceman/jenna-slix-r1/v4.23346-188-g3bd526700-suspect\\n'
+                  '[!] ARM firmware does not match the source at the time the client was compiled\\n')
+        with patch.object(pm3, 'usb_ports', return_value=['/dev/ttyACM0']), \\
+                patch.object(pm3, 'pm3_client', return_value='/home/jenna/proxmark3-iceman/client/proxmark3'), \\
+                patch('nfc_pm3.os.access', return_value=True), \\
+                patch.object(pm3, 'reader_lock'), \\
+                patch.object(pm3, 'run_pm3', return_value=(0, output)), \\
+                patch.object(pm3, 'iso15693_actions', return_value=['pm3-dump', 'pm3-simulate']), \\
+                patch.object(pm3.Path, 'exists', return_value=True):
+            link = pm3.connect()
+        self.assertEqual(link.state, 'connected')
+        self.assertIn('revisions differ', link.message)
+        self.assertEqual(link.actions, ('pm3-dump',))
+        self.assertTrue(link.client.endswith('/proxmark3'))
+
+    def test_automatically_finds_owners_existing_iceman_checkout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            client = home / 'proxmark3-iceman/client/proxmark3'
+            client.parent.mkdir(parents=True)
+            client.write_text('binary')
+            client.chmod(0o755)
+            with patch.object(pm3.Path, 'home', return_value=home), patch.dict(os.environ, clear=True):
+                self.assertEqual(pm3.pm3_client(), str(client))
 
     def test_probe_does_not_block_the_internal_scan_loop(self):
         from pt35_nfc import PM3Monitor
