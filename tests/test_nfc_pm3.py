@@ -127,16 +127,16 @@ class IcemanTests(unittest.TestCase):
                     self.assertEqual(pm3.connect().state, 'unresponsive')
 
     def test_verified_ping_allows_custom_firmware_and_disables_simulation(self):
-        output = ('[+] Ping response received in 1 ms and content ( ok )\\n'
-                  'Client.... Iceman/master/v4.23346-275-g770cf1268\\n'
-                  'OS........ Iceman/jenna-slix-r1/v4.23346-188-g3bd526700-suspect\\n'
-                  '[!] ARM firmware does not match the source at the time the client was compiled\\n')
-        with patch.object(pm3, 'usb_ports', return_value=['/dev/ttyACM0']), \\
-                patch.object(pm3, 'pm3_client', return_value='/home/jenna/proxmark3-iceman/client/proxmark3'), \\
-                patch('nfc_pm3.os.access', return_value=True), \\
-                patch.object(pm3, 'reader_lock'), \\
-                patch.object(pm3, 'run_pm3', return_value=(0, output)), \\
-                patch.object(pm3, 'iso15693_actions', return_value=['pm3-dump', 'pm3-simulate']), \\
+        output = ('[+] Ping response received in 1 ms and content ( ok )\n'
+                  'Client.... Iceman/master/v4.23346-275-g770cf1268\n'
+                  'OS........ Iceman/jenna-slix-r1/v4.23346-188-g3bd526700-suspect\n'
+                  '[!] ARM firmware does not match the source at the time the client was compiled\n')
+        with patch.object(pm3, 'usb_ports', return_value=['/dev/ttyACM0']), \
+                patch.object(pm3, 'pm3_client', return_value='/home/jenna/proxmark3-iceman/client/proxmark3'), \
+                patch('nfc_pm3.os.access', return_value=True), \
+                patch.object(pm3, 'reader_lock'), \
+                patch.object(pm3, 'run_pm3', return_value=(0, output)), \
+                patch.object(pm3, 'iso15693_actions', return_value=['pm3-dump', 'pm3-simulate']), \
                 patch.object(pm3.Path, 'exists', return_value=True):
             link = pm3.connect()
         self.assertEqual(link.state, 'connected')
