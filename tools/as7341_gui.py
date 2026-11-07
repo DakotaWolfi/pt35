@@ -297,7 +297,7 @@ class SpectrumWindow(tk.Tk):
             kind = event["kind"]
             if kind == "sample":
                 self.sample = event
-                self.info.set(f"Clear {event['clear']:>5}    NIR {event['nir']:>5}    "
+                self.info.set(f"Clear {event['clear']} · NIR {event['nir']} · "
                               f"I²C errors {event['errors']}")
                 self.status.set(event["warning"] or "Live · 8 spectral + Clear/NIR at ~2.5 Hz")
                 self.draw_graph()
