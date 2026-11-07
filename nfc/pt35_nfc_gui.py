@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from nfc_archive import atomic_write, range_bytes, record_bytes, save_record
+from nfc_archive import atomic_write, range_bytes, record_bytes, record_path, save_record
 from nfc_config import DEFAULT_ARCHIVE
 from nfc_diagnostics import Diagnostics
 from nfc_led import NFCLeds
@@ -96,6 +96,11 @@ def summary(record):
     result = [f"{record.get('manufacturer', 'Unknown maker')} · {record.get('backend', '?')}", coverage(record)]
     if record.get('chip'):
         result.append(record['chip'])
+    result.append('Classification: ' + str(record.get('classification', 'unknown')))
+    if record.get('last_comparison'):
+        result.append('Previous scan comparison: ' + str(record['last_comparison']).replace('_', ' '))
+    if record.get('scan_count'):
+        result.append(f"Scans recorded: {record['scan_count']}")
     geometry = record.get('geometry')
     if geometry:
         result.append(f"{geometry['blocks']} blocks × {geometry['size']} bytes · {geometry.get('source', 'reported size')}")
@@ -555,10 +560,62 @@ class NFCWindow(tk.Tk):
         except (ValueError, KeyError, TypeError) as exc:
             text = f'Record summary unavailable · {exc}'
         self.wrap(body, text, muted=True)
+        Button(body, 'Scan history / compare captures', lambda: self.open_capture_history(back),
+               anchor='w').pack(fill='x', pady=4)
         if record.get('pm3_log'):
             Button(body, 'Show local Iceman output', lambda: self.log_view(
                 record['pm3_log'], lambda: self.detail(back, saved))).pack(fill='x')
         self.finish_page()
+
+    def open_capture_history(self, back):
+        original = self.current
+        def load():
+            path = record_path(self.archive, original['uid'], original['protocol'])
+            saved = json.loads(path.read_text(encoding='utf-8'))
+            return saved.get('capture_history') or []
+        self.submit('read capture history', load,
+                    lambda entries: self.capture_history_view(back, original, entries))
+
+    def capture_history_view(self, back, original, entries):
+        self.screen = 'history'
+        body = self.page('Scan history', lambda: self.restore_detail(original, back))
+        self.wrap(body, f"{original['protocol']} · {original['uid']}", muted=True)
+        self.wrap(body, 'Every distinct scan is saved locally. Partial or conflicting reads do not replace confirmed data.',
+                  muted=True)
+        for entry in reversed(entries[-150:]):
+            label_text = (str(entry.get('at', '?'))[:19] + ' · ' +
+                          str(entry.get('comparison', 'unknown')).replace('_', ' ') +
+                          '\\n' + str(entry.get('status', '?')) + ' · ' +
+                          str(entry.get('blocks', 0)) + ' blocks · ' +
+                          str(entry.get('classification', 'unknown')))
+            Button(body, label_text,
+                   lambda e=entry: self.open_snapshot(original, back, e),
+                   lines=2, anchor='w').pack(fill='x', pady=3)
+        if not entries:
+            self.wrap(body, 'No recorded scans yet. Scan the tag again or save it to the archive.')
+        self.finish_page()
+
+    def restore_detail(self, record, back):
+        self.current = record
+        self.detail(back, saved=True)
+
+    def open_snapshot(self, original, back, entry):
+        digest = entry.get('id') or ''
+        if not re.fullmatch(r'[0-9a-f]{64}', digest):
+            self.notice.set('Invalid capture history reference')
+            return
+        def load():
+            folder = record_path(self.archive, original['uid'], original['protocol']).parent
+            return json.loads((folder / 'captures' / (digest + '.json')).read_text(encoding='utf-8'))
+        def done(snapshot):
+            if snapshot:
+                self.current = snapshot
+                self.detail(lambda: self.open_capture_history_for(original, back), saved=True)
+        self.submit('open saved capture', load, done)
+
+    def open_capture_history_for(self, original, back):
+        self.current = original
+        self.open_capture_history(back)
 
     def hex_view(self, back, saved, offset=0):
         self.screen = 'hex'
@@ -807,6 +864,16 @@ class NFCWindow(tk.Tk):
                 if self.newest.get('backend') == 'proxmark3':
                     self.led.detected(self.newest.get('protocol', ''), None)
             if not self.stopping and self.led_operation and self.settings['led_enabled'] and self.led is not None:
+                comparison = item.get('comparison', 'new')
+                if comparison in ('same', 'improved', 'changed_verified', 'different_partial'):
+                    self.led.result({'same': 'same', 'improved': 'improved',
+                                     'changed_verified': 'changed',
+                                     'different_partial': 'uncertain'}[comparison])
+                else:
+                    self.led.result('success' if self.newest.get('dump_status') in (
+                        'addressable_memory_complete', 'requested_range_complete') else
+                        'partial' if self.newest.get('dump_status') in ('partial', 'failed') else 'hold')
+            if False:  # Result stages are selected above, including discovery-only tags.
                 result = self.newest.get('dump_status')
                 if result in ('addressable_memory_complete', 'requested_range_complete'):
                     self.led.result('success')
@@ -816,7 +883,8 @@ class NFCWindow(tk.Tk):
             if self.newest['protocol'] == 'ISO15693' and self.newest['uid'].startswith('E002'):
                 self.latest_st = self.newest['uid']
             self.update_latest()
-            self.status.set(coverage(self.newest))
+            comparison = item.get('comparison')
+            self.status.set((comparison.replace('_', ' ') + ' · ' if comparison else '') + coverage(self.newest))
         elif kind == 'archived':
             self.archive_dirty = True
         elif kind == 'pm3_status':
