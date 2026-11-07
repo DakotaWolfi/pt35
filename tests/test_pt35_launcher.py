@@ -24,6 +24,21 @@ class LaunchTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             launcher.target_command('unrecognized')
 
+    def test_home_tiles_do_not_override_defaults_in_widget_constructor(self):
+        # nfc_touch.Button already forwards justify/padx/pady and label
+        # already forwards anchor/justify. Passing them again via kwargs
+        # produces TypeError and silently breaks the R-button launcher.
+        import ast
+        import inspect
+        tree = ast.parse(inspect.getsource(launcher.Launcher.home))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                keys = {arg.arg for arg in node.keywords}
+                if node.func.id == 'Button':
+                    self.assertTrue(keys.isdisjoint({'justify', 'padx', 'pady'}))
+                if node.func.id == 'label':
+                    self.assertTrue(keys.isdisjoint({'anchor', 'justify'}))
+
     def test_start_page_is_two_columns_by_three_rows(self):
         self.assertEqual(len(launcher.HOME_TILES), 6)
         self.assertEqual([entry[2] for entry in launcher.HOME_TILES],
