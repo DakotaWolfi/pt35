@@ -136,10 +136,10 @@ class IcemanTests(unittest.TestCase):
             if command == 'hw break':
                 return 0, 'done'
             raise AssertionError(command)
-        with patch.object(pm3, 'run_pm3', side_effect=fake_run), \\
-                patch.object(pm3.Path, 'exists', return_value=True):
-            pm3.simulate_em410x('client', '/dev/fake',
-                {'uid': '0F0368568B', 'protocol': 'EM410X', 'read_errors': []}, Mock())
+        with patch.object(pm3, 'run_pm3', side_effect=fake_run):
+            with patch.object(pm3.Path, 'exists', return_value=True):
+                pm3.simulate_em410x('client', '/dev/fake',
+                    {'uid': '0F0368568B', 'protocol': 'EM410X', 'read_errors': []}, Mock())
         self.assertEqual(calls[0][0], 'lf em 410x help')
         self.assertEqual(calls[1], ('lf em 410x sim --id 0F0368568B', pm3.SIM_SECONDS))
         self.assertEqual(calls[-1][0], 'hw break')
