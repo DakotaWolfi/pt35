@@ -499,7 +499,7 @@ class NFCWindow(tk.Tk):
         self.screen = 'archive'
         query = self.query.casefold()
         matches = [record for record in self.saved if not query or query in ' '.join(
-            str(record.get(key, '')) for key in ('uid', 'protocol', 'manufacturer', 'labels', 'tonie_status')).casefold()
+            str(record.get(key, '')) for key in ('uid', 'protocol', 'manufacturer', 'labels', 'tonie_status', 'classification')).casefold()
             or query == PROTOCOLS.get(record['protocol'], '').casefold()]
         self.archive_page = min(self.archive_page, max(0, (len(matches) - 1) // PAGE_SIZE))
         offset = self.archive_page * PAGE_SIZE
