@@ -4,7 +4,7 @@ Raspberry Pi 4B-based pocket terminal. This repository is the home for the PT35'
 
 ## Touch launcher (R button)
 
-The new `tools/pt35_launcher.py` is an opt-in dark touchscreen launcher for **NFC Tag**, **NFC Reader**, **Spectrum Analyzer**, **LED Test**, and **LRA Haptic Test**. It uses only the repo checkout; no new hardware service. It preserves the existing terminal-based AS7341 analyzer and launches it in a graphical terminal. The NFC Reader launches the existing Tk NFC GUI; there is no second RF scanning implementation.
+The new `tools/pt35_launcher.py` is an opt-in dark touchscreen launcher for **NFC Tag**, **NFC Reader**, **Spectrum Analyzer**, **LED Test**, and **LRA Haptic Test**. It uses only the repo checkout; no new hardware service. The Spectrum Analyzer now opens a native Tk touchscreen GUI; the original terminal-based AS7341 analyzer remains in `tools/pt35_tools.py` as a fallback. The NFC Reader launches the existing Tk NFC GUI; there is no second RF scanning implementation.
 
 For a first bench check from an active PT35 desktop session:
 
@@ -29,7 +29,20 @@ To leave the R mapping unchanged, install the launcher only with `--no-bind-r`. 
 
 Test first via the PT35 desktop: `python3 nfc/pt35_i2c_tag_gui.py --windowed`. The old `~/.local/bin/pt35-nfc-menu` remains untouched until `bash scripts/install_pt35_launcher.sh --bind-r` is deliberately run; the installer backs up the old script. Tests: `python3 -m unittest discover -s tests -p 'test_pt35_i2c_tag.py' -v`. Hardware format/write functions remain **untested against the real PT35** until a deliberate, approved test with a blank tag. Avoid formatting an existing tag; the implementation refuses nonblank first-32-byte memory.
 
-**Spectrum Analyzer** retains the existing trusted curses AS7341 tool for now; a native graphical spectrum redesign is a separate enhancement. **LED Test** provides dim temporary color flashes, pixel-order test and battery/status through `/run/pt35-led.sock` only. **LRA Haptic Test** calls the already installed `/usr/local/bin/lra_ctl` for status, fixed effects 1/10/47, and stop. It does not issue unbounded RTP commands. Hardware validation, small-screen layout and the previous old tag menu's specific functionality still need bench checks.
+**Spectrum Analyzer** now opens `tools/as7341_gui.py` with eight live wavelength bars (415–680 nm), real relative raw counts, Clear and NIR channels, sample quality/I²C error status, a dim 4 mA illumination LED toggle, Pause/Resume and SMUX/CFG0 **Recover**. The original curses `tools/pt35_tools.py --device as7341` is retained as a known fallback and supplies the same sensor init and register-bank recovery. Tk never accesses I²C; its worker owns the sensor and turns the illumination LED off on normal exit. Flicker mode remains disabled because its memory-bank recovery is still under test. The UI does not claim calibrated irradiance or lux. **LED Test** provides dim temporary color flashes, pixel-order test and battery/status through `/run/pt35-led.sock` only. **LRA Haptic Test** calls the already installed `/usr/local/bin/lra_ctl` for status, fixed effects 1/10/47, and stop. It does not issue unbounded RTP commands. Hardware validation, small-screen layout and the previous old tag menu's specific functionality still need bench checks.
+
+### AS7341 GUI test (from SSH, rendering on the PT35 screen)
+
+Fetch the updated branch, then run `python3 -m unittest discover -s tests -p 'test_as7341_gui.py' -v` and `python3 -m unittest discover -s tests -p 'test_pt35_launcher.py' -v`. The AS7341 test uses fake sensor objects and does **not** validate real I²C response. From an active PT35 desktop shell:
+
+```bash
+cd ~/pt35-nfc-bench
+~/as7341-env/bin/python tools/as7341_gui.py --windowed
+```
+
+If starting via SSH, use `DISPLAY=:0 XAUTHORITY="$HOME/.Xauthority" ~/as7341-env/bin/python tools/as7341_gui.py --windowed` for an X11 desktop; a Wayland desktop requires its existing session environment. The R-launcher entry points to the same GUI and does not require another installer run, since its user-level shim executes the repo checkout. No services or saved NFC data are changed.
+
+Physical checklist: verify live eight-channel bars and Clear/NIR, LED on/off, Pause/Resume, Recover after intentionally requested reset, then Close (sensor LED off). Avoid running terminal AS7341 tool and new GUI simultaneously: both address I²C 0x39. The new GUI has **not** yet been validated on the real PT35.
 
 ## NFC (work in progress)
 - Internal M5Stack ST25R3916 on I2C bus 1, address 0x50; direct 3.3 V supply (board modified to bypass its original regulator); IRQ not connected.
