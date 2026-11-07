@@ -812,7 +812,10 @@ class NFCWindow(tk.Tk):
                     self.led.result('success')
                 elif result in ('partial', 'failed'):
                     self.led.result('partial')
-                # Discovery-only tags retain the current scan animation and type indicator.
+                else:
+                    # PM3 discovery-only reports are not memory-read events.
+                    # Hold a steady display instead of endlessly sweeping on a found tag.
+                    self.led.hold()
             if self.newest['protocol'] == 'ISO15693' and self.newest['uid'].startswith('E002'):
                 self.latest_st = self.newest['uid']
             self.update_latest()
