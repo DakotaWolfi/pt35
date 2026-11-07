@@ -20,7 +20,7 @@ from nfc_config import DEFAULT_ARCHIVE
 from nfc_diagnostics import Diagnostics
 from nfc_led import NFCLeds
 from nfc_ndef import decode_message, extract_message, ndef_area
-from nfc_pm3 import SIM_SECONDS, simulation_eligibility, simulation_image
+from nfc_pm3 import SIM_SECONDS, simulation_eligibility, simulation_image, em410x_eligibility
 from nfc_touch import FONT, LARGE, MONO, SMALL, THEMES, Button, ScrollArea, font_for, label, row, touch_size
 
 BACKEND_SCRIPT = Path(__file__).resolve().with_name('pt35_nfc.py')
@@ -743,15 +743,18 @@ class NFCWindow(tk.Tk):
     def emulation_menu(self):
         """A dedicated, non-RF page for browsing safely emulatable local captures."""
         self.screen = 'emulation'
-        body = self.page('PM3 · Emulation', self.pm3, footer=(
+        body = self.page('Emulation · PM3 / Internal', self.pm3, footer=(
             ('Refresh archive', self.reload_emulation_archive, {}),
             ('Check PM3', lambda: self.launch('status', 'proxmark3'),
              {'state': 'disabled' if self.worker else 'normal'})))
-        self.wrap(body, 'Experimental ISO15693 (NFC-V) user-memory emulation only.',
+        self.wrap(body, 'Proxmark3: ISO15693 / SLIX-L and fixed-ID LF EM410x.',
                   font=FONT)
-        self.wrap(body, 'NFC-A / MIFARE / LF emulation is not implemented. The custom SLIX-L '
-                  'firmware includes experimental privacy/password handling; real reader '
-                  'authentication still needs to be verified.', muted=True)
+        self.wrap(body, 'Internal ST25R3916: NFC-A/F target hardware, but no tested '
+                  'PT35 target-mode driver yet. NFC-V uses the separate ST25DV I²C tag.',
+                  muted=True)
+        self.wrap(body, 'NFC-A NTAG/Ultralight full emulation requires original '
+                  'manufacturer/configuration pages absent from current captures. '
+                  'NFC-B and other protocols are not offered as clones.', muted=True)
         self.wrap(body, f'Maximum {SIM_SECONDS} seconds per run · Stop or PM3 button aborts.',
                   muted=True)
         if 'pm3-simulate' not in self.available_pm3_actions:
@@ -784,8 +787,21 @@ class NFCWindow(tk.Tk):
                    lines=2, anchor='w').pack(fill='x', pady=3)
         incomplete = [record for record in items if not simulation_eligibility(record)[0]]
         if incomplete:
-            self.wrap(body, f'{len(incomplete)} incomplete/unsupported captures are not selectable.',
+            self.wrap(body, f'{len(incomplete)} incomplete/unsupported NFC-V captures are not selectable.',
                       muted=True)
+        self.wrap(body, 'PM3 · LF EM410x (ID-only)', font=FONT)
+        lf = [record for record in self.saved if record.get('protocol') == 'EM410X']
+        good_lf = [record for record in lf if em410x_eligibility(record)[0]]
+        for record in good_lf:
+            Button(body, record['uid'] + '\\n125 kHz · ID only',
+                   lambda item=record: self.confirm_em410x(item),
+                   lines=2, anchor='w',
+                   state='normal' if not self.worker else 'disabled').pack(fill='x', pady=3)
+        if not good_lf:
+            self.wrap(body, 'No verified EM410x identifiers in the archive. Scan LF first.',
+                      muted=True)
+        if len(good_lf) != len(lf):
+            self.wrap(body, f'{len(lf)-len(good_lf)} invalid LF IDs omitted.', muted=True)
         self.finish_page()
 
     def pm3_simulation_allowed(self):
@@ -825,6 +841,32 @@ class NFCWindow(tk.Tk):
         if 'pm3-simulate' not in self.available_pm3_actions:
             self.wrap(body, self.pm3_simulation_capability, muted=True)
         self.finish_page()
+
+    def confirm_em410x(self, record):
+        if self.worker:
+            self.notice.set('Stop the current NFC operation before emulation.')
+            return
+        allowed, description = em410x_eligibility(record)
+        if not allowed:
+            self.notice.set(description)
+            return
+        self.screen = 'confirm'
+        body = self.page('Confirm LF EM410x', self.emulation_menu, footer=(
+            ('Cancel', self.emulation_menu, {}),
+            ('Start 10 s', lambda: self.begin_em410x(record['uid']), {'primary': True})))
+        self.wrap(body, f"EM410x identifier: {record['uid']}", font=FONT)
+        self.wrap(body, description, muted=True)
+        self.wrap(body, 'The Proxmark3 LF antenna will transmit this fixed '
+                  'identifier for up to ten seconds. This does not emulate '
+                  'smartcard memory or authentication. Use only tags you own '
+                  'or are authorized to test.', muted=True)
+        self.finish_page()
+
+    def begin_em410x(self, uid):
+        if self.worker:
+            return
+        self.emulation_menu()
+        self.launch('pm3-em410x', 'proxmark3', uid)
 
     def begin_simulation(self, uid):
         if self.worker or not self.pm3_simulation_allowed():
@@ -872,7 +914,7 @@ class NFCWindow(tk.Tk):
                           ('save_all', '--save'), ('include_st', '--include-st')):
             if values[key]:
                 cmd.append(flag)
-        if action == 'pm3-simulate':
+        if action in ('pm3-simulate', 'pm3-em410x'):
             cmd.append('--confirm-emulation')
         if action == 'watch':
             self.last_rf_bits = None
@@ -925,6 +967,8 @@ class NFCWindow(tk.Tk):
                     self.pm3()
                 elif self.screen == 'emulation':
                     self.emulation_menu()
+                elif self.screen == 'confirm':
+                    self.notice.set('Simulation finished · return to Emulation to select another tag')
             self.sync_scan()
         elif kind == 'tag_detected':
             if not self.stopping and self.led_operation and self.settings['led_enabled'] and self.led is not None:
