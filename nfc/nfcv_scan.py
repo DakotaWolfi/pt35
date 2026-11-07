@@ -8,7 +8,7 @@ import time
 from collections import deque
 from nfc_config import handle_sigterm, reader_lock
 
-VERSION = '1.2'
+VERSION = '1.3'
 INVENTORY_TIMEOUT = .30
 ADDRESSED_TIMEOUT = .35
 MAX_V_FIFO = 128
@@ -240,8 +240,10 @@ class Chip:
             self.wr(0x22, nbits >> 8)
             self.wr(0x23, nbits & 255)
             self.cmd(tx_command)
-            deadline = time.monotonic() + timeout + (.10 if recover_fifo else .025)
+            sent = time.monotonic()
+            deadline = sent + timeout + (.10 if recover_fifo and timeout >= .10 else .025)
             main = timer = errors = 0
+            quiet_sample = None
             while time.monotonic() < deadline:
                 irq_main, irq_timer, irq_error, _ = self.irqs()
                 main |= irq_main
@@ -262,6 +264,19 @@ class Chip:
                     return raw, high, errors
                 if timer & 0x40 and not main & 0x20:
                     break
+                if recover_fifo and main & 0x08:
+                    now = time.monotonic()
+                    # A high-rate reply small enough for this FIFO window
+                    # finishes in under 20 ms. Recover a stable FIFO even if
+                    # RXE never arrives, then still validate the whole frame.
+                    if now - sent >= .020:
+                        size, high = fifo()
+                        if quiet_sample and (size, high) == quiet_sample[:2]:
+                            if size and now - quiet_sample[2] >= .004:
+                                state['fifo_recovered'] = True
+                                return self.read(0x9f, size), high, errors
+                        else:
+                            quiet_sample = (size, high, now)
                 time.sleep(.001)
             if not main & 0x08:
                 raise FrameError('tx_timeout', 'NFC transmit did not finish')
@@ -300,6 +315,7 @@ class Chip:
         try:
             decoded = self.exchange(bytes((0x26, 0x01, mask_bits)) + mask_bytes, timeout, verbose)
             if len(decoded) != 10 or decoded[0] & 1:
+                self.recover_exchange()
                 raise FrameError('framing', 'Unexpected ISO15693 inventory response')
             if int.from_bytes(decoded[2:10], 'little') & ((1 << mask_bits) - 1) != mask:
                 raise FrameError('framing', 'Inventory response outside requested mask')
@@ -346,7 +362,7 @@ class InventorySearch:
         self.pending = deque()
         self.remaining = 0
 
-    def poll(self, reader, verbose=False):
+    def poll(self, reader, verbose=False, timeout=INVENTORY_TIMEOUT):
         if self.pending and self.remaining:
             bits, mask = self.pending.popleft()
             self.remaining -= 1
@@ -355,7 +371,7 @@ class InventorySearch:
             self.pending.clear()
             self.remaining = 24
             bits, mask = 0, 0
-        result = reader.inventory(timeout=.075 if bits else INVENTORY_TIMEOUT, verbose=verbose,
+        result = reader.inventory(timeout=min(timeout, .075) if bits else timeout, verbose=verbose,
                                   mask_bits=bits, mask=mask)
         if result and self.onboard == int(result[0], 16):
             if bits < 64:

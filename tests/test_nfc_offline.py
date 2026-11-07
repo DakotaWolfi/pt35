@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'nfc'))
@@ -69,6 +70,47 @@ class RFTests(unittest.TestCase):
                 self.assertEqual(range_bytes(capture), bytes(32))
                 self.assertTrue(capture['requested_range_complete'])
                 self.assertEqual(capture['addressable_memory_complete'], full)
+
+    def test_batch_validates_size_then_falls_back_to_singles(self):
+        class ReaderWithBlocks(NoSystemInfo):
+            commands = []
+
+            def exchange(self, payload, timeout=.12, verbose=False):
+                self.commands.append(payload[1])
+                if payload[1] == 0x23:
+                    return bytes(3)  # malformed successful-response length
+                return bytes(5)
+
+        reader = ReaderWithBlocks(None)
+        counts = []
+        capture = read_memory(reader, UID, batch=True,
+                              progress=lambda done, total: counts.append((done, total)))
+        self.assertEqual(reader.commands, [0x23] + [0x20] * 8)
+        self.assertEqual(range_bytes(capture), bytes(32))
+        self.assertEqual(counts, [(n, 8) for n in range(9)])
+
+    def test_batch_commits_verified_zero_blocks_and_unknown_stays_indeterminate(self):
+        reader = NoSystemInfo(None)
+        counts = []
+        with patch.object(reader, 'exchange', return_value=bytes(33)) as exchange:
+            capture = read_memory(reader, UID, batch=True,
+                                  progress=lambda done, total: counts.append((done, total)))
+        self.assertEqual(exchange.call_args.args[0][-2:], bytes((0, 7)))
+        self.assertEqual(counts, [(0, 8), (8, 8)])
+        self.assertEqual(range_bytes(capture), bytes(32))
+        counts.clear()
+        read_memory(reader, UNKNOWN, progress=lambda done, total: counts.append((done, total)))
+        self.assertTrue(all(total is None for _, total in counts))
+
+    def test_stable_fifo_without_rxe_recovers_before_long_deadline(self):
+        from itertools import chain, repeat
+        chip = FakeChip(chain([(0, 0, 0, 0)], repeat((0x28, 0, 0, 0))))
+        report = Diagnostics()
+        chip.diagnostic = report.add
+        self.assertEqual(chip.inventory()[0], UNKNOWN)
+        result = report.events[-1]
+        self.assertTrue(result['fifo_recovered'])
+        self.assertLess(result['elapsed_ms'], 150)
 
     def test_wrong_block_size(self):
         with self.assertRaisesRegex(FrameError, 'unexpected length'):

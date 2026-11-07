@@ -1,7 +1,7 @@
 """Shareable NFC-V diagnostics contain only allowlisted metadata, never RF data."""
 from collections import Counter, deque
 
-STAGES = frozenset(('configure', 'inventory', 'system_info', 'extended_info', 'read_block',
+STAGES = frozenset(('configure', 'inventory', 'system_info', 'extended_info', 'read_block', 'read_batch',
                     'geometry', 'coverage', 'shutdown', 'collision_probe'))
 RESULTS = frozenset(('ok', 'crc', 'manchester', 'framing', 'fifo', 'timeout', 'tx_timeout', 'size',
                      'collision', 'io', 'unsupported_command', 'unrecognized_command',

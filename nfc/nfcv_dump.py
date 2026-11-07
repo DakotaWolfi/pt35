@@ -7,9 +7,9 @@ from pathlib import Path
 
 from nfc_archive import atomic_write, now, range_bytes, record_bytes, record_path, set_coverage
 from nfc_config import DEFAULT_ARCHIVE, handle_sigterm, reader_lock
-from nfcv_scan import Chip, FrameError, decode_response
+from nfcv_scan import MAX_V_FIFO, Chip, FrameError, decode_response
 
-VERSION = '1.2'
+VERSION = '1.3'
 AUTO_BLOCKS = 32
 ALL_KNOWN = -1
 # SLIX-L datasheet: UID tag type 03h (also used by SLI-L), 8 x 4 user blocks.
@@ -76,6 +76,17 @@ class Reader(Chip):
                 raise FrameError('size', f'Block {block} has unexpected length {len(data)}')
         return data
 
+    def read_multiple(self, uid, index, count, width, verbose=False):
+        extended = index + count > 256
+        address_size = 2 if extended else 1
+        payload = (bytes((0x22, 0x33 if extended else 0x23)) + bytes.fromhex(uid)[::-1] +
+                   index.to_bytes(address_size, 'little') + (count - 1).to_bytes(address_size, 'little'))
+        with self.transaction('read_batch', block=index, requested=count):
+            data = checked_reply(self.exchange(payload, verbose=verbose))[1:]
+            if len(data) != count * width:
+                raise FrameError('size', 'Multi-block reply length differs from the requested range')
+        return [data[offset:offset + width] for offset in range(0, len(data), width)]
+
     def system_info(self, uid, verbose=False):
         air_uid = bytes.fromhex(uid)[::-1]
         with self.transaction('system_info'):
@@ -113,7 +124,7 @@ class Reader(Chip):
         return info
 
 
-def read_memory(reader, uid, limit=0, verbose=False, cap=2048):
+def read_memory(reader, uid, limit=0, verbose=False, cap=2048, *, progress=None, batch=False):
     st_tag = uid.startswith('E002')
     for attempt in range(2):
         try:
@@ -136,8 +147,34 @@ def read_memory(reader, uid, limit=0, verbose=False, cap=2048):
         count = min(cap, 256, limit if limit > 0 else 8)
     width = geometry['size'] if geometry else info.get('block_size_hint')
     blocks, errors = [], []
-    missed = 0
-    for index in range(count):
+    total = count if geometry else None
+    if progress:
+        progress(0, total)
+    index = missed = 0
+    # Leave room for response flags, CRC and the stream framing bytes.
+    batch_limit = min(8, (MAX_V_FIFO // 2 - 4) // width) if batch and geometry else 1
+
+    def append(data):
+        nonlocal index, missed
+        blocks.append({'index': index, 'hex': data.hex().upper(), 'size': len(data)})
+        index += 1
+        missed = 0
+
+    while index < count:
+        window = min(batch_limit, count - index)
+        if window > 1:
+            try:
+                pieces = reader.read_multiple(uid, index, window, width, verbose)
+            except (FrameError, TagError, TimeoutError):
+                # A rejected batch says nothing about any individual block.
+                # Fall back once for this capture and preserve earlier data.
+                batch_limit = 1
+            else:
+                for data in pieces:
+                    append(data)
+                if progress:
+                    progress(len(blocks), total)
+                continue
         for attempt in range(1, 4):
             reader.trace_context['attempt'] = attempt
             try:
@@ -149,14 +186,16 @@ def read_memory(reader, uid, limit=0, verbose=False, cap=2048):
                     break
                 time.sleep(.04 * attempt if ambiguous_st_error else .02)
             else:
-                blocks.append({'index': index, 'hex': data.hex().upper(), 'size': len(data)})
+                append(data)
                 width = len(data)
-                missed = 0
+                if progress:
+                    progress(len(blocks), total)
                 break
             finally:
                 reader.trace_context.clear()
         if errors and errors[-1]['index'] == index:
             kind = errors[-1]['kind']
+            index += 1
             if geometry and kind == 'read_protected':
                 continue
             missed += 1

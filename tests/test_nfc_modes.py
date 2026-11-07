@@ -2,6 +2,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'nfc'))
 
@@ -81,3 +82,31 @@ class PollTests(unittest.TestCase):
         self.assertEqual(tag.read_single(uid, 511), bytes(4))
         self.assertEqual(requests[1], b'\x22\x3b\x14' + air)
         self.assertEqual(requests[2], b'\x22\x30' + air + b'\xff\x01')
+
+
+class AutoModeTests(unittest.TestCase):
+    def test_auto_sweeps_modes_and_reconfigures_back_to_v(self):
+        from pt35_nfc import INTERNAL_PROTOCOLS, InternalPoller
+
+        reader, inventory = Mock(), Mock()
+        reader.inventory_error = None
+        inventory.poll.return_value = ('E004000000000000', bytes(10))
+        discoveries = {mode: Mock(return_value=(mode, {})) for mode in INTERNAL_PROTOCOLS[1:]}
+        poller = InternalPoller(reader, INTERNAL_PROTOCOLS, inventory)
+        with patch('pt35_nfc.POLL', discoveries):
+            protocols = [poller.poll()[0] for _ in range(5)]
+        self.assertEqual(protocols, [*INTERNAL_PROTOCOLS, 'ISO15693'])
+        profiles = [call.kwargs['configure'] for call in reader.initialize.call_args_list]
+        self.assertEqual([item.keywords['protocol'] if item else None for item in profiles],
+                         [None, 'NFC-A', 'NFC-B', 'NFC-F', None])
+        self.assertEqual(inventory.poll.call_count, 2)
+        self.assertLess(inventory.poll.call_args.kwargs['timeout'], .1)
+
+    def test_manual_mode_initializes_once(self):
+        from pt35_nfc import InternalPoller
+
+        reader, inventory = Mock(), Mock()
+        poller = InternalPoller(reader, ('ISO15693',), inventory)
+        poller.poll()
+        poller.poll()
+        reader.initialize.assert_called_once_with(verbose=False, configure=None)

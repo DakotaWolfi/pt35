@@ -19,8 +19,9 @@ from nfc_config import DEFAULT_ARCHIVE, LEGACY_ARCHIVE, handle_sigterm, reader_l
 from nfcv_dump import ALL_KNOWN, Reader, failure, is_sli_l, read_memory
 from nfcv_scan import FrameError, InventorySearch
 
-VERSION = '0.5.0'
+VERSION = '0.6.0'
 INTERNAL_PROTOCOLS = ('ISO15693', *MODES)
+AUTO_INVENTORY_TIMEOUT = .035
 
 
 def new_record(uid, backend, dsfid=None, protocol='ISO15693'):
@@ -59,7 +60,7 @@ class Events:
     def __call__(self, event, message, **data):
         if self.json_lines:
             print(json.dumps({'event': event, 'message': message, **data}), flush=True)
-        else:
+        elif message:
             print(message, flush=True)
 
 
@@ -121,6 +122,49 @@ def tag_event(args, emit, record):
             emit('archived', f'Archived {uid}', path=str(path))
 
 
+class InternalPoller:
+    """Keep the discovered mode active for its read, then continue the sweep."""
+    def __init__(self, reader, protocols, inventory, *, bench=False, verbose=False):
+        self.reader = reader
+        self.protocols = protocols
+        self.inventory = inventory
+        self.bench = bench
+        self.verbose = verbose
+        self.current = None
+        self.index = 0
+
+    def poll(self):
+        protocol = self.protocols[self.index]
+        self.index = (self.index + 1) % len(self.protocols)
+        if protocol != self.current:
+            # Use the same known reset/config/field-on sequence as manual mode.
+            # Full reset clears any stale mode-specific RX settings and IRQs.
+            profile = None if protocol == 'ISO15693' else partial(configure, protocol=protocol)
+            self.reader.initialize(verbose=self.verbose, configure=profile)
+            self.current = protocol
+        if protocol == 'ISO15693':
+            if self.bench:
+                result = self.reader.inventory(verbose=self.verbose)
+            elif len(self.protocols) > 1:
+                result = self.inventory.poll(self.reader, self.verbose, timeout=AUTO_INVENTORY_TIMEOUT)
+            else:
+                result = self.inventory.poll(self.reader, self.verbose)
+            error = self.reader.inventory_error
+        else:
+            try:
+                result, error = POLL[protocol](self.reader), None
+            except (FrameError, TimeoutError) as exc:
+                result, error = None, exc
+        return protocol, result, error
+
+
+def progress_events(emit, protocol, backend):
+    def report(completed, total):
+        emit('read_progress', '', protocol=protocol, backend=backend, completed=completed, total=total)
+
+    return report
+
+
 def internal_operation(args, emit, reselect=None):
     try:
         from smbus2 import SMBus
@@ -141,11 +185,11 @@ def internal_operation(args, emit, reselect=None):
                  backend='internal', capabilities=list(INTERNAL_PROTOCOLS))
             return
         try:
-            profile = None if args.protocol == 'ISO15693' else partial(configure, protocol=args.protocol)
-            with diagnostics:
-                reader.initialize(verbose=args.verbose, configure=profile)
-            emit('backend', f'Internal ST25R3916 connected | {args.protocol}', backend='internal',
-                 capabilities=list(INTERNAL_PROTOCOLS))
+            automatic = args.protocol == 'auto'
+            order = args.poll_order if automatic else (args.protocol,)
+            poller = InternalPoller(reader, order, inventory_search, bench=bench, verbose=args.verbose)
+            emit('backend', f'Internal ST25R3916 · {"Auto NFC" if automatic else args.protocol}',
+                 backend='internal', capabilities=list(INTERNAL_PROTOCOLS))
             last = {}
             attempts = 0
             last_error = None
@@ -155,61 +199,58 @@ def internal_operation(args, emit, reselect=None):
                     if selected:
                         return selected
                 attempts += 1
-                error = None
-                details = {}
                 with diagnostics:
-                    if args.protocol == 'ISO15693':
-                        if bench:
-                            # Unmasked for the like-for-like original scanner comparison.
-                            result = reader.inventory(verbose=args.verbose)
-                        else:
-                            result = inventory_search.poll(reader, args.verbose)
-                        error = reader.inventory_error
-                        if result:
-                            uid, inventory = result
-                            if skip_internal_uid(uid, args.include_st, args.exclude_uid):
-                                result = None
-                            else:
-                                details['dsfid'] = inventory[1]
-                    else:
-                        try:
-                            result = POLL[args.protocol](reader)
-                            details['discovery'] = result[1]
-                        except (FrameError, TimeoutError) as exc:
-                            error, result = exc, None
+                    protocol, result, error = poller.poll()
+                if result and protocol == 'ISO15693' and skip_internal_uid(result[0], args.include_st, args.exclude_uid):
+                    result = None
                 if bench:
                     if result and not args.inventory_only:
-                        read_memory(reader, result[0], args.blocks)
+                        read_memory(reader, result[0], args.blocks, batch=not args.single_block)
                     if attempts < args.tries:
                         time.sleep(args.delay)
                     continue
                 if result:
-                    uid = result[0]
+                    uid, details = result
+                    key = (protocol, uid)
                     current = time.monotonic()
-                    if uid not in last or current >= last[uid]:
-                        if len(last) >= 256:
+                    seen, next_read = last.get(key, (0, 0))
+                    if current >= next_read or current - seen >= 1.5:
+                        if len(last) >= 256 and key not in last:
                             last.pop(next(iter(last)))
-                        record = new_record(uid, 'internal', dsfid=details.pop('dsfid', None),
-                                            protocol=args.protocol)
-                        record.update(details)
+                        record = new_record(uid, 'internal', dsfid=details[1] if protocol == 'ISO15693' else None,
+                                            protocol=protocol)
+                        progress = progress_events(emit, protocol, 'internal')
+                        if protocol in ('ISO15693', 'NFC-A'):
+                            progress(0, None)
                         with diagnostics:
-                            if args.protocol == 'ISO15693':
-                                emit('scan_state', 'Tag detected · reading NFC-V blocks', state='reading')
-                                record.update(read_memory(reader, uid, args.blocks, args.verbose))
-                            elif args.protocol == 'NFC-A':
-                                record.update(read_ntag(reader, uid, record['discovery']))
+                            if protocol == 'ISO15693':
+                                record.update(read_memory(reader, uid, args.blocks, args.verbose,
+                                                          progress=progress, batch=not args.single_block))
+                            else:
+                                record['discovery'] = details
+                                if protocol == 'NFC-A':
+                                    record.update(read_ntag(reader, uid, details, progress=progress))
+                                else:
+                                    record['read_capability'] = 'discovery_only'
                         tag_event(args, emit, record)
                         if not args.watch:
                             return
                         interval = args.repeat_after
                         if record.get('dump_status') in ('partial', 'failed'):
-                            interval = min(interval, 4)
-                        last[uid] = time.monotonic() + interval
-                state = (failure(error)['kind'] if error else 'tag')
-                if state != last_error and error:
-                    emit('scan_state', 'Waiting for tag' if state == 'timeout' else str(error), state=state)
+                            interval = min(interval, 2)
+                        current = time.monotonic()
+                        next_read = current + interval
+                    last[key] = current, next_read
+                state = failure(error)['kind'] if error else 'waiting'
+                if not result and state != last_error:
+                    if state in ('timeout', 'waiting'):
+                        if not automatic or last_error is None:
+                            emit('scan_state', 'Waiting for tag', state='waiting')
+                    else:
+                        emit('scan_state', str(error), state=state, protocol=protocol)
                 last_error = state
-                time.sleep(min(args.delay, .035) if inventory_search.pending else args.delay)
+                if not automatic:
+                    time.sleep(min(args.delay, .035) if inventory_search.pending else args.delay)
         finally:
             reader.shutdown()
 
@@ -228,9 +269,10 @@ def pm3_operation(args, emit, client, port):
         try:
             if args.action == 'pm3-dump':
                 record = new_record(args.uid, 'proxmark3')
-                emit('scan_state', 'Reading addressed ISO15693 blocks with Iceman')
+                progress = progress_events(emit, 'ISO15693', 'proxmark3')
+                progress(0, None)
                 record.update(read_memory(pm3.PM3Reader(client, port), args.uid, args.blocks,
-                                          args.verbose, cap=32))
+                                          args.verbose, cap=32, progress=progress))
                 dsfid = record.get('system_info', {}).get('dsfid')
                 if dsfid is not None:
                     record['dsfid'] = f'{dsfid:02X}'
@@ -337,8 +379,11 @@ def main():
     p.add_argument('--confirm-emulation', action='store_true', help='explicitly authorize a 10-second simulation')
     p.add_argument('--port', help='select a detected Proxmark3 serial port')
     p.add_argument('--client', help='path to the Iceman client executable')
-    p.add_argument('--protocol', choices=INTERNAL_PROTOCOLS, default='ISO15693',
-                   help='internal reader polling mode (A/B/F require bench verification)')
+    p.add_argument('--protocol', choices=('auto', *INTERNAL_PROTOCOLS), default='auto',
+                   help='internal HF technology (Auto sweeps NFC-V/A/B/F)')
+    p.add_argument('--poll-order', default=','.join(INTERNAL_PROTOCOLS),
+                   help='comma-separated Auto sweep order')
+    p.add_argument('--single-block', action='store_true', help='skip NFC-V multi-block commands')
     p.add_argument('--bus', type=int, default=1)
     p.add_argument('--archive', type=Path, default=DEFAULT_ARCHIVE)
     p.add_argument('--save', action='store_true', help='save all discovered tags')
@@ -356,6 +401,9 @@ def main():
     p.add_argument('--inventory-only', action='store_true', help='rf-bench: compare unmasked inventory only')
     p.add_argument('--diagnostics', type=Path, help='write a redacted NFC-V diagnostics JSON file')
     args = p.parse_args()
+    args.poll_order = tuple(args.poll_order.split(','))
+    if len(args.poll_order) != len(INTERNAL_PROTOCOLS) or set(args.poll_order) != set(INTERNAL_PROTOCOLS):
+        p.error('--poll-order must list ISO15693,NFC-A,NFC-B,NFC-F once each')
     args.watch = args.action == 'watch'
     bench = args.action == 'rf-bench'
     if bench:
@@ -388,7 +436,7 @@ def main():
         if args.action == 'show':
             if not args.uid:
                 p.error('show requires a UID')
-            print(record_path(args.archive, args.uid, args.protocol).read_text(encoding='utf-8'))
+            print(record_path(args.archive, args.uid, 'ISO15693' if args.protocol == 'auto' else args.protocol).read_text(encoding='utf-8'))
             return 0
         return run_reader(args, emit)
     except KeyboardInterrupt:

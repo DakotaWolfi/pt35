@@ -106,7 +106,7 @@ def poll_f(chip):
 POLL = {'NFC-A': poll_a, 'NFC-B': poll_b, 'NFC-F': poll_f}
 
 
-def read_ntag(chip, uid, details):
+def read_ntag(chip, uid, details, *, progress=None):
     """Read only the user pages on known NTAG21x, using read-only commands."""
     if len(uid) != 14 or details['sak'] != 0:
         return {}
@@ -122,6 +122,8 @@ def read_ntag(chip, uid, details):
     name, count = model
     capture = dict(chip=f'{name} (GET_VERSION)', manufacturer='NXP', blocks=[], read_errors=[],
                    verification='CRC-A checked READ responses', memory_start=4)
+    if progress:
+        progress(0, count)
     try:
         page0 = receive(chip, b'\x30\x00', checksum=crc_a)
         if len(page0) != 16 or (page0[:3] + page0[4:8]).hex().upper() != uid:
@@ -143,6 +145,8 @@ def read_ntag(chip, uid, details):
                 offset = (index - first) * 4
                 capture['blocks'].append({'index': index, 'hex': data[offset:offset + 4].hex().upper(),
                                           'size': 4})
+            if progress:
+                progress(len(capture['blocks']), count)
     geometry = {'start': 4, 'blocks': count, 'size': 4, 'source': f'NXP {name} user pages'}
     set_coverage(capture, count, geometry, start=4)
     return capture
