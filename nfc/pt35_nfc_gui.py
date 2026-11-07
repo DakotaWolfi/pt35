@@ -862,7 +862,8 @@ class NFCWindow(tk.Tk):
             if self.led is not None and self.led_operation and self.settings['led_enabled']:
                 # PM3 has no comparable per-tag RSSI; internal discovery already sent one.
                 if self.newest.get('backend') == 'proxmark3':
-                    self.led.detected(self.newest.get('protocol', ''), None)
+                    self.led.detected('LF' if self.newest.get('protocol') == 'EM410X' else
+                                      self.newest.get('protocol', ''), None)
             if not self.stopping and self.led_operation and self.settings['led_enabled'] and self.led is not None:
                 comparison = item.get('comparison', 'new')
                 if comparison in ('same', 'improved', 'changed_verified', 'different_partial'):
