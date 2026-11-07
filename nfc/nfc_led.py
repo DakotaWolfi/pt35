@@ -9,7 +9,6 @@ DEFAULT_SOCKET = '/run/pt35-led.sock'
 HEARTBEAT = .4
 UPDATE_INTERVAL = .12
 RESULT_SECONDS = .6
-TAG_HOLD_SECONDS = 2.5
 
 
 class NFCLeds:
@@ -25,7 +24,6 @@ class NFCLeds:
         self.until = None
         self.resume = None
         self.closed = False
-        self.last_result = (None, 0.0)
         self.status = ''
         self.thread = threading.Thread(target=self.run, name='nfc-led-socket', daemon=True)
         self.thread.start()
@@ -35,7 +33,6 @@ class NFCLeds:
             self.style, self.brightness = style, brightness
             self.frame = ('scan', 0, 0)
             self.protocol, self.rssi = 'none', -1
-            self.last_result = (None, 0.0)
             self.until = None
             self.condition.notify()
 
@@ -44,14 +41,6 @@ class NFCLeds:
             if self.frame is not None:
                 self.protocol = protocol if protocol in ('ISO15693', 'NFC-A', 'NFC-B', 'NFC-F', 'LF') else 'none'
                 self.rssi = rssi if isinstance(rssi, int) and 0 <= rssi <= 15 else -1
-                self.condition.notify()
-
-    def hold(self):
-        with self.condition:
-            if self.frame is not None:
-                self.frame = ('hold', 0, 0)
-                self.until = time.monotonic() + TAG_HOLD_SECONDS
-                self.resume = ('scan', 0, 0)
                 self.condition.notify()
 
     def reading(self, completed, total):
@@ -63,11 +52,7 @@ class NFCLeds:
 
     def result(self, stage):
         with self.condition:
-            now = time.monotonic()
-            # Suppress repeated fault/result flashes from noisy USB/RF polling.
-            if self.frame is not None and (stage != self.last_result[0] or
-                                           now - self.last_result[1] >= 3.0):
-                self.last_result = (stage, now)
+            if self.frame is not None:
                 self._temporary(stage, ('scan', 0, 0))
                 self.condition.notify()
 
