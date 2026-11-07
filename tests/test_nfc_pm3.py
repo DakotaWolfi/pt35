@@ -71,6 +71,19 @@ class IcemanTests(unittest.TestCase):
                 main()
         self.assertEqual(result.exception.code, 2)
 
+    def test_emulation_selector_only_accepts_complete_iso15693(self):
+        record = {'uid': UID, 'protocol': 'ISO15693',
+                  'blocks': [{'index': 0, 'hex': '00000000'}], 'read_errors': []}
+        set_coverage(record, 1, None)
+        self.assertEqual(pm3.simulation_eligibility(record)[0], False)
+        set_coverage(record, 1, {'blocks': 1, 'size': 4})
+        allowed, summary = pm3.simulation_eligibility(record)
+        self.assertTrue(allowed)
+        self.assertIn('10 s', summary)
+        self.assertEqual(pm3.simulation_eligibility({**record, 'protocol': 'NFC-A'})[0], False)
+        self.assertEqual(pm3.simulation_eligibility(
+            {**record, 'addressable_memory_complete': False})[0], False)
+
     def test_simulate_only_after_confirmed_upload(self):
         record = {'uid': UID, 'protocol': 'ISO15693', 'blocks': [{'index': 0, 'hex': '00000000'}],
                   'read_errors': []}
