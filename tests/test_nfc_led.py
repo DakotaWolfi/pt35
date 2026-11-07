@@ -60,6 +60,21 @@ class StateTests(unittest.TestCase):
         self.assertEqual(self.state.command(f'nfc {TOKEN} sweep 12 scan 0 0 ISO15693 16'),
                          'ERR invalid NFC signal')
 
+    def test_rescan_colors_keep_bottom_protocol_type_display(self):
+        colors = ('same', 'improved', 'changed', 'uncertain', 'hold')
+        seen = {}
+        for stage in colors:
+            self.assertEqual(self.state.command(
+                f'nfc {TOKEN} sweep 12 {stage} 0 0 ISO15693 -1'), 'OK')
+            frame = self.state.frame()
+            seen[stage] = frame[0]
+            self.assertNotEqual(frame[0], led.BLACK[0])
+            self.assertNotEqual(frame[15], led.BLACK[15])
+            self.assertEqual([i for i in led.BOTTOM_LEFT_TO_RIGHT
+                              if frame[i] != led.BLACK[i]], [15])
+        self.assertEqual(len(set(seen.values())), len(colors))
+        self.assertEqual(self.state.command(f'nfc {TOKEN} release'), 'OK')
+
     def test_rssi_zero_is_no_bar_not_a_fake_minimum(self):
         self.state.command(f'nfc {TOKEN} minimal 12 scan 0 0 NFC-F 0')
         self.assertEqual([i for i in led.BOTTOM_LEFT_TO_RIGHT if self.state.frame()[i] != led.BLACK[i]], [])
