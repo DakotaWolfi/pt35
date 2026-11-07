@@ -688,6 +688,7 @@ class NFCWindow(tk.Tk):
         self.screen = 'tools'
         body = self.page('Tools', self.home)
         for title, action in (('RF diagnostics', self.diagnostics), ('Proxmark3', self.pm3),
+                              ('PM3 · Emulation', self.emulation_menu),
                               ('Reader status', lambda: self.launch('status')),
                               ('Toggle full screen', self.toggle_fullscreen)):
             Button(body, title, action, anchor='w').pack(fill='x', pady=4)
@@ -910,8 +911,11 @@ class NFCWindow(tk.Tk):
                 else:
                     self.status.set('Stopped' if self.stopping else 'Ready')
             self.stopping = False
-            if self.screen == 'pm3' and not self.closing:
-                self.pm3()
+            if not self.closing:
+                if self.screen == 'pm3':
+                    self.pm3()
+                elif self.screen == 'emulation':
+                    self.emulation_menu()
             self.sync_scan()
         elif kind == 'tag_detected':
             if not self.stopping and self.led_operation and self.settings['led_enabled'] and self.led is not None:
@@ -951,13 +955,23 @@ class NFCWindow(tk.Tk):
         elif kind == 'archived':
             self.archive_dirty = True
         elif kind == 'pm3_status':
-            self.pm3_status.set(message[:180])
+            self.pm3_status.set(message[:240])
             if item['state'] != 'connected':
                 self.available_pm3_actions.clear()
+                self.pm3_simulation_capability = 'Proxmark3 unavailable: ' + message
+            elif 'simulation disabled' in message.lower():
+                self.pm3_simulation_capability = ('Simulation disabled because client and custom '
+                    'firmware revisions differ or are unknown. Read-only discovery remains '
+                    'available; use an Iceman client built for this firmware.')
+            else:
+                self.pm3_simulation_capability = (
+                    'Select Check PM3 to verify emulator commands on this connection.')
         elif kind == 'backend':
             self.reader_backend = item['backend']
             self.reader.set(message)
             self.available_pm3_actions = set(item.get('pm3_actions', []))
+            if 'pm3-simulate' in self.available_pm3_actions:
+                self.pm3_simulation_capability = 'Verified PM3 offers ISO15693 simulation commands'
             self.status.set('Scanning · hold a tag by the antenna')
         elif kind == 'fault':
             self.had_fault = True
