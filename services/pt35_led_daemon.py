@@ -38,7 +38,7 @@ PROTOCOL_COLORS = {'ISO15693': (0, 2, 4), 'NFC-A': (0, 4, 1),
                    'LF': (4, 0, 1)}
 BLACK = ((0, 0, 0),) * LED_COUNT
 EFFECTS = {'sweep', 'pulse', 'minimal'}
-STAGES = {'scan', 'read', 'success', 'partial', 'error'}
+STAGES = {'scan', 'hold', 'read', 'success', 'partial', 'error'}
 
 
 def battery_sysfs():
@@ -120,6 +120,10 @@ def nfc_frame(lease, now):
                  'error': (brightness, 0, 0)}[lease.stage]
         for i in TOP_ROW:
             frame[i] = color
+    elif lease.stage == 'hold':
+        # A detected tag with no memory read: steady marker, no scan strobing.
+        for i in TOP_ROW:
+            frame[i] = (0, 0, max(1, brightness // 5))
     elif lease.effect == 'minimal':
         frame[0] = (0, 0, max(1, brightness // 3))
     elif lease.effect == 'pulse':
@@ -127,7 +131,7 @@ def nfc_frame(lease, now):
         for i in TOP_ROW:
             frame[i] = (0, level // 4, level)
     else:
-        head = int(now * 9) % len(TOP_ROW)
+        head = int(now * 4) % len(TOP_ROW)
         frame[head] = (0, brightness // 5, brightness)
         frame[(head - 1) % 8] = (0, 0, brightness // 3)
 
