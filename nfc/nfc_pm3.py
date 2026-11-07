@@ -351,7 +351,7 @@ def simulate_em410x(client, port, record, emit):
     # Confirm command support separately; the on-device firmware may have a
     # different command tree from a modern Iceman client.
     code, help_text = run_pm3(client, port, 'lf em 410x help', timeout=5)
-    if code or not re.search(r'(?m)^\\s*(?:\\[.\\]\\s*)?sim\\s{2,}', help_text):
+    if code or not re.search(r'(?m)^\s*(?:\[.\]\s*)?sim\s{2,}', help_text):
         raise RuntimeError('Iceman did not advertise LF EM410x simulation')
     uid = record['uid'].upper()
     emit('scan_state', f'EM410x ID emulation requested for {SIM_SECONDS} seconds')
