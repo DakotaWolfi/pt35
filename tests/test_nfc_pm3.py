@@ -139,7 +139,7 @@ class IcemanTests(unittest.TestCase):
                         pm3, 'run_pm3', return_value=(0, 'ARM firmware does not match')):
                     self.assertEqual(pm3.connect().state, 'unresponsive')
 
-    def test_verified_ping_allows_custom_firmware_and_disables_simulation(self):
+    def test_verified_ping_allows_custom_firmware_and_capability_checked_simulation(self):
         output = ('[+] Ping response received in 1 ms and content ( ok )\n'
                   'Client.... Iceman/master/v4.23346-275-g770cf1268\n'
                   'OS........ Iceman/jenna-slix-r1/v4.23346-188-g3bd526700-suspect\n'
@@ -154,10 +154,10 @@ class IcemanTests(unittest.TestCase):
             link = pm3.connect()
         self.assertEqual(link.state, 'connected')
         self.assertIn('revisions differ', link.message)
-        self.assertEqual(link.actions, ('pm3-dump',))
+        self.assertEqual(link.actions, ('pm3-dump', 'pm3-simulate'))
         self.assertTrue(link.client.endswith('/proxmark3'))
 
-    def test_custom_firmware_simulation_requires_explicit_compatibility_override(self):
+    def test_custom_firmware_simulation_availability_is_not_revision_blocked(self):
         output = ('[+] Ping response received in 2 ms\n'
                   'Client.... Iceman/master/v4.2-1-gcafebad1\n'
                   'OS........ Iceman/custom/v4.2-1-gbedface0\n')
@@ -175,11 +175,12 @@ class IcemanTests(unittest.TestCase):
             for context in helpers:
                 stack.enter_context(context)
             default = pm3.connect()
-            self.assertNotIn('pm3-simulate', default.actions)
-            self.assertIn('simulation disabled', default.message)
+            self.assertIn('pm3-simulate', default.actions)
+            self.assertIn('revisions differ', default.message)
+            self.assertNotIn('simulation disabled', default.message)
             permitted = pm3.connect(allow_simulation_mismatch=True)
-            self.assertIn('pm3-simulate', permitted.actions)
-            self.assertIn('experimental emulation override enabled', permitted.message)
+            self.assertEqual(permitted.actions, default.actions)
+            self.assertNotIn('experimental emulation override', permitted.message)
 
     def test_automatically_finds_owners_existing_iceman_checkout(self):
         with tempfile.TemporaryDirectory() as directory:
