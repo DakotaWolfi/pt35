@@ -24,6 +24,14 @@ class LaunchTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             launcher.target_command('unrecognized')
 
+    def test_start_page_is_two_columns_by_three_rows(self):
+        self.assertEqual(len(launcher.HOME_TILES), 6)
+        self.assertEqual([entry[2] for entry in launcher.HOME_TILES],
+                         ['tag', 'reader', 'spectrum', 'led', 'lra', 'exit'])
+        self.assertEqual([(row, column) for _, row, column in
+                          launcher.home_tile_positions()],
+                         [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)])
+
     def test_lra_test_commands_are_bounded_and_noncontinuous(self):
         self.assertEqual(launcher.lra_command('status'), ['/usr/local/bin/lra_ctl', 'status'])
         self.assertEqual(launcher.lra_command('play', 10),
