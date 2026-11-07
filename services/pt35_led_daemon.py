@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-
-import os
-import time
+"""Single-owner renderer for the PT35 rear LED strip and its Unix socket."""
+import argparse
+import fcntl
 import math
+import os
+import re
+import signal
 import socket
-import threading
+import socketserver
+import stat
 import subprocess
-
-from rpi_ws281x import PixelStrip, Color
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
 
 LED_COUNT = 16
 LED_PIN = 12
@@ -17,390 +24,373 @@ LED_BRIGHTNESS = 64
 LED_INVERT = False
 LED_CHANNEL = 0
 
-SOCKET_PATH = "/run/pt35-led.sock"
+SOCKET_PATH = '/run/pt35-led.sock'
+HARDWARE_LOCK = '/run/pt35-led.lock'
+FRAME_SECONDS = .04
+LEASE_SECONDS = 2
+MAX_NFC_BRIGHTNESS = 32
+INDEX_SECONDS = .24
+COLUMNS = tuple((column, 15 - column) for column in range(8))
+BLACK = ((0, 0, 0),) * LED_COUNT
+EFFECTS = {'sweep', 'pulse', 'minimal'}
+STAGES = {'scan', 'read', 'success', 'partial', 'error'}
 
-strip = PixelStrip(
-    LED_COUNT,
-    LED_PIN,
-    LED_FREQ_HZ,
-    LED_DMA,
-    LED_INVERT,
-    LED_BRIGHTNESS,
-    LED_CHANNEL
-)
-
-strip.begin()
-
-mode = "idle"
-solid_color = (0, 0, 0)
-running = True
-
-def set_pixel(i, r, g, b):
-    strip.setPixelColor(i, Color(int(r), int(g), int(b)))
-
-def show():
-    strip.show()
-
-def clear():
-    for i in range(LED_COUNT):
-        set_pixel(i, 0, 0, 0)
-    show()
-
-def fill(r, g, b):
-    for i in range(LED_COUNT):
-        set_pixel(i, r, g, b)
-    show()
-
-def lra(effect):
-    try:
-        subprocess.run(
-            ["/usr/local/bin/lra_ctl", "play", str(effect)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=2
-        )
-    except Exception:
-        pass
 
 def battery_sysfs():
-    base = "/sys/class/power_supply"
-
     try:
-        for dev in os.listdir(base):
-            path = os.path.join(base, dev)
-
-            cap = os.path.join(path, "capacity")
-            volt = os.path.join(path, "voltage_now")
-
-            if os.path.exists(cap):
-                with open(cap) as f:
-                    soc = float(f.read().strip())
-
-                voltage = None
-
-                if os.path.exists(volt):
-                    with open(volt) as f:
-                        voltage = float(f.read().strip()) / 1000000.0
-
-                return soc, voltage
-
-    except Exception:
+        for device in Path('/sys/class/power_supply').iterdir():
+            capacity = device / 'capacity'
+            if capacity.exists():
+                soc = float(capacity.read_text())
+                voltage = device / 'voltage_now'
+                return soc, float(voltage.read_text()) / 1_000_000 if voltage.exists() else None
+    except (OSError, ValueError):
         pass
-
     return None, None
 
-def battery_direct():
-    try:
-        from smbus2 import SMBus
-
-        bus = SMBus(1)
-
-        msb = bus.read_byte_data(0x36, 0x04)
-        lsb = bus.read_byte_data(0x36, 0x05)
-        soc = msb + lsb / 256.0
-
-        vm = bus.read_byte_data(0x36, 0x02)
-        vl = bus.read_byte_data(0x36, 0x03)
-        raw = (vm << 8) | vl
-        voltage = (raw >> 4) * 0.00125
-
-        bus.close()
-
-        return soc, voltage
-
-    except Exception:
-        return None, None
 
 def get_battery():
     soc, voltage = battery_sysfs()
-
     if soc is not None:
         return soc, voltage
+    try:
+        from smbus2 import SMBus
 
-    return battery_direct()
+        with SMBus(1) as bus:
+            soc = bus.read_byte_data(0x36, 0x04) + bus.read_byte_data(0x36, 0x05) / 256
+            raw = (bus.read_byte_data(0x36, 0x02) << 8) | bus.read_byte_data(0x36, 0x03)
+            return soc, (raw >> 4) * .00125
+    except (ImportError, OSError):
+        return None, None
 
-def battery_bar(seconds=3):
-    soc, voltage = get_battery()
 
-    if soc is None:
-        for _ in range(3):
-            fill(64, 0, 0)
-            time.sleep(0.15)
-            clear()
-            time.sleep(0.15)
-        return
+def lra(effect):
+    try:
+        subprocess.run(['/usr/local/bin/lra_ctl', 'play', str(effect)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
-    count = round((soc / 100.0) * LED_COUNT)
-    count = max(0, min(LED_COUNT, count))
 
-    clear()
-
-    for i in range(LED_COUNT):
-        if i < count:
-            if soc < 15:
-                set_pixel(i, 100, 0, 0)
-            elif soc < 40:
-                set_pixel(i, 80, 35, 0)
-            else:
-                set_pixel(i, 0, 80, 10)
-        else:
-            set_pixel(i, 0, 0, 0)
-
-    show()
-
-    print(
-        f"Battery: {soc:.1f}%"
-        + (f" {voltage:.3f}V" if voltage is not None else ""),
-        flush=True
-    )
-
-    time.sleep(seconds)
-
-def wheel(pos):
-    pos = pos & 255
-
+def wheel(position):
+    pos = position & 255
     if pos < 85:
         return pos * 3, 255 - pos * 3, 0
-
     if pos < 170:
         pos -= 85
         return 255 - pos * 3, 0, pos * 3
-
     pos -= 170
     return 0, pos * 3, 255 - pos * 3
 
-def boot_animation():
-    clear()
 
-    # Slow blue sweep
-    for i in range(LED_COUNT):
-        set_pixel(i, 0, 0, 70)
-        show()
-        time.sleep(0.035)
+@dataclass(frozen=True)
+class Lease:
+    token: str
+    effect: str
+    brightness: int
+    stage: str
+    completed: int
+    total: int
+    expires: float
 
-    lra(1)
 
-    time.sleep(0.15)
+def nfc_frame(lease, now):
+    brightness = lease.brightness
+    if lease.stage == 'read' and lease.total:
+        # Fill paired columns from left to right in the physical rear view.
+        # Integer floor preserves a true 0% and never shows 100% early.
+        count = lease.completed * len(COLUMNS) // lease.total
+        lit = {index for pair in COLUMNS[:count] for index in pair}
+        return tuple((0, brightness, brightness // 4) if i in lit else BLACK[i] for i in range(LED_COUNT))
+    if lease.stage in ('success', 'partial', 'error'):
+        color = {'success': (0, brightness, 0), 'partial': (brightness, brightness // 3, 0),
+                 'error': (brightness, 0, 0)}[lease.stage]
+        return (color,) * LED_COUNT
+    if lease.effect == 'pulse':
+        level = max(1, int(brightness * (.45 + .35 * math.sin(now * 4))))
+        return ((0, level // 4, level),) * LED_COUNT
+    if lease.effect == 'minimal':
+        level = max(1, brightness // 3)
+        return ((0, 0, level),) + BLACK[1:]
+    head = int(now * 12) % LED_COUNT
+    return tuple((0, brightness // 5, brightness) if i == head else
+                 (0, 0, brightness // 3) if i == (head - 1) % LED_COUNT else BLACK[i]
+                 for i in range(LED_COUNT))
 
-    # Fast second pass
-    for i in range(LED_COUNT):
-        set_pixel(i, 0, 50, 100)
-        show()
-        time.sleep(0.015)
 
-    lra(10)
+class LEDState:
+    """Command handlers change state only. The renderer alone owns GPIO."""
+    def __init__(self, *, clock=time.monotonic, battery=get_battery, haptic=lra):
+        self.clock = clock
+        self.battery_reader = battery
+        self.haptic = haptic
+        self.lock = threading.Lock()
+        self.io = ThreadPoolExecutor(max_workers=1, thread_name_prefix='led-status')
+        self.mode = 'idle'
+        self.color = BLACK[0]
+        self.temporary = None
+        self.lease = None
+        self.battery = (None, None)
+        self.battery_job = None
+        self.haptic_jobs = []
+        self.battery_sampled = -math.inf
+        self.boot_phase = 0
 
-    time.sleep(0.3)
+    def close(self):
+        self.io.shutdown(wait=False, cancel_futures=True)
 
-    battery_bar(2)
+    def sample_battery(self, now):
+        if self.battery_job is not None and self.battery_job.done():
+            soc, voltage = self.battery_job.result()
+            self.battery = (soc, voltage) if soc is not None and math.isfinite(soc) else (None, None)
+            self.battery_job = None
+            self.battery_sampled = now
 
-    # Fade out
-    for level in range(50, -1, -2):
-        fill(0, 0, level)
-        time.sleep(0.02)
+    def request_battery(self, now):
+        self.sample_battery(now)
+        if self.battery_job is None and now - self.battery_sampled >= .25:
+            self.battery_job = self.io.submit(self.battery_reader)
 
-    clear()
+    def play(self, effect):
+        self.haptic_jobs = [job for job in self.haptic_jobs if not job.done()]
+        if len(self.haptic_jobs) < 2:
+            self.haptic_jobs.append(self.io.submit(self.haptic, effect))
 
-def idle_animation():
-    global mode
+    def start_temporary(self, kind, now, color=None):
+        self.temporary = kind, now, color
+        if kind in ('battery', 'boot'):
+            self.request_battery(now)
+        if kind == 'boot':
+            self.boot_phase = 0
 
-    phase = 0.0
+    def expire(self, now):
+        if self.lease and now >= self.lease.expires:
+            self.lease = None
 
-    while running:
-        if mode != "idle":
-            time.sleep(0.05)
-            continue
-
-        # Slow, dim blue/purple breathing effect
-        level = int((math.sin(phase) + 1.0) * 10)
-
-        for i in range(LED_COUNT):
-            offset = (i * 4) % 16
-            set_pixel(
-                i,
-                level // 2,
-                0,
-                level + offset // 4
-            )
-
-        show()
-
-        phase += 0.08
-        time.sleep(0.05)
-
-def rainbow_animation():
-    global mode
-
-    offset = 0
-
-    while running:
-        if mode != "rainbow":
-            time.sleep(0.05)
-            continue
-
-        for i in range(LED_COUNT):
-            r, g, b = wheel(
-                (i * 256 // LED_COUNT + offset) & 255
-            )
-
-            # Keep default rainbow sane, not retina-removal mode
-            set_pixel(i, r // 4, g // 4, b // 4)
-
-        show()
-
-        offset = (offset + 2) & 255
-        time.sleep(0.03)
-
-def solid_animation():
-    global mode
-
-    while running:
-        if mode != "solid":
-            time.sleep(0.05)
-            continue
-
-        r, g, b = solid_color
-        fill(r, g, b)
-        time.sleep(0.2)
-
-def process_command(cmd):
-    global mode, solid_color
-
-    parts = cmd.strip().split()
-
-    if not parts:
-        return "ERR empty"
-
-    command = parts[0].lower()
-
-    if command == "off":
-        mode = "off"
-        clear()
-        return "OK"
-
-    if command == "idle":
-        mode = "idle"
-        return "OK"
-
-    if command == "rainbow":
-        mode = "rainbow"
-        return "OK"
-
-    if command == "battery":
-        old = mode
-        mode = "temporary"
-        battery_bar(3)
-        mode = old if old != "temporary" else "idle"
-        return "OK"
-
-    if command == "boot":
-        old = mode
-        mode = "temporary"
-        boot_animation()
-        mode = old if old != "temporary" else "idle"
-        return "OK"
-
-    if command == "color" and len(parts) == 4:
+    def nfc(self, parts, now):
+        if len(parts) < 3 or not re.fullmatch(r'[a-f0-9]{16}', parts[1]):
+            return 'ERR invalid NFC lease'
+        token = parts[1]
+        self.expire(now)
+        if self.lease and self.lease.token != token:
+            return 'ERR NFC lease busy'
+        if parts[2:] == ['release']:
+            self.lease = None
+            return 'OK'
+        if len(parts) != 7 or parts[2] not in EFFECTS or parts[4] not in STAGES:
+            return 'ERR invalid NFC frame'
         try:
-            r = max(0, min(255, int(parts[1])))
-            g = max(0, min(255, int(parts[2])))
-            b = max(0, min(255, int(parts[3])))
-
-            solid_color = (r, g, b)
-            mode = "solid"
-
-            return "OK"
-
+            brightness, completed, total = map(int, (parts[3], parts[5], parts[6]))
         except ValueError:
-            return "ERR bad RGB"
+            return 'ERR invalid NFC frame'
+        if not 1 <= brightness <= MAX_NFC_BRIGHTNESS or not 0 <= completed <= 2048 or not (
+                total == 0 or completed <= total <= 2048):
+            return 'ERR invalid NFC frame'
+        self.lease = Lease(token, parts[2], brightness, parts[4], completed, total, now + LEASE_SECONDS)
+        return 'OK'
 
-    if command == "flash" and len(parts) >= 4:
+    def command(self, command):
+        parts = command.split()
+        if not parts:
+            return 'ERR empty'
+        kind = parts[0].lower()
+        with self.lock:
+            now = self.clock()
+            if kind == 'nfc':
+                return self.nfc(parts, now)
+            if kind == 'nfc-test' and len(parts) == 1:
+                self.expire(now)
+                if self.lease:
+                    return 'ERR NFC scan active'
+                self.start_temporary('index', now)
+                return 'OK'
+            if kind in ('off', 'idle', 'rainbow'):
+                self.mode = kind
+                self.temporary = None
+                return 'OK'
+            if kind in ('battery', 'boot'):
+                self.start_temporary(kind, now)
+                return 'OK'
+            if kind in ('flash', 'color') and len(parts) >= 4:
+                try:
+                    color = tuple(max(0, min(255, int(value))) for value in parts[1:4])
+                except ValueError:
+                    return 'ERR bad RGB'
+                if kind == 'flash':
+                    self.start_temporary('flash', now, color)
+                else:
+                    self.mode = 'solid'
+                    self.color = color
+                    self.temporary = None
+                return 'OK'
+            if kind == 'status':
+                self.request_battery(now)
+                soc, voltage = self.battery
+                mode = 'temporary' if self.temporary else self.mode
+                return f'mode={mode} soc={soc if soc is not None else "unknown"} voltage={voltage if voltage is not None else "unknown"}'
+            return 'ERR unknown command'
+
+    def battery_frame(self, elapsed):
+        soc, _ = self.battery
+        if soc is None:
+            return ((64, 0, 0),) * LED_COUNT if elapsed < .9 and int(elapsed / .15) % 2 == 0 else BLACK
+        color = (100, 0, 0) if soc < 15 else (80, 35, 0) if soc < 40 else (0, 80, 10)
+        count = max(0, min(LED_COUNT, round(soc * LED_COUNT / 100)))
+        return (color,) * count + BLACK[count:]
+
+    def temporary_frame(self, now):
+        kind, start, color = self.temporary
+        elapsed = now - start
+        if kind == 'index':
+            index = int(elapsed / INDEX_SECONDS)
+            if index < LED_COUNT:
+                return BLACK[:index] + ((0, 0, 20),) + BLACK[index + 1:]
+        elif kind == 'flash' and elapsed < .38:
+            return (color,) * LED_COUNT if elapsed < .15 or elapsed >= .23 else BLACK
+        elif kind == 'battery' and elapsed < 3:
+            return self.battery_frame(elapsed)
+        elif kind == 'boot':
+            if elapsed < .56:
+                count = min(LED_COUNT, 1 + int(elapsed / .035))
+                return ((0, 0, 70),) * count + BLACK[count:]
+            if self.boot_phase < 1:
+                self.boot_phase = 1
+                self.play(1)
+            if elapsed < .71:
+                return ((0, 0, 70),) * LED_COUNT
+            if elapsed < .95:
+                count = min(LED_COUNT, 1 + int((elapsed - .71) / .015))
+                return ((0, 50, 100),) * count + ((0, 0, 70),) * (LED_COUNT - count)
+            if self.boot_phase < 2:
+                self.boot_phase = 2
+                self.play(10)
+            if elapsed < 1.25:
+                return ((0, 50, 100),) * LED_COUNT
+            if elapsed < 3.25:
+                return self.battery_frame(elapsed - 1.25)
+            if elapsed < 3.77:
+                level = max(0, 50 - int((elapsed - 3.25) / .02) * 2)
+                return ((0, 0, level),) * LED_COUNT
+        self.temporary = None
+        return None
+
+    def frame(self):
+        with self.lock:
+            now = self.clock()
+            self.expire(now)
+            self.sample_battery(now)
+            if self.temporary:
+                frame = self.temporary_frame(now)
+                if frame is not None:
+                    return frame
+            if self.mode == 'off':
+                return BLACK
+            if self.lease:
+                return nfc_frame(self.lease, now)
+            if self.mode == 'solid':
+                return (self.color,) * LED_COUNT
+            if self.mode == 'rainbow':
+                offset = int(now * 67)
+                return tuple(tuple(channel // 4 for channel in wheel(i * 256 // LED_COUNT + offset))
+                             for i in range(LED_COUNT))
+            level = int((math.sin(now * 1.6) + 1) * 10)
+            return tuple((level // 2, 0, level + i % 4) for i in range(LED_COUNT))
+
+
+class LEDRequest(socketserver.BaseRequestHandler):
+    def handle(self):
+        self.request.settimeout(.2)
         try:
-            r = int(parts[1])
-            g = int(parts[2])
-            b = int(parts[3])
+            data = self.request.recv(1024)
+            # led_ctl uses a newline; retain support for older one-shot clients.
+            if not data or len(data) >= 1024:
+                return
+            reply = self.server.state.command(data.decode('ascii'))
+            self.request.sendall((reply + '\n').encode())
+        except (OSError, UnicodeError):
+            pass
 
-            old = mode
-            mode = "temporary"
 
-            fill(r, g, b)
-            time.sleep(0.15)
-            clear()
-            time.sleep(0.08)
-            fill(r, g, b)
-            time.sleep(0.15)
-            clear()
-
-            mode = old if old != "temporary" else "idle"
-
-            return "OK"
-
-        except ValueError:
-            return "ERR bad RGB"
-
-    if command == "status":
-        soc, voltage = get_battery()
-
-        return (
-            f"mode={mode} "
-            f"soc={soc if soc is not None else 'unknown'} "
-            f"voltage={voltage if voltage is not None else 'unknown'}"
-        )
-
-    return "ERR unknown command"
-
-def socket_server():
-    if os.path.exists(SOCKET_PATH):
-        os.unlink(SOCKET_PATH)
-
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(SOCKET_PATH)
-
-    os.chmod(SOCKET_PATH, 0o666)
-
-    server.listen(5)
-
-    while running:
-        conn, _ = server.accept()
-
+def prepare_socket(path):
+    if not path.exists() and not path.is_symlink():
+        return
+    if not stat.S_ISSOCK(path.lstat().st_mode):
+        raise RuntimeError(f'Refusing to remove a non-socket file at {path}')
+    with socket.socket(socket.AF_UNIX) as probe:
+        probe.settimeout(.2)
         try:
-            data = conn.recv(1024).decode().strip()
-            reply = process_command(data)
-            conn.sendall((reply + "\n").encode())
+            probe.connect(str(path))
+        except ConnectionRefusedError:
+            path.unlink()
+        else:
+            raise RuntimeError(f'LED daemon already listening on {path}')
 
-        except Exception as e:
-            try:
-                conn.sendall(f"ERR {e}\n".encode())
-            except Exception:
-                pass
 
-        finally:
-            conn.close()
-
-try:
-    boot_animation()
-
-    threading.Thread(
-        target=idle_animation,
-        daemon=True
-    ).start()
-
-    threading.Thread(
-        target=rainbow_animation,
-        daemon=True
-    ).start()
-
-    threading.Thread(
-        target=solid_animation,
-        daemon=True
-    ).start()
-
-    socket_server()
-
-finally:
-    clear()
-
+def serve(path, state, draw, stopped, *, mode=0o666):
+    prepare_socket(path)
+    server = socketserver.UnixStreamServer(str(path), LEDRequest)
+    thread = None
     try:
-        os.unlink(SOCKET_PATH)
-    except Exception:
-        pass
+        os.chmod(path, mode)
+        server.state = state
+        thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': .1}, daemon=True)
+        thread.start()
+        previous = None
+        while not stopped.is_set():
+            frame = state.frame()
+            if frame != previous:
+                draw(frame)
+                previous = frame
+            stopped.wait(FRAME_SECONDS)
+    finally:
+        if thread is not None:
+            server.shutdown()
+            thread.join()
+        server.server_close()
+        path.unlink(missing_ok=True)
+        draw(BLACK)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--socket', type=Path, default=Path(SOCKET_PATH))
+    parser.add_argument('--dry-run', action='store_true', help='test with a separate socket and no hardware')
+    args = parser.parse_args()
+    if args.dry_run and args.socket.resolve() == Path(SOCKET_PATH):
+        parser.error('--dry-run requires a separate --socket path')
+    if not args.dry_run and args.socket.resolve() != Path(SOCKET_PATH):
+        parser.error('hardware mode uses the existing PT35 service socket')
+    stopped = threading.Event()
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, lambda *_: stopped.set())
+    if args.dry_run:
+        state = LEDState(battery=lambda: (None, None), haptic=lambda _: None)
+        try:
+            serve(args.socket, state, lambda _: None, stopped, mode=0o600)
+        finally:
+            state.close()
+        return
+    # A second process must never start GPIO12 while the service is active.
+    with os.fdopen(os.open(HARDWARE_LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600), 'r+b') as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        prepare_socket(args.socket)
+        from rpi_ws281x import PixelStrip, Color
+
+        strip = PixelStrip(LED_COUNT, LED_PIN, LED_FREQ_HZ, LED_DMA, LED_INVERT, LED_BRIGHTNESS, LED_CHANNEL)
+        strip.begin()
+
+        def draw(frame):
+            for index, color in enumerate(frame):
+                strip.setPixelColor(index, Color(*color))
+            strip.show()
+
+        state = LEDState()
+        try:
+            state.command('boot')
+            serve(args.socket, state, draw, stopped)
+        finally:
+            state.close()
+
+
+if __name__ == '__main__':
+    main()
