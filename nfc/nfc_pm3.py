@@ -310,10 +310,13 @@ def simulation_eligibility(record):
 
 def simulate(client, port, record, emit):
     image = simulation_image(record)
-    for command, flag in (('hf 15 eload -h', '--file'), ('hf 15 sim -h', '--timeout')):
+    # Custom jenna-slix-r1 was built around the Iceman "hf 15 eload"/
+    # "hf 15 sim -t" flow. Do not add "-u": the image owns the UID,
+    # and patched firmware handles the stateful SLIX-L privacy exchange.
+    for command, option in (('hf 15 eload -h', '-f'), ('hf 15 sim -h', '-t')):
         code, output = run_pm3(client, port, command, timeout=8)
-        if code or flag not in output:
-            raise RuntimeError(f'Connected Iceman did not advertise {command} with {flag}')
+        if code or not re.search(r'(?<![\\w-])' + re.escape(option) + r'(?![\\w-])', output):
+            raise RuntimeError(f'Iceman did not advertise required {option} option in {command}')
     with tempfile.TemporaryDirectory(prefix='pt35-nfc-emulate-') as directory:
         path = Path(directory) / 'pt35-image.json'
         path.write_text(json.dumps(image))
@@ -324,7 +327,7 @@ def simulate(client, port, record, emit):
             raise RuntimeError('Iceman did not confirm emulator memory upload')
     emit('scan_state', f'ISO15693 simulation requested for {SIM_SECONDS} seconds')
     try:
-        code, output = run_pm3(client, port, f'hf 15 sim --timeout {SIM_SECONDS * 1000}',
+        code, output = run_pm3(client, port, f'hf 15 sim -t {SIM_SECONDS * 1000}',
                                timeout=SIM_SECONDS + 6)
         emit('log', output.strip())
         if code or 'Press pm3 button to abort simulation' not in output or 'Done!' not in output:
