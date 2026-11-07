@@ -812,8 +812,7 @@ class NFCWindow(tk.Tk):
                     self.led.result('success')
                 elif result in ('partial', 'failed'):
                     self.led.result('partial')
-                else:
-                    self.led.start(self.settings['led_effect'], int(self.settings['led_brightness']))
+                # Discovery-only tags retain the current scan animation and type indicator.
             if self.newest['protocol'] == 'ISO15693' and self.newest['uid'].startswith('E002'):
                 self.latest_st = self.newest['uid']
             self.update_latest()
