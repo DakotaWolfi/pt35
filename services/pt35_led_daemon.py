@@ -299,13 +299,29 @@ class LEDState:
 
 class LEDRequest(socketserver.BaseRequestHandler):
     def handle(self):
-        self.request.settimeout(.2)
+        deadline = time.monotonic() + .15
+        data = bytearray()
         try:
-            data = self.request.recv(1024)
-            # led_ctl uses a newline; retain support for older one-shot clients.
+            while b'\n' not in data and len(data) < 1024:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self.request.settimeout(remaining)
+                try:
+                    chunk = self.request.recv(1024 - len(data))
+                except TimeoutError:
+                    break
+                if not chunk:
+                    break
+                data.extend(chunk)
+            # Older one-shot clients may omit the line terminator.
             if not data or len(data) >= 1024:
                 return
-            reply = self.server.state.command(data.decode('ascii'))
+            line, newline, tail = data.partition(b'\n')
+            if tail.strip() or (not newline and line.startswith(b'nfc ')):
+                return
+            reply = self.server.state.command(line.decode('ascii'))
+            self.request.settimeout(.15)
             self.request.sendall((reply + '\n').encode())
         except (OSError, UnicodeError):
             pass

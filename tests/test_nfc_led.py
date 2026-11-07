@@ -85,6 +85,15 @@ class SocketTests(unittest.TestCase):
             time.sleep(.02)
         self.fail('LED state change timed out')
 
+    def test_socket_command_can_arrive_in_separate_chunks(self):
+        request = Mock()
+        request.recv.side_effect = [b'nfc 0123456789', b'abcdef pulse 12 read ', b'5 8\n']
+        state = Mock()
+        state.command.return_value = 'OK'
+        led.LEDRequest(request, None, SimpleNamespace(state=state))
+        state.command.assert_called_once_with(f'nfc {TOKEN} pulse 12 read 5 8')
+        request.sendall.assert_called_once_with(b'OK\n')
+
     def test_live_socket_and_client_release_have_single_render_owner(self):
         try:
             with socket.socket(socket.AF_UNIX):
