@@ -53,7 +53,7 @@ The archive has one current JSON record per protocol and identifier. A later deg
 
 ## Automatic reader and protocol detection
 
-**Reader backend → Auto** starts with the internal reader and probes USB Proxmark3 in the background during a watch. It stops the internal RF field before switching to a responsive Proxmark3 with a matching Iceman client. A disconnect returns the watch to the internal reader. Leave the client and port settings blank for discovery. The home screen distinguishes missing device, missing client, permission failure, firmware mismatch, and connection.
+**Reader backend → Auto** starts with the internal reader and probes USB Proxmark3 in the background during a watch. It stops the internal RF field before switching to a responsive Proxmark3 using a compatible Iceman client; differing source revisions are reported, not rejected. A disconnect returns the watch to the internal reader. Leave the client and port settings blank for discovery. The home screen distinguishes missing device, missing client, permission failure, firmware mismatch, and connection.
 
 **Internal protocol → Auto** is the default for fresh settings. It polls NFC-V, NFC-A, NFC-B, and NFC-F in order, reinitializing the ST25R3916 when the technology changes. A detected tag is read in that mode before the sweep continues. NFC-B and NFC-F report discovery only. Existing saved manual choices stay selected until you change them. For troubleshooting use a manual mode or set a different Auto order with `--poll-order ISO15693,NFC-A,NFC-B,NFC-F` (list each mode once).
 
@@ -153,7 +153,7 @@ Profile references are the upstream [NFC-A](https://github.com/m5stack/M5Unit-NF
 
 ### Proxmark3 and Iceman
 
-**Custom firmware compatibility:** The PT35 now automatically searches `~/proxmark3-iceman/client/proxmark3` as well as the original paths. A responsive hardware ping can connect even when the Iceman client and custom PM3 OS report different Git revisions. The mismatch remains visible as an advisory; it is *not* a requirement to flash the PM3. The application probes ISO15693 read-command availability independently, but disables **PM3 simulation** when revisions differ or are unknown. Read-only discovery is suitable for a compatibility test; validate raw reads against a known blank tag before relying on them. Test via `python3 nfc/pt35_nfc.py status --backend proxmark3` after closing the interactive Iceman shell, which otherwise owns the serial device.
+**Custom firmware compatibility:** The PT35 now automatically searches `~/proxmark3-iceman/client/proxmark3` as well as the original paths. A responsive hardware ping can connect even when the Iceman client and custom PM3 OS report different Git revisions. The mismatch remains visible as an advisory; it is *not* a requirement to flash the PM3. The application probes ISO15693 read and simulation commands independently; a differing/unknown source revision is advisory and does not by itself disable **PM3 simulation**. Read-only discovery is suitable for a compatibility test; validate raw reads against a known blank tag before relying on them. Test via `python3 nfc/pt35_nfc.py status --backend proxmark3` after closing the interactive Iceman shell, which otherwise owns the serial device.
 
 First identify the exact Iceman revision already on your device, using its working client or your existing firmware records. Build a matching client from that revision and select the platform of the physical device. For example, after substituting your actual release tag or full commit hash:
 
@@ -162,7 +162,7 @@ bash scripts/install_iceman.sh --platform PM3GENERIC --rev YOUR_FIRMWARE_REVISIO
 python3 nfc/pt35_nfc.py status --backend proxmark3
 ```
 
-The installer asks before installing packages and builds the userspace client under `~/.local/lib/pt35-iceman`. It performs no device flashing. If you already have a matching client, use **Iceman client path** in Settings, `--client` or `PT35_PM3_CLIENT`. Port selection accepts a detected Proxmark3 device path or its stable `/dev/serial/by-id/` symlink. The app checks recognized PM3 USB IDs or an explicit Proxmark descriptor, serial access, a successful hardware ping, and a matching firmware revision. An Iceman mismatch should be addressed by selecting or building the matching client. An unplugged PM3 falls back to the internal reader in Auto mode, and a later responsive PM3 is picked up during a watch.
+The installer asks before installing packages and builds the userspace client under `~/.local/lib/pt35-iceman`. It performs no device flashing. If you already have a matching client, use **Iceman client path** in Settings, `--client` or `PT35_PM3_CLIENT`. Port selection accepts a detected Proxmark3 device path or its stable `/dev/serial/by-id/` symlink. The app checks recognized PM3 USB IDs or an explicit Proxmark descriptor, serial access, a successful hardware ping, and available emulator commands. A version warning is diagnostic rather than a requirement to rebuild or flash the owner's custom firmware. An unplugged PM3 falls back to the internal reader in Auto mode, and a later responsive PM3 is picked up during a watch.
 
 For plug-and-play diagnosis, compare USB enumeration with the app’s redacted status from the PT35 terminal.
 
