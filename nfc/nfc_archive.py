@@ -102,6 +102,13 @@ def _replace_capture(old, new):
     if old_full or old_complete:
         if not complete or not old_indices <= indices or (old_full and not full):
             return False
+        # Do not silently replace one fully verified capture with conflicting
+        # bytes from another fully verified read. Both remain in history.
+        if full or complete:
+            a = {b['index']: b['hex'] for b in old.get('blocks') or []}
+            n = {b['index']: b['hex'] for b in new.get('blocks') or []}
+            if any(index in n and n[index] != value for index, value in a.items()):
+                return False
     # Retain complementary or smaller partial captures instead of silently losing coverage.
     return old_indices <= indices or full
 
@@ -113,7 +120,18 @@ def save_record(root, record):
         old = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
         if not isinstance(old, dict):
             raise ValueError(f'Invalid archive record at {path}')
+        from nfc_capture_history import compare, snapshot, summary
+        comparison = compare(old, record)
+        # Keep all distinct observations, including partial reads and failed
+        # discovery-only attempts. Their original contents are never merged.
+        digest, capture = snapshot(path.parent, record)
+        history = list(old.get('capture_history') or [])
+        if not any(entry.get('id') == digest for entry in history):
+            history.append(summary(digest, capture, comparison))
         merged = {**old, **{k: v for k, v in record.items() if v is not None}}
+        merged['capture_history'] = history
+        merged['scan_count'] = int(old.get('scan_count') or 0) + 1
+        merged['last_comparison'] = comparison
         merged['first_seen_utc'] = old.get('first_seen_utc') or record.get('last_seen_utc') or now()
         merged['last_seen_utc'] = max(filter(None, (old.get('last_seen_utc'),
                                                   record.get('last_seen_utc'), merged['first_seen_utc'])))
