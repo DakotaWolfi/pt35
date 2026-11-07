@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'nfc'))
 from nfc_touch import THEMES, Button, ScrollArea, font_for, label, FONT, LARGE, SMALL
 from nfc_config import DEFAULT_ARCHIVE
+from nfc_archive import range_bytes
+from nfc_ndef import decode_message, extract_message, ndef_area
 
 SOCKET = Path(os.environ.get('PT35_LED_SOCKET', '/run/pt35-led.sock'))
 LOCK = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / ('pt35-launcher-' + str(os.getuid()) + '.lock')
@@ -206,11 +208,56 @@ class Launcher(tk.Tk):
                         'unverified I²C writes.', muted=True, wraplength=520).pack(fill='x')
         for record in tags:
             uid = record['uid']
-            caption = (f"{record.get('protocol', '?')}  {uid}\n"
+            caption = (f"{record.get('protocol', '?')} · {uid}\n"
                        f"{record.get('classification', '?')} · "
                        f"{record.get('dump_status', '?')} · "
                        f"{record.get('scan_count', 1)} scan(s)")
-            label(area, caption, font=SMALL, wraplength=520).pack(fill='x', pady=4)
+            self.add(area, caption, lambda item=record: self.saved_tag_detail(item))
+
+    def saved_tag_detail(self, record):
+        area = self.page('NFC Tag · Saved capture', self.tag_page)
+        uid = record.get('uid', '?')
+        label(area, uid, font=FONT, wraplength=560).pack(fill='x', pady=5)
+        for field, key in (('Protocol', 'protocol'), ('Classification', 'classification'),
+                           ('Manufacturer', 'manufacturer'), ('Read status', 'dump_status'),
+                           ('Last seen', 'last_seen_utc'), ('Scans', 'scan_count')):
+            value = record.get(key, 'unknown')
+            label(area, f'{field}: {value}', font=SMALL, wraplength=560).pack(fill='x', pady=2)
+        history = record.get('capture_history') or []
+        if history:
+            label(area, f'Distinct stored captures: {len(history)}',
+                  font=FONT).pack(fill='x', pady=(8, 4))
+            for entry in reversed(history[-8:]):
+                label(area, f"{entry.get('at', '?')}: {entry.get('comparison', 'unknown')}, "
+                            f"{entry.get('status', 'unknown')} ({entry.get('blocks', 0)} blocks)",
+                      font=SMALL, wraplength=560).pack(fill='x', pady=3)
+        blocks = record.get('blocks') or []
+        label(area, f'Memory: {len(blocks)} readable blocks', font=FONT).pack(fill='x', pady=(8, 4))
+        try:
+            data = range_bytes(record)
+            items = decode_message(extract_message(ndef_area(record, data)) or b'') if data else []
+        except (ValueError, TypeError, KeyError):
+            items = []
+        if items:
+            label(area, 'Decoded NDEF content', font=FONT).pack(fill='x', pady=(8, 4))
+            for item in items[:16]:
+                label(area, item, font=SMALL, wraplength=560).pack(fill='x', pady=3)
+        elif record.get('content_preview'):
+            for item in record['content_preview'][:16]:
+                label(area, str(item), font=SMALL, wraplength=560).pack(fill='x', pady=3)
+        elif blocks:
+            label(area, 'No verified NDEF preview. Raw blocks are shown below.',
+                  muted=True, font=SMALL).pack(fill='x', pady=4)
+        for block in blocks[:24]:
+            try:
+                line = f"{block['index']:04d}  {bytes.fromhex(block['hex']).hex(' ').upper()}"
+            except (ValueError, TypeError, KeyError):
+                continue
+            label(area, line, font=SMALL, wraplength=560).pack(fill='x', pady=1)
+        if len(blocks) > 24:
+            label(area, 'Showing first 24 blocks. Open the reader archive for full memory.',
+                  font=SMALL, muted=True, wraplength=560).pack(fill='x', pady=4)
+        self.add(area, 'Open full NFC archive', lambda: self.launch('reader'))
 
     def led_page(self):
         area = self.page('LED Test · WS2812', self.home)
@@ -218,6 +265,16 @@ class Launcher(tk.Tk):
         label(area, 'Rear-view serpentine: top 0–7 left→right; '
                     'bottom 15–8 left→right. Tests stay dim.',
               muted=True, font=SMALL, wraplength=550).pack(fill='x', pady=6)
+        label(area, 'Physical rear layout (hinge below)', muted=True,
+              font=SMALL).pack(fill='x', pady=(8, 2))
+        for sequence in (tuple(range(8)), tuple(range(15, 7, -1))):
+            strip = tk.Frame(area, bg=self.palette.background)
+            strip.pack(fill='x', pady=3)
+            for index in sequence:
+                tk.Label(strip, text=str(index), bg=self.palette.panel,
+                         fg=self.palette.text, font=font_for(self, SMALL),
+                         padx=2, pady=6, relief='ridge').pack(
+                             side='left', fill='x', expand=True, padx=2)
         self.add(area, 'Read LED daemon status', lambda: self.led_test('status'))
         self.add(area, 'Pixel-by-pixel indexing test', lambda: self.led_test('nfc-test'),
                  'Existing daemon test cycle · refuses while NFC has the LED lease')
