@@ -116,6 +116,41 @@ class IcemanTests(unittest.TestCase):
         self.assertFalse(any(' -u ' in cmd for cmd in commands))
         self.assertFalse(any('sim --timeout' in cmd for cmd in commands))
 
+    def test_em410x_only_accepts_valid_five_byte_lf_ids(self):
+        valid = {'uid': '0F0368568B', 'protocol': 'EM410X', 'read_errors': []}
+        self.assertTrue(pm3.em410x_eligibility(valid)[0])
+        self.assertFalse(pm3.em410x_eligibility({**valid, 'uid': '001122'})[0])
+        self.assertFalse(pm3.em410x_eligibility({**valid, 'protocol': 'NFC-A'})[0])
+        self.assertFalse(pm3.em410x_eligibility({**valid, 'read_errors': ['bad read']})[0])
+
+    def test_em410x_simulation_is_bounded_and_stops_rf(self):
+        from unittest.mock import Mock
+        import subprocess
+        calls = []
+        def fake_run(client, port, command, **options):
+            calls.append((command, options.get('timeout')))
+            if command == 'lf em 410x help':
+                return 0, '  reader    read id\n  sim      simulate identifier'
+            if command.startswith('lf em 410x sim --id '):
+                raise subprocess.TimeoutExpired(command, options.get('timeout'))
+            if command == 'hw break':
+                return 0, 'done'
+            raise AssertionError(command)
+        with patch.object(pm3, 'run_pm3', side_effect=fake_run), \\
+                patch.object(pm3.Path, 'exists', return_value=True):
+            pm3.simulate_em410x('client', '/dev/fake',
+                {'uid': '0F0368568B', 'protocol': 'EM410X', 'read_errors': []}, Mock())
+        self.assertEqual(calls[0][0], 'lf em 410x help')
+        self.assertEqual(calls[1], ('lf em 410x sim --id 0F0368568B', pm3.SIM_SECONDS))
+        self.assertEqual(calls[-1][0], 'hw break')
+
+    def test_em410x_rejects_missing_firmware_command(self):
+        record = {'uid': '0F0368568B', 'protocol': 'EM410X', 'read_errors': []}
+        with patch.object(pm3, 'run_pm3', return_value=(0, '  reader    read ID')) as backend:
+            with self.assertRaisesRegex(RuntimeError, 'did not advertise'):
+                pm3.simulate_em410x('client', '/dev/fake', record, Mock())
+        backend.assert_called_once()
+
     def test_older_ping_and_git_revision_aliases(self):
         result = ('[+] Ping response received in 2 ms\n'
                   'Client.... Iceman/HEAD/cafebad1\nOS........ Iceman/master/v4.123-9-gcafebad1\n')
