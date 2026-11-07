@@ -15,8 +15,10 @@ import pt35_launcher as launcher
 
 class LaunchTests(unittest.TestCase):
     def test_all_launcher_entries_stay_in_git_checkout(self):
+        tag = launcher.target_command('tag')
         reader = launcher.target_command('reader')
         spectrum = launcher.target_command('spectrum')
+        self.assertEqual(Path(tag[-1]), ROOT / 'nfc/pt35_i2c_tag_gui.py')
         self.assertEqual(Path(reader[-1]), ROOT / 'nfc/pt35_nfc_gui.py')
         self.assertEqual(Path(spectrum[1]), ROOT / 'tools/pt35_tools.py')
         with self.assertRaises(ValueError):
