@@ -749,8 +749,9 @@ class NFCWindow(tk.Tk):
              {'state': 'disabled' if self.worker else 'normal'})))
         self.wrap(body, 'Experimental ISO15693 (NFC-V) user-memory emulation only.',
                   font=FONT)
-        self.wrap(body, 'NFC-A / MIFARE / LF emulation and Tonie authentication are not supported.',
-                  muted=True)
+        self.wrap(body, 'NFC-A / MIFARE / LF emulation is not implemented. The custom SLIX-L '
+                  'firmware includes experimental privacy/password handling; real reader '
+                  'authentication still needs to be verified.', muted=True)
         self.wrap(body, f'Maximum {SIM_SECONDS} seconds per run · Stop or PM3 button aborts.',
                   muted=True)
         if 'pm3-simulate' not in self.available_pm3_actions:
@@ -818,8 +819,9 @@ class NFCWindow(tk.Tk):
         self.wrap(body, reason, muted=True)
         self.wrap(body, 'Iceman will temporarily load this verified user-memory image '
                   'into the PM3 emulator; it does not reprogram firmware or your physical tag.')
-        self.wrap(body, 'Only use your own or authorized bench tags. UID and user memory '
-                  'do not reproduce protected authentication.', muted=True)
+        self.wrap(body, 'For your SLIX-L custom firmware, the emulation may handle '
+                  'privacy/password challenges, but this capture only supplies UID and '
+                  'user memory. Test the entire exchange with your own reader/tag.', muted=True)
         if 'pm3-simulate' not in self.available_pm3_actions:
             self.wrap(body, self.pm3_simulation_capability, muted=True)
         self.finish_page()
