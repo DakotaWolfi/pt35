@@ -44,6 +44,14 @@ If starting via SSH, use `DISPLAY=:0 XAUTHORITY="$HOME/.Xauthority" ~/as7341-env
 
 Physical checklist: verify live eight-channel bars and Clear/NIR, LED on/off, Pause/Resume, Recover after intentionally requested reset, then Close (sensor LED off). Avoid running terminal AS7341 tool and new GUI simultaneously: both address I²C 0x39. The new GUI has **not** yet been validated on the real PT35.
 
+### Emulation coverage and hardware boundaries
+
+**Implemented:** Proxmark3 ISO15693 including the existing custom SLIX-L firmware path (verified complete 4-byte-block memory image), and **new Proxmark3 LF EM410x ID-only** emulation from saved 10-hex-digit identifiers. Both require user confirmation, valid archived records and a 10-second software bound. LF simulation verifies Iceman `lf em 410x help` support and sends `lf em 410x sim --id UID`, then requests `hw break`. If hardware stop cannot be confirmed, use the physical PM3 button and verify RF has ceased. No flash, raw tag writing or service restart is performed.
+
+**Internal ST25R3916:** ST's datasheet confirms **NFC-A and NFC-F card emulation/target mode in silicon**; its NFC-V and NFC-B interfaces are reader-only. The PT35's custom Python I²C driver currently implements only initiator/reader polling; it has **no timed target-mode receive/response state machine, activation IRQ wiring or verified RF shutdown sequence**. Therefore, the internal target modes are documented but **not enabled** by this change. Installing an untested card-emulation register profile on the actively used reader would risk disrupting currently working scans. The onboard ST25DV is a separate genuine Type-5 NFC tag and can present its current NDEF contents using the I²C tag app. To implement internal Type-4 NFC-A and NFC-F targets, first validate IRQ/status polling on the M5Stack unit, RF field off on exit and timing against a known reader, then build separate non-invasive target backend.
+
+**PM3 NTAG/Ultralight, MIFARE Classic and FeliCa:** Iceman exposes additional emulator commands on many builds, but PT35's existing captures are not automatically sufficient. The internal NTAG read deliberately archives only **user pages starting at page 4**, omitting original UID/manufacturer, lock and configuration pages. Those cannot be advertised as full-tag images. NFC-A/B/F scanning may contain only identifiers, not the full data and behavior required by their respective card types. The UI explains these limitations rather than offering a misleading or unsafe "clone" action. Full archive format and emulator capability discovery are follow-up tasks, preserving the custom SLIX-L firmware.
+
 ## NFC (work in progress)
 - Internal M5Stack ST25R3916 on I2C bus 1, address 0x50; direct 3.3 V supply (board modified to bypass its original regulator); IRQ not connected.
 - See the [NFC application guide](docs/NFC.md) for installation, archive behavior and the PT35 hardware checklist.
