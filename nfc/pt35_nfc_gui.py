@@ -903,6 +903,8 @@ class NFCWindow(tk.Tk):
             cmd.append('--confirm-emulation')
             if self.experimental_pm3_compat and self.pm3_revision_blocked():
                 cmd.append('--allow-pm3-revision-mismatch')
+            # Explicit acknowledgement applies to this one operation only.
+            self.experimental_pm3_compat = False
         if action == 'watch':
             self.last_rf_bits = None
         self.worker = ScanWorker(cmd, self.events)
