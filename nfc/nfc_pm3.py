@@ -315,7 +315,7 @@ def simulate(client, port, record, emit):
     # and patched firmware handles the stateful SLIX-L privacy exchange.
     for command, option in (('hf 15 eload -h', '-f'), ('hf 15 sim -h', '-t')):
         code, output = run_pm3(client, port, command, timeout=8)
-        if code or not re.search(r'(?<![\\w-])' + re.escape(option) + r'(?![\\w-])', output):
+        if code or not re.search(r'(?<![\w-])' + re.escape(option) + r'(?![\w-])', output):
             raise RuntimeError(f'Iceman did not advertise required {option} option in {command}')
     with tempfile.TemporaryDirectory(prefix='pt35-nfc-emulate-') as directory:
         path = Path(directory) / 'pt35-image.json'
