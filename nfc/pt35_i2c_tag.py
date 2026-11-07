@@ -60,8 +60,6 @@ def read_mem(off, length):
 def write_mem(off, data):
     data = bytes(data)
     check_bounds(off, len(data))
-    for start in range(0, len(data), 4):
-        pass  # Writes are intentionally split below by absolute EEPROM page.
     index = 0
     while index < len(data):
         width = min(4 - off % 4, 4, len(data) - index)
