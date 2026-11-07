@@ -4,7 +4,7 @@ Raspberry Pi 4B-based pocket terminal. This repository is the home for the PT35'
 
 ## Touch launcher (R button)
 
-The new `tools/pt35_launcher.py` is an opt-in dark touchscreen launcher for **NFC Tag**, **NFC Reader**, **Spectrum Analyzer**, and **LED Test**. It uses only the repo checkout; no new hardware service. It preserves the existing terminal-based AS7341 analyzer and launches it in a graphical terminal. The NFC Reader launches the existing Tk NFC GUI; there is no second RF scanning implementation.
+The new `tools/pt35_launcher.py` is an opt-in dark touchscreen launcher for **NFC Tag**, **NFC Reader**, **Spectrum Analyzer**, **LED Test**, and **LRA Haptic Test**. It uses only the repo checkout; no new hardware service. It preserves the existing terminal-based AS7341 analyzer and launches it in a graphical terminal. The NFC Reader launches the existing Tk NFC GUI; there is no second RF scanning implementation.
 
 For a first bench check from an active PT35 desktop session:
 
@@ -25,7 +25,7 @@ The button service already launches `pt35-nfc-menu` on R, so the installer norma
 
 To leave the R mapping unchanged, install the launcher only with `--no-bind-r`. If you need the prior R behavior, restore the exact file printed as the backup by the installer (for example `cp -a ~/.local/bin/pt35-nfc-menu.backup.TIMESTAMP ~/.local/bin/pt35-nfc-menu`). Check the file's real path first; `TIMESTAMP` is not a literal filename.
 
-**NFC Tag** currently provides a read-only overview of the onboard ST25DV and recent locally archived tags; it deliberately does **not** reproduce unverified ST25DV memory/configuration writes from the old tag menu. It is a new foundation for further UI work. **Spectrum Analyzer** retains the existing trusted curses AS7341 tool for now; a native graphical spectrum redesign is a separate enhancement. **LED Test** provides dim temporary color flashes, pixel-order test and battery/status through `/run/pt35-led.sock` only. Hardware validation, small-screen layout and the previous old tag menu's specific functionality still need bench checks.
+**NFC Tag** currently provides a read-only placeholder overview of the onboard ST25DV and recent locally archived tags; the installed legacy menu at `~/.local/bin/pt35-nfc-menu` (and the user's `PT35_XIAO_NFC_Controls_v1.4` package) must be inspected before replacing its I²C configuration functionality. Do not run `--bind-r` until the original is backed up and its functionality is reviewed; it deliberately does **not** reproduce unverified ST25DV memory/configuration writes from the old tag menu. It is a new foundation for further UI work. **Spectrum Analyzer** retains the existing trusted curses AS7341 tool for now; a native graphical spectrum redesign is a separate enhancement. **LED Test** provides dim temporary color flashes, pixel-order test and battery/status through `/run/pt35-led.sock` only. **LRA Haptic Test** calls the already installed `/usr/local/bin/lra_ctl` for status, fixed effects 1/10/47, and stop. It does not issue unbounded RTP commands. Hardware validation, small-screen layout and the previous old tag menu's specific functionality still need bench checks.
 
 ## NFC (work in progress)
 - Internal M5Stack ST25R3916 on I2C bus 1, address 0x50; direct 3.3 V supply (board modified to bypass its original regulator); IRQ not connected.
