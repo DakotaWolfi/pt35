@@ -74,6 +74,8 @@ def lra_command(action, effect=None):
 
 def target_command(name):
     """Use source from the checkout. No hardcoded stale installed NFC scripts."""
+    if name == 'tag':
+        return [sys.executable, str(ROOT / 'nfc/pt35_i2c_tag_gui.py')]
     if name == 'reader':
         return [sys.executable, str(ROOT / 'nfc/pt35_nfc_gui.py')]
     if name == 'spectrum':
@@ -171,7 +173,8 @@ class Launcher(tk.Tk):
 
     def home(self, event=None):
         area = self.page('PT35 · Tools')
-        self.add(area, 'NFC Tag', self.tag_page, 'Onboard ST25DV and saved tag information')
+        self.add(area, 'NFC Tag · I²C', lambda: self.launch('tag'),
+                 'Built-in ST25DV16K NDEF read, format and write')
         self.add(area, 'NFC Reader', lambda: self.launch('reader'),
                  'Internal ST25R3916 and USB Proxmark3 · scans and archive')
         self.add(area, 'Spectrum Analyzer', lambda: self.launch('spectrum'),
@@ -199,77 +202,8 @@ class Launcher(tk.Tk):
         except OSError as exc:
             self.notice.set('Cannot launch: ' + str(exc)[:130])
         else:
-            self.notice.set('Opened ' + ('NFC Reader' if name == 'reader' else 'Spectrum Analyzer'))
-
-    def tag_page(self):
-        area = self.page('NFC Tag · Overview', self.home)
-        label(area, 'Built-in ST25DV16K dynamic NFC tag', font=FONT).pack(fill='x')
-        label(area, 'I²C user/system interfaces: 0x53 / 0x57 (hardware-dependent). '
-                    'This page does not modify the tag or start RF.', font=SMALL,
-                    muted=True, wraplength=520).pack(fill='x', pady=8)
-        present = Path('/dev/i2c-1').exists()
-        label(area, 'I²C bus 1: ' + ('device available' if present else 'device not found'),
-              muted=not present).pack(fill='x', pady=4)
-        self.add(area, 'Open NFC Reader / tag archive', lambda: self.launch('reader'),
-                 'Use the reader to scan, decode and save actual NFC data')
-        self.add(area, 'Refresh saved tags', self.tag_page)
-        tags = latest_tag_records()
-        label(area, f'Recent archived tags ({len(tags)} shown):', font=FONT).pack(fill='x', pady=(12, 4))
-        if not tags:
-            label(area, 'Nothing archived yet. The old tag configuration menu is not replaced by '
-                        'unverified I²C writes.', muted=True, wraplength=520).pack(fill='x')
-        for record in tags:
-            uid = record['uid']
-            caption = (f"{record.get('protocol', '?')} · {uid}\n"
-                       f"{record.get('classification', '?')} · "
-                       f"{record.get('dump_status', '?')} · "
-                       f"{record.get('scan_count', 1)} scan(s)")
-            self.add(area, caption, lambda item=record: self.saved_tag_detail(item))
-
-    def saved_tag_detail(self, record):
-        area = self.page('NFC Tag · Saved capture', self.tag_page)
-        uid = record.get('uid', '?')
-        label(area, uid, font=FONT, wraplength=560).pack(fill='x', pady=5)
-        for field, key in (('Protocol', 'protocol'), ('Classification', 'classification'),
-                           ('Manufacturer', 'manufacturer'), ('Read status', 'dump_status'),
-                           ('Last seen', 'last_seen_utc'), ('Scans', 'scan_count')):
-            value = record.get(key, 'unknown')
-            label(area, f'{field}: {value}', font=SMALL, wraplength=560).pack(fill='x', pady=2)
-        history = record.get('capture_history') or []
-        if history:
-            label(area, f'Distinct stored captures: {len(history)}',
-                  font=FONT).pack(fill='x', pady=(8, 4))
-            for entry in reversed(history[-8:]):
-                label(area, f"{entry.get('at', '?')}: {entry.get('comparison', 'unknown')}, "
-                            f"{entry.get('status', 'unknown')} ({entry.get('blocks', 0)} blocks)",
-                      font=SMALL, wraplength=560).pack(fill='x', pady=3)
-        blocks = record.get('blocks') or []
-        label(area, f'Memory: {len(blocks)} readable blocks', font=FONT).pack(fill='x', pady=(8, 4))
-        try:
-            data = range_bytes(record)
-            items = decode_message(extract_message(ndef_area(record, data)) or b'') if data else []
-        except (ValueError, TypeError, KeyError):
-            items = []
-        if items:
-            label(area, 'Decoded NDEF content', font=FONT).pack(fill='x', pady=(8, 4))
-            for item in items[:16]:
-                label(area, item, font=SMALL, wraplength=560).pack(fill='x', pady=3)
-        elif record.get('content_preview'):
-            for item in record['content_preview'][:16]:
-                label(area, str(item), font=SMALL, wraplength=560).pack(fill='x', pady=3)
-        elif blocks:
-            label(area, 'No verified NDEF preview. Raw blocks are shown below.',
-                  muted=True, font=SMALL).pack(fill='x', pady=4)
-        for block in blocks[:24]:
-            try:
-                line = f"{block['index']:04d}  {bytes.fromhex(block['hex']).hex(' ').upper()}"
-            except (ValueError, TypeError, KeyError):
-                continue
-            label(area, line, font=SMALL, wraplength=560).pack(fill='x', pady=1)
-        if len(blocks) > 24:
-            label(area, 'Showing first 24 blocks. Open the reader archive for full memory.',
-                  font=SMALL, muted=True, wraplength=560).pack(fill='x', pady=4)
-        self.add(area, 'Open full NFC archive', lambda: self.launch('reader'))
+            self.notice.set('Opened ' + {'tag': 'I²C NFC Tag', 'reader': 'NFC Reader',
+                                         'spectrum': 'Spectrum Analyzer'}[name])
 
     def led_page(self):
         area = self.page('LED Test · WS2812', self.home)
