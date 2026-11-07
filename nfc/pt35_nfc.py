@@ -248,6 +248,7 @@ def internal_operation(args, emit, reselect=None):
                 attempts += 1
                 with diagnostics:
                     protocol, result, error = poller.poll()
+                rssi = reader.rf_state.get('rssi_am') if result else None
                 if result and protocol == 'ISO15693' and skip_internal_uid(result[0], args.include_st, args.exclude_uid):
                     result = None
                 if bench:
@@ -266,6 +267,8 @@ def internal_operation(args, emit, reselect=None):
                             last.pop(next(iter(last)))
                         record = new_record(uid, 'internal', dsfid=details[1] if protocol == 'ISO15693' else None,
                                             protocol=protocol)
+                        emit('tag_detected', 'Tag detected', protocol=protocol,
+                             rssi_am=rssi if isinstance(rssi, int) and 0 <= rssi <= 15 else None)
                         progress = progress_events(emit, protocol, 'internal')
                         if protocol in ('ISO15693', 'NFC-A'):
                             progress(0, None)
