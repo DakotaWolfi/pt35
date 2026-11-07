@@ -85,7 +85,9 @@ def backend_choice(args, emit):
     if args.backend == 'internal' and pm3_action:
         raise RuntimeError('This operation requires Proxmark3/Iceman')
     if args.backend != 'internal':
-        link = pm3.connect(args.client, args.port)
+        link = pm3.connect(args.client, args.port,
+                           allow_simulation_mismatch=(args.action == 'pm3-simulate' and
+                                                      args.allow_pm3_revision_mismatch))
         announce_pm3(link, emit)
         if link.state == 'connected':
             if args.action in ('pm3-dump', 'pm3-simulate') and args.action not in link.actions:
@@ -453,6 +455,8 @@ def main():
     p.add_argument('--backend', choices=['auto', 'internal', 'proxmark3'], default='auto')
     p.add_argument('--pm3-mode', choices=pm3.PM3_MODES, default='HF')
     p.add_argument('--confirm-emulation', action='store_true', help='explicitly authorize a 10-second simulation')
+    p.add_argument('--allow-pm3-revision-mismatch', action='store_true',
+                   help='experimental: allow simulation despite a custom Iceman firmware/client revision mismatch')
     p.add_argument('--port', help='select a detected Proxmark3 serial port')
     p.add_argument('--client', help='path to the Iceman client executable')
     p.add_argument('--protocol', choices=('auto', *INTERNAL_PROTOCOLS), default='auto',
@@ -495,6 +499,8 @@ def main():
             p.error('This operation requires a 16-digit ISO15693 UID')
     if args.action == 'pm3-simulate' and not args.confirm_emulation:
         p.error('Simulation requires --confirm-emulation after selecting an authorized bench tag')
+    if args.allow_pm3_revision_mismatch and args.action != 'pm3-simulate':
+        p.error('--allow-pm3-revision-mismatch is only valid for pm3-simulate')
     emit = Events(args.json_lines, collect=bench or args.diagnostics is not None)
     handle_sigterm()
     try:
