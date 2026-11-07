@@ -17,6 +17,8 @@ class NFCLeds:
         self.token = secrets.token_hex(8)
         self.condition = threading.Condition()
         self.frame = None
+        self.protocol = 'none'
+        self.rssi = -1
         self.style = 'sweep'
         self.brightness = 12
         self.until = None
@@ -30,8 +32,16 @@ class NFCLeds:
         with self.condition:
             self.style, self.brightness = style, brightness
             self.frame = ('scan', 0, 0)
+            self.protocol, self.rssi = 'none', -1
             self.until = None
             self.condition.notify()
+
+    def detected(self, protocol, rssi=None):
+        with self.condition:
+            if self.frame is not None:
+                self.protocol = protocol if protocol in ('ISO15693', 'NFC-A', 'NFC-B', 'NFC-F', 'LF') else 'none'
+                self.rssi = rssi if isinstance(rssi, int) and 0 <= rssi <= 15 else -1
+                self.condition.notify()
 
     def reading(self, completed, total):
         with self.condition:
@@ -91,7 +101,7 @@ class NFCLeds:
                     continue
                 if frame is not None:
                     stage, completed, total = frame
-                    message = f'{self.style} {self.brightness} {stage} {completed} {total}'
+                    message = f'{self.style} {self.brightness} {stage} {completed} {total} {self.protocol} {self.rssi}'
                     interval = HEARTBEAT if message == last_frame else UPDATE_INTERVAL
                     due = last_sent + interval - now
                     if due > 0:
