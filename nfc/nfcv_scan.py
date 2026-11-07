@@ -212,6 +212,14 @@ class Chip:
         time.sleep(.006)
         self.update(0x02,setbits=0x48)
         time.sleep(.010)
+    def sample_rssi(self):
+        # Space A RSSI display 0x2D; AM nibble is peak-held for the just-ended RX.
+        # Reading it must never turn a correctly decoded frame into a failed scan.
+        try:
+            self.rf_state['rssi_am'] = self.rd(0x2d) >> 4
+        except OSError:
+            self.rf_state['rssi_am'] = None
+
     def transceive(self, frame, timeout, *, tx_command=0xc5, max_rx=MAX_V_FIFO, check_errors=False,
                    recover_fifo=False):
         """Latch clear-on-read IRQs and retain the original NFC-V FIFO fallback."""
@@ -260,6 +268,7 @@ class Chip:
                     if not size:
                         raise FrameError('fifo', 'RX ended with empty FIFO')
                     raw = self.read(0x9f, size)
+                    self.sample_rssi()
                     complete = True
                     return raw, high, errors
                 if timer & 0x40 and not main & 0x20:
@@ -274,7 +283,9 @@ class Chip:
                         if quiet_sample and (size, high) == quiet_sample[:2]:
                             if size and now - quiet_sample[2] >= .004:
                                 state['fifo_recovered'] = True
-                                return self.read(0x9f, size), high, errors
+                                raw = self.read(0x9f, size)
+                                self.sample_rssi()
+                                return raw, high, errors
                         else:
                             quiet_sample = (size, high, now)
                 time.sleep(.001)
@@ -285,6 +296,7 @@ class Chip:
                 if size:
                     raw = self.read(0x9f, size)
                     state['fifo_recovered'] = True
+                    self.sample_rssi()
                     return raw, high, errors
             raise TimeoutError('Tag did not respond')
         finally:
