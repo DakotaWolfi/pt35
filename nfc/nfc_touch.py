@@ -1,5 +1,6 @@
 """Small Tk widgets for PT35's touch screens."""
 import tkinter as tk
+from tkinter import font as tkfont
 from dataclasses import dataclass
 
 
@@ -35,6 +36,20 @@ def palette_for(parent):
     return getattr(parent.winfo_toplevel(), 'palette', THEMES['dark'])
 
 
+def font_for(parent, spec):
+    top = parent.winfo_toplevel()
+    if not hasattr(top, 'ui_fonts'):
+        return spec
+    if spec not in top.ui_fonts:
+        top.ui_fonts[spec] = tkfont.Font(root=top, family=spec[0], size=round(spec[1] * top.ui_scale),
+                                       weight=spec[2] if len(spec) > 2 else 'normal')
+    return top.ui_fonts[spec]
+
+
+def touch_size(parent, pixels):
+    return round(pixels * getattr(parent.winfo_toplevel(), 'ui_scale', 1))
+
+
 class Button(tk.Button):
     def __init__(self, parent, text, command, *, primary=False, selected=False, lines=1, **kwargs):
         palette = palette_for(parent)
@@ -43,14 +58,14 @@ class Button(tk.Button):
         super().__init__(parent, text=text, command=command, bg=palette.accent if accent else palette.panel,
                          fg=text_color, activebackground=palette.accent_pressed if accent else palette.pressed,
                          activeforeground=text_color, disabledforeground=palette.disabled,
-                         font=FONT, justify='left', relief='flat', borderwidth=0, highlightthickness=0,
-                         padx=8, pady=15, height=lines, takefocus=True, **kwargs)
+                         font=font_for(parent, FONT), justify='left', relief='flat', borderwidth=0, highlightthickness=0,
+                         padx=8, pady=touch_size(parent, 15), height=lines, takefocus=True, **kwargs)
 
 
 def label(parent, text='', *, font=FONT, muted=False, **kwargs):
     palette = palette_for(parent)
     return tk.Label(parent, text=text, bg=palette.background, fg=palette.muted if muted else palette.text,
-                    font=font, anchor='w', justify='left', **kwargs)
+                    font=font_for(parent, font), anchor='w', justify='left', **kwargs)
 
 
 def row(parent, buttons, gap=6):
@@ -69,7 +84,7 @@ class ScrollArea(tk.Frame):
         super().__init__(parent, bg=palette.background)
         self.canvas = tk.Canvas(self, bg=palette.background, highlightthickness=0, yscrollincrement=1)
         self.scrollbar = tk.Scrollbar(self, orient='vertical', command=self.canvas.yview,
-                                     width=44, bg=palette.border, troughcolor=palette.panel,
+                                     width=touch_size(parent, 44), bg=palette.border, troughcolor=palette.panel,
                                      activebackground=palette.accent, borderwidth=0, highlightthickness=0)
         self.canvas.configure(yscrollcommand=self.set_scrollbar)
         self.canvas.pack(side='left', fill='both', expand=True)

@@ -17,18 +17,20 @@ from pathlib import Path
 from nfc_archive import atomic_write, range_bytes, record_bytes, save_record
 from nfc_config import DEFAULT_ARCHIVE
 from nfc_diagnostics import Diagnostics
+from nfc_led import NFCLeds
 from nfc_ndef import decode_message, extract_message, ndef_area
 from nfc_pm3 import SIM_SECONDS, simulation_image
-from nfc_touch import FONT, LARGE, MONO, SMALL, THEMES, Button, ScrollArea, label, row
+from nfc_touch import FONT, LARGE, MONO, SMALL, THEMES, Button, ScrollArea, font_for, label, row, touch_size
 
 BACKEND_SCRIPT = Path(__file__).resolve().with_name('pt35_nfc.py')
 SETTINGS = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'pt35-nfc' / 'settings.json'
-PROTOCOLS = {'ISO15693': 'NFC-V', 'NFC-A': 'NFC-A', 'NFC-B': 'NFC-B', 'NFC-F': 'NFC-F'}
+PROTOCOLS = {'auto': 'Auto', 'ISO15693': 'NFC-V', 'NFC-A': 'NFC-A', 'NFC-B': 'NFC-B', 'NFC-F': 'NFC-F'}
 BACKENDS = {'auto': 'Auto', 'internal': 'Internal', 'proxmark3': 'Proxmark3'}
 PAGE_SIZE = 24
-DEFAULTS = dict(backend='auto', protocol_mode='ISO15693', pm3_mode='HF', blocks='0',
+DEFAULTS = dict(backend='auto', protocol_mode='auto', pm3_mode='HF', blocks='0',
                 include_st=False, exclude_uid=os.environ.get('PT35_NFC_ONBOARD_UID', ''),
-                auto_tonie=True, auto_candidates=False, save_all=False, client='', port='', theme='dark')
+                auto_tonie=True, auto_candidates=False, save_all=False, client='', port='', theme='dark',
+                led_enabled=False, led_effect='sweep', led_brightness='12')
 
 
 def write_local(path, data):
@@ -51,11 +53,14 @@ def load_settings(path):
         if type(value) is type(default):
             values[key] = value
     for key, options in (('backend', BACKENDS), ('protocol_mode', PROTOCOLS),
-                         ('pm3_mode', ('HF', 'LF', 'ISO15693')), ('theme', THEMES)):
+                         ('pm3_mode', ('HF', 'LF', 'ISO15693')), ('theme', THEMES),
+                         ('led_effect', ('sweep', 'pulse', 'minimal'))):
         if values[key] not in options:
             values[key] = DEFAULTS[key]
     if not re.fullmatch(r'-1|[0-9]{1,4}', values['blocks']) or int(values['blocks']) > 2048:
         values['blocks'] = '0'
+    if not re.fullmatch(r'[0-9]{1,2}', values['led_brightness']) or not 1 <= int(values['led_brightness']) <= 32:
+        values['led_brightness'] = DEFAULTS['led_brightness']
     if values['exclude_uid'] and not re.fullmatch(r'E002[0-9A-F]{12}', values['exclude_uid'], re.I):
         values['exclude_uid'] = ''
     return values
@@ -78,6 +83,8 @@ def coverage(record):
     requested = record.get('requested_range') or {}
     readable = len(record.get('blocks') or [])
     if not requested:
+        if record.get('read_capability') == 'discovery_only':
+            return 'Tag identified · discovery only'
         return f'{readable} readable blocks' if readable else 'Tag identified'
     status = {'addressable_memory_complete': 'Full memory', 'requested_range_complete': 'Range complete',
               'partial': 'Partial read', 'failed': 'Read failed'}.get(record.get('dump_status'), 'Captured')
@@ -165,8 +172,11 @@ class NFCWindow(tk.Tk):
         self.title('PT35 NFC Reader')
         self.palette = THEMES['dark']
         self.configure(bg=self.palette.background)
-        self.geometry(f'{min(800, self.winfo_screenwidth())}x{min(480, self.winfo_screenheight())}')
-        self.minsize(480, 320)
+        screen_width, screen_height = self.winfo_screenwidth(), self.winfo_screenheight()
+        self.geometry(f'{min(1100, screen_width)}x{min(700, screen_height)}')
+        self.minsize(min(480, screen_width), min(320, screen_height))
+        self.ui_scale = 1
+        self.ui_fonts = {}
         self.attributes('-fullscreen', fullscreen)
         self.archive = Path(archive)
         self.settings_path = Path(settings)
@@ -175,6 +185,9 @@ class NFCWindow(tk.Tk):
         self.draft = None
         self.ready = False
         self.worker = None
+        self.led = None
+        self.led_operation = False
+        self.read_progress = None
         self.stopping = False
         self.closing = False
         self.had_fault = False
@@ -192,6 +205,9 @@ class NFCWindow(tk.Tk):
         self.archive_dirty = True
         self.status = tk.StringVar(self, value='Loading settings…')
         self.reader = tk.StringVar(self, value='Ready to scan')
+        self.reader_backend = None
+        self.pm3_status = tk.StringVar(self)
+        self.led_status = tk.StringVar(self)
         self.notice = tk.StringVar(self)
         self.layout = tk.Frame(self, bg=self.palette.background)
         self.layout.pack(fill='both', expand=True)
@@ -199,6 +215,25 @@ class NFCWindow(tk.Tk):
         self.submit('load settings', lambda: load_settings(self.settings_path), self.loaded)
         self.after(40, self.drain)
         self.protocol('WM_DELETE_WINDOW', self.close)
+        self.bind('<Configure>', self.resize_ui, add='+')
+
+    def resize_ui(self, event):
+        if event.widget is not self:
+            return
+        scale = max(1, min(1.8, event.width / 640, event.height / 480))
+        if abs(scale - self.ui_scale) < .04:
+            return
+        self.ui_scale = scale
+        for spec, font in self.ui_fonts.items():
+            font.configure(size=round(spec[1] * scale))
+        pending = [self.layout]
+        while pending:
+            widget = pending.pop()
+            if isinstance(widget, Button):
+                widget.configure(pady=touch_size(widget, 15))
+            elif isinstance(widget, ScrollArea):
+                widget.scrollbar.configure(width=touch_size(widget, 44))
+            pending.extend(widget.winfo_children())
 
     def loaded(self, values):
         self.settings = values or dict(DEFAULTS)
@@ -276,6 +311,8 @@ class NFCWindow(tk.Tk):
             ('Tools', self.tools, {})))
         self.wrap(body, textvariable=self.reader, font=LARGE)
         self.wrap(body, textvariable=self.status, muted=True)
+        self.wrap(body, textvariable=self.pm3_status, muted=True, font=SMALL)
+        self.wrap(body, textvariable=self.led_status, muted=True, font=SMALL)
         self.scan_button = Button(body, '', self.toggle_scan, primary=True)
         self.scan_button.pack(fill='x', pady=(7, 10))
         self.sync_scan()
@@ -332,6 +369,12 @@ class NFCWindow(tk.Tk):
         self.setting_edit(body, 'Iceman client path', 'client')
         self.setting_edit(body, 'Proxmark serial port', 'port')
         self.options(body, 'Appearance', 'theme', {'dark': 'Dark', 'light': 'Light'})
+        enabled = self.draft['led_enabled']
+        Button(body, f"NFC LED effects   {'ON' if enabled else 'OFF'}",
+               lambda: self.change('led_enabled', not enabled), selected=enabled, anchor='w').pack(fill='x', pady=3)
+        self.options(body, 'LED search effect', 'led_effect',
+                     {'sweep': 'Sweep', 'pulse': 'Pulse', 'minimal': 'Minimal'})
+        self.setting_edit(body, 'LED brightness', 'led_brightness')
         self.finish_page(position)
 
     def options(self, parent, title, key, choices):
@@ -347,8 +390,8 @@ class NFCWindow(tk.Tk):
     def setting_edit(self, parent, title, key, display=None):
         value = self.draft[key]
         display = display or value or 'Automatic / unset'
-        if len(display) > 48:
-            display = '…' + display[-47:]
+        if len(display) > 40:
+            display = '…' + display[-39:]
         Button(parent, f'{title}\n{display}', lambda: self.edit_setting(title, key),
                lines=2, anchor='w').pack(fill='x', pady=3)
 
@@ -360,6 +403,8 @@ class NFCWindow(tk.Tk):
             hint = 'Enter 0–2048. Zero selects Auto.'
             if initial == '-1':
                 initial = ''
+        elif key == 'led_brightness':
+            hint = 'Enter a dim brightness from 1 to 32.'
         elif key == 'exclude_uid':
             hint = 'Enter the 16-digit ST UID beginning E002, or clear it.'
 
@@ -367,6 +412,10 @@ class NFCWindow(tk.Tk):
             value = value.strip()
             if key == 'blocks':
                 if not re.fullmatch(r'[0-9]{1,4}', value) or int(value) > 2048:
+                    return hint
+                value = str(int(value))
+            elif key == 'led_brightness':
+                if not re.fullmatch(r'[0-9]{1,2}', value) or not 1 <= int(value) <= 32:
                     return hint
                 value = str(int(value))
             elif key == 'exclude_uid':
@@ -386,8 +435,12 @@ class NFCWindow(tk.Tk):
 
     def settings_saved(self, snapshot, path):
         if path:
+            led_changed = any(self.settings[key] != snapshot[key]
+                              for key in ('led_enabled', 'led_effect', 'led_brightness'))
             self.settings = snapshot
-            self.notice.set('Saved · applies to the next scan')
+            if led_changed:
+                self.apply_led_settings()
+            self.notice.set('Settings saved')
 
     def edit_field(self, title, initial, apply, cancel, *, hint=None):
         self.screen = 'editor'
@@ -410,7 +463,7 @@ class NFCWindow(tk.Tk):
         body = self.page(title, cancel_edit, scroll=False,
                          footer=(('Clear', clear, {}), ('Done', done, {'primary': True})))
         palette = self.palette
-        entry = tk.Entry(body, font=FONT, bg=palette.panel, fg=palette.text,
+        entry = tk.Entry(body, font=font_for(body, FONT), bg=palette.panel, fg=palette.text,
                          insertbackground=palette.text, selectbackground=palette.accent,
                          selectforeground=palette.accent_text, highlightbackground=palette.border,
                          highlightcolor=palette.border, highlightthickness=2, relief='flat')
@@ -451,10 +504,11 @@ class NFCWindow(tk.Tk):
         if offset + PAGE_SIZE < len(matches):
             pages.append(('Next ›', lambda: self.move_archive(1), {}))
         body = self.page('Archive', self.home, footer=pages)
-        query_label = ('Search: ' + (self.query if len(self.query) <= 13 else self.query[:13] + '…')) if query else 'Search tags'
-        row(body, [(query_label, self.search_archive, {'primary': True}),
+        row(body, [('Search tags', self.search_archive, {'primary': True}),
                    ('Clear search', lambda: self.set_search(''), {'state': 'normal' if query else 'disabled'}),
                    ('Refresh', self.reload_archive, {})]).pack(fill='x', pady=(1, 6))
+        if query:
+            self.wrap(body, f'Search: {self.query}', muted=True)
         self.wrap(body, f'{len(matches)} matching tags' if self.saved else
                   'Loading archive…' if self.archive_dirty else 'Archive is empty', muted=True)
         for record in matches[offset:offset + PAGE_SIZE]:
@@ -606,7 +660,8 @@ class NFCWindow(tk.Tk):
     def pm3(self):
         self.screen = 'pm3'
         body = self.page('Proxmark3', self.tools)
-        self.wrap(body, textvariable=self.reader, muted=True)
+        self.wrap(body, textvariable=self.pm3_status, muted=True)
+        self.wrap(body, 'HF discovers multiple NFC types. Use LF mode for LF tags.', muted=True)
         self.wrap(body, textvariable=self.status, muted=True)
         enabled = 'disabled' if self.worker else 'normal'
         target = self.current or self.newest
@@ -654,6 +709,16 @@ class NFCWindow(tk.Tk):
         else:
             self.launch('watch')
 
+    def apply_led_settings(self):
+        if self.led_operation and self.settings['led_enabled']:
+            if self.led is None:
+                self.led = NFCLeds()
+            self.led.start(self.settings['led_effect'], int(self.settings['led_brightness']))
+            if self.read_progress is not None:
+                self.led.reading(*self.read_progress)
+        elif self.led is not None:
+            self.led.stop()
+
     def launch(self, action, force=None, uid=None):
         if self.worker or self.closing or not self.ready:
             return
@@ -676,6 +741,9 @@ class NFCWindow(tk.Tk):
         if action == 'watch':
             self.last_rf_bits = None
         self.worker = ScanWorker(cmd, self.events)
+        self.read_progress = None
+        self.led_operation = action in ('watch', 'pm3-dump', 'identify')
+        self.apply_led_settings()
         self.had_fault = False
         self.stopping = False
         self.status.set('Connecting to reader…')
@@ -703,9 +771,13 @@ class NFCWindow(tk.Tk):
         message = item.get('message', '')
         if kind == 'exit':
             self.worker = None
+            self.led_operation = False
+            self.read_progress = None
+            if self.led is not None and not self.closing:
+                self.led.stop(fault=self.had_fault and not self.stopping)
             code = item['code']
             if self.stopping or not self.had_fault:
-                if self.last_rf_bits == 0:
+                if self.reader_backend == 'internal' and self.last_rf_bits == 0:
                     self.status.set('Stopped · RF off')
                 elif code not in (0, 130):
                     self.status.set(f'Reader exited ({code})')
@@ -715,20 +787,45 @@ class NFCWindow(tk.Tk):
             if self.screen == 'pm3' and not self.closing:
                 self.pm3()
             self.sync_scan()
+        elif kind == 'read_progress':
+            protocol = PROTOCOLS.get(item['protocol'], item['protocol'])
+            completed, total = item['completed'], item['total']
+            self.read_progress = completed, total
+            if not self.stopping:
+                self.status.set(f'Reading {protocol} · {completed}/{total} verified' if total else
+                                f'Reading {protocol} · {completed} verified · size unknown')
+                if self.led_operation and self.settings['led_enabled'] and self.led is not None:
+                    self.led.reading(completed, total)
         elif kind == 'tag':
+            self.read_progress = None
             self.newest = item['record']
+            if not self.stopping and self.led_operation and self.settings['led_enabled'] and self.led is not None:
+                result = self.newest.get('dump_status')
+                if result in ('addressable_memory_complete', 'requested_range_complete'):
+                    self.led.result('success')
+                elif result in ('partial', 'failed'):
+                    self.led.result('partial')
+                else:
+                    self.led.start(self.settings['led_effect'], int(self.settings['led_brightness']))
             if self.newest['protocol'] == 'ISO15693' and self.newest['uid'].startswith('E002'):
                 self.latest_st = self.newest['uid']
             self.update_latest()
             self.status.set(coverage(self.newest))
         elif kind == 'archived':
             self.archive_dirty = True
+        elif kind == 'pm3_status':
+            self.pm3_status.set(message[:180])
+            if item['state'] != 'connected':
+                self.available_pm3_actions.clear()
         elif kind == 'backend':
+            self.reader_backend = item['backend']
             self.reader.set(message)
             self.available_pm3_actions = set(item.get('pm3_actions', []))
             self.status.set('Scanning · hold a tag by the antenna')
         elif kind == 'fault':
             self.had_fault = True
+            if not self.stopping and self.led_operation and self.settings['led_enabled'] and self.led is not None:
+                self.led.result('error')
             if item.get('backend') == 'proxmark3':
                 self.available_pm3_actions.clear()
             self.status.set(message[:180])
@@ -759,7 +856,9 @@ class NFCWindow(tk.Tk):
                     result = None
                 if not self.closing:
                     done(result)
-        if self.closing and not self.worker and not self.tasks:
+        if self.led is not None:
+            self.led_status.set(self.led.status)
+        if self.closing and not self.worker and not self.tasks and (self.led is None or not self.led.thread.is_alive()):
             self.io.shutdown(wait=False, cancel_futures=True)
             self.destroy()
         else:
@@ -768,6 +867,8 @@ class NFCWindow(tk.Tk):
     def close(self):
         self.closing = True
         self.stop()
+        if self.led is not None:
+            self.led.close()
 
 
 def main():

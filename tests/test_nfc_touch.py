@@ -6,7 +6,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'nfc'))
@@ -130,6 +130,12 @@ class TouchTests(unittest.TestCase):
         self.assertEqual(self.focused_entry().get(), value)
 
     def test_settings_touch_and_physical_keyboard(self):
+        self.app.geometry('640x480')
+        self.app.update()
+        # The headless X server has no window manager to focus the resized window.
+        self.app.focus_force()
+        self.app.update()
+        self.assertEqual(self.app.settings['protocol_mode'], 'auto')
         self.tap('Settings')
         # Drag over a choice. Release should scroll without changing it.
         backend = self.button('Internal')
@@ -140,7 +146,7 @@ class TouchTests(unittest.TestCase):
                       'All known', '8', '32'):
             self.tap(title)
         self.assertEqual(self.app.draft['blocks'], '32')
-        self.tap('Auto', index=1)
+        self.tap('Auto', index=2)
         self.assertEqual(self.app.draft['blocks'], '0')
         self.tap('Custom block count')
         self.type_text('9999')
@@ -168,14 +174,20 @@ class TouchTests(unittest.TestCase):
         self.tap('Proxmark serial port')
         self.type_text('/dev/ttyACM0')
         self.key('Return')
+        self.tap('NFC LED effects   OFF')
+        self.tap('Pulse')
+        self.tap('LED brightness')
+        self.type_text('10')
+        self.key('Return')
         self.tap('Save settings', reveal=False)
-        self.wait(lambda: 'Saved' in self.app.notice.get())
+        self.wait(lambda: 'saved' in self.app.notice.get())
         saved = json.loads((self.root / 'settings.json').read_text())
         self.assertEqual({key: saved[key] for key in ('backend', 'protocol_mode', 'blocks', 'exclude_uid',
                                                       'client', 'port', 'pm3_mode')},
                          dict(backend='internal', protocol_mode='ISO15693', blocks='12', exclude_uid=UID,
                               client='/opt/Iceman v4/bin/pm3', port='/dev/ttyACM0', pm3_mode='LF'))
         self.assertEqual(saved['legacy_option'], self.legacy['legacy_option'])
+        self.assertEqual((saved['led_enabled'], saved['led_effect'], saved['led_brightness']), (True, 'pulse', '10'))
 
     def test_theme_previews_and_persists(self):
         from nfc_touch import THEMES
@@ -190,7 +202,7 @@ class TouchTests(unittest.TestCase):
         self.tap('Settings')
         self.tap('Light')
         self.tap('Save settings', reveal=False)
-        self.wait(lambda: 'Saved' in self.app.notice.get())
+        self.wait(lambda: 'saved' in self.app.notice.get())
         self.tap('‹ Back', reveal=False)
         self.tap('Exit', reveal=False)
         self.close()
@@ -211,14 +223,25 @@ class TouchTests(unittest.TestCase):
         worker.write_text(
             'import json, time\n'
             'def send(**event): print(json.dumps(event), flush=True)\n'
+            'send(event="pm3_status", message="Iceman missing", state="no_client")\n'
             'send(event="backend", message="Synthetic reader", backend="internal")\n'
+            'send(event="read_progress", protocol="ISO15693", completed=0, total=None)\n'
+            'send(event="read_progress", protocol="ISO15693", completed=1, total=1)\n'
             f'send(event="tag", record={record!r})\n'
             'for _ in range(420): send(event="diagnostic", stage="read_block", result="crc", block=0, uid="private")\n'
             'try:\n    time.sleep(30)\n'
             'except KeyboardInterrupt:\n    send(event="diagnostic", stage="shutdown", result="ok", rf_bits=0)\n')
-        with patch('pt35_nfc_gui.BACKEND_SCRIPT', worker):
+        indicators = Mock()
+        indicators.status = ''
+        indicators.thread.is_alive.return_value = False
+        self.app.settings['led_enabled'] = True
+        with patch('pt35_nfc_gui.BACKEND_SCRIPT', worker), patch('pt35_nfc_gui.NFCLeds', return_value=indicators):
             self.tap('Start scan')
         self.wait(lambda: self.app.newest and self.app.rf.counts['read_block.crc'] == 420)
+        self.assertEqual(self.app.pm3_status.get(), 'Iceman missing')
+        indicators.reading.assert_any_call(0, None)
+        indicators.reading.assert_any_call(1, 1)
+        indicators.result.assert_called_once_with('success')
         self.tap(f'NFC-V  {UID}')
         self.assertIsNotNone(self.app.worker)
         self.tap('Hex / data', reveal=False)
@@ -234,6 +257,7 @@ class TouchTests(unittest.TestCase):
         self.tap('Stop scan', reveal=False)
         self.wait(lambda: self.app.worker is None)
         self.assertEqual(self.app.last_rf_bits, 0)
+        indicators.stop.assert_called_once_with(fault=False)
         self.tap('‹ Back', reveal=False)
         self.tap('‹ Back', reveal=False)
         self.tap('Archive', reveal=False)
@@ -257,6 +281,22 @@ class TouchTests(unittest.TestCase):
         self.assertNotIn(UID, exported)
         self.assertNotIn('private', exported)
         self.assertEqual(json.loads(exported)['counts']['shutdown.ok'], 1)
+
+
+    def test_overscaled_controls_keep_touch_size_and_fit(self):
+        width, height = min(self.app.winfo_screenwidth(), 1280), min(self.app.winfo_screenheight(), 720)
+        if width <= 800 or height <= 480:
+            self.skipTest('overscaled virtual display needed')
+        self.app.geometry(f'{width}x{height}')
+        self.app.update()
+        self.assertGreater(self.app.ui_scale, 1)
+        self.tap('Settings')
+        self.tap('Auto', index=1)
+        self.tap('Proxmark serial port')
+        self.type_text('/dev/ttyACM0')
+        self.key('Return')
+        self.tap('Save settings', reveal=False)
+        self.wait(lambda: 'saved' in self.app.notice.get())
 
 
 if __name__ == '__main__':
