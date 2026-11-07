@@ -62,6 +62,16 @@ def latest_tag_records(root=DEFAULT_ARCHIVE, limit=20):
     return sorted(output, key=lambda r: str(r.get('last_seen_utc', '')), reverse=True)[:limit]
 
 
+def lra_command(action, effect=None):
+    """Bounded user-triggered haptic diagnostics via installed controller."""
+    cli = '/usr/local/bin/lra_ctl'
+    if action in ('status', 'stop') and effect is None:
+        return [cli, action]
+    if action == 'play' and effect in (1, 10, 47) and type(effect) is int:
+        return [cli, action, str(effect)]
+    raise ValueError('Unsupported haptic test request')
+
+
 def target_command(name):
     """Use source from the checkout. No hardcoded stale installed NFC scripts."""
     if name == 'reader':
@@ -168,6 +178,8 @@ class Launcher(tk.Tk):
                  'Existing AS7341 spectrum application in a terminal')
         self.add(area, 'LED Test', self.led_page,
                  'Rear 16-pixel WS2812 strip · shared service, no direct GPIO')
+        self.add(area, 'LRA Haptic Test', self.lra_page,
+                 'DRV2605L motor · predefined feedback effects and status')
         self.add(area, 'Exit', self.destroy)
         self.notice.set('R opens this launcher · A/Enter selects · Y/Esc goes back')
 
@@ -284,6 +296,43 @@ class Launcher(tk.Tk):
         label(area, 'No persistent color change, no service restart, '
                     'and no direct access to the LED data pin.',
               muted=True, font=SMALL, wraplength=550).pack(fill='x', pady=8)
+
+    def lra_page(self):
+        area = self.page('LRA Haptic Test', self.home)
+        label(area, 'DRV2605L · I²C bus 1 · address 0x5A', font=FONT).pack(fill='x')
+        label(area, 'Test existing motor driver without changing its configuration '
+                    'outside the normal effect playback initialization. '
+                    'Use Stop to cancel an active effect.',
+              font=SMALL, muted=True, wraplength=550).pack(fill='x', pady=8)
+        self.add(area, 'Read driver status', lambda: self.lra_test('status'))
+        for effect, title in ((1, 'Strong click'), (10, 'Double click'),
+                              (47, 'Alert pulse')):
+            self.add(area, f'Effect {effect} · {title}',
+                     lambda number=effect: self.lra_test('play', number))
+        self.add(area, 'Stop haptic playback', lambda: self.lra_test('stop'))
+        label(area, 'No continuous real-time playback or automatic effect cycling.',
+              font=SMALL, muted=True, wraplength=550).pack(fill='x', pady=6)
+
+    def lra_test(self, action, effect=None):
+        import threading
+
+        def work():
+            try:
+                argv = lra_command(action, effect)
+                result = subprocess.run(argv, capture_output=True, text=True,
+                                        timeout=4, check=False)
+                message = (result.stdout or result.stderr or
+                           ('Command completed' if result.returncode == 0 else
+                            f'LRA returned exit {result.returncode}')).strip()
+                if result.returncode:
+                    message = f'LRA error ({result.returncode}): ' + message
+            except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                message = 'LRA unavailable: ' + str(exc)
+            try:
+                self.after(0, self.notice.set, message[:220])
+            except RuntimeError:
+                pass
+        threading.Thread(target=work, daemon=True).start()
 
     def led_test(self, command):
         # Nonblocking UI: bounded socket request in a thread, Tk callback for result.
