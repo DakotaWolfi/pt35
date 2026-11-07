@@ -43,6 +43,17 @@ class SpectrumTests(unittest.TestCase):
         warning = spectrum.validate_sample((0, 0, 5000, 4000, 3000, 2000, 1000, 600), 500, 500)
         self.assertIn("zero", warning["warning"])
 
+    def test_all_ten_gauges_are_in_requested_order(self):
+        self.assertEqual(spectrum.GAUGE_LABELS,
+                         ("Clear", "415", "445", "480", "515", "555",
+                          "590", "630", "680", "NIR"))
+        self.assertEqual(spectrum.GAUGE_COLORS[0], "#f2f7fb")
+        self.assertEqual(spectrum.GAUGE_COLORS[-1], "#f07dc6")
+        sample = spectrum.validate_sample(range(8), 111, 222)
+        self.assertEqual(spectrum.gauge_values(sample),
+                         (111, 0, 1, 2, 3, 4, 5, 6, 7, 222))
+        self.assertEqual(spectrum.gauge_values(None), (0,) * 10)
+
     def test_graph_heights_are_only_relative(self):
         self.assertEqual(spectrum.relative_heights([0] * 8, 100), (0,) * 8)
         heights = spectrum.relative_heights([10, 20, 40, 80, 100, 0, 0, 0], 80)
