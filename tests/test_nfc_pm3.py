@@ -112,9 +112,9 @@ class IcemanTests(unittest.TestCase):
             if command == 'hw break':
                 return 0, 'OK'
             raise AssertionError(command)
-        with patch.object(pm3, 'run_pm3', side_effect=fake_client), \\
-                patch.object(pm3.Path, 'exists', return_value=True):
-            pm3.simulate('client', '/dev/fake', record, Mock())
+        with patch.object(pm3, 'run_pm3', side_effect=fake_client):
+            with patch.object(pm3.Path, 'exists', return_value=True):
+                pm3.simulate('client', '/dev/fake', record, Mock())
         self.assertIn('hf 15 sim -t 10000', commands)
         self.assertFalse(any(' -u ' in cmd for cmd in commands))
         self.assertFalse(any('sim --timeout' in cmd for cmd in commands))
