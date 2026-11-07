@@ -31,6 +31,22 @@ COLOR_TESTS = (
 LED_COMMANDS = {'status', 'nfc-test', 'battery', 'boot', 'flash 16 0 0',
                 'flash 0 16 0', 'flash 0 0 16', 'flash 12 6 0', 'flash 10 0 12'}
 
+HOME_TILES = (
+    ('NFC Tag · I²C', 'Built-in ST25DV16K', 'tag'),
+    ('NFC Reader', 'ST25R3916 · Proxmark3', 'reader'),
+    ('Spectrum Analyzer', 'AS7341 · 10 channels', 'spectrum'),
+    ('LED Test', '16 WS2812 LEDs', 'led'),
+    ('LRA Haptic Test', 'DRV2605L motor', 'lra'),
+    ('Exit', 'Close launcher', 'exit'),
+)
+
+
+def home_tile_positions():
+    """Stable two-column, three-row layout for the six launcher actions."""
+    return [(name, row, column) for index, (name, _, _) in enumerate(HOME_TILES)
+            for row, column in [divmod(index, 2)]]
+
+
 
 def led_command(command, socket_path=SOCKET):
     """Only allow a fixed set of existing daemon commands; never own GPIO."""
@@ -172,19 +188,47 @@ class Launcher(tk.Tk):
         return button
 
     def home(self, event=None):
-        area = self.page('PT35 · Tools')
-        self.add(area, 'NFC Tag · I²C', lambda: self.launch('tag'),
-                 'Built-in ST25DV16K NDEF read, format and write')
-        self.add(area, 'NFC Reader', lambda: self.launch('reader'),
-                 'Internal ST25R3916 and USB Proxmark3 · scans and archive')
-        self.add(area, 'Spectrum Analyzer', lambda: self.launch('spectrum'),
-                 'AS7341 live spectrum · touchscreen chart and sensor recovery')
-        self.add(area, 'LED Test', self.led_page,
-                 'Rear 16-pixel WS2812 strip · shared service, no direct GPIO')
-        self.add(area, 'LRA Haptic Test', self.lra_page,
-                 'DRV2605L motor · predefined feedback effects and status')
-        self.add(area, 'Exit', self.destroy)
-        self.notice.set('R opens this launcher · A/Enter selects · Y/Esc goes back')
+        # Fixed 2 × 3 grid fits the native 640×480 PT35 display without
+        # requiring scrolling. Information/status stays BELOW the buttons.
+        if self.frame is not None:
+            self.frame.destroy()
+        self.frame = tk.Frame(self, bg=self.palette.background, padx=10, pady=7)
+        self.frame.pack(fill='both', expand=True)
+        label(self.frame, 'PT35 · Tools', font=LARGE).pack(fill='x', pady=(0, 7))
+        grid = tk.Frame(self.frame, bg=self.palette.background)
+        grid.pack(fill='both', expand=True)
+        for col in range(2):
+            grid.grid_columnconfigure(col, weight=1, uniform='tiles')
+        for row_index in range(3):
+            grid.grid_rowconfigure(row_index, weight=1, uniform='tiles')
+        actions = {
+            'tag': lambda: self.launch('tag'),
+            'reader': lambda: self.launch('reader'),
+            'spectrum': lambda: self.launch('spectrum'),
+            'led': self.led_page,
+            'lra': self.lra_page,
+            'exit': self.destroy,
+        }
+        for index, (name, subtitle, key) in enumerate(HOME_TILES):
+            row_index, column = divmod(index, 2)
+            tile = tk.Frame(grid, bg=self.palette.panel)
+            tile.grid(row=row_index, column=column, sticky='nsew', padx=4, pady=4)
+            tile.grid_rowconfigure(0, weight=1)
+            tile.grid_columnconfigure(0, weight=1)
+            Button(tile, name, actions[key], primary=(index == 0),
+                   anchor='center', justify='center', wraplength=220,
+                   padx=4, pady=5).grid(row=0, column=0, sticky='nsew')
+            label(tile, subtitle, font=SMALL, muted=True, anchor='center',
+                  justify='center', wraplength=220).grid(row=1, column=0, sticky='ew',
+                                                        pady=(0, 3))
+        info = tk.Frame(self.frame, bg=self.palette.background)
+        info.pack(fill='x', pady=(6, 0))
+        label(info, 'R: launcher · A/Enter: select · Y/Esc: back',
+              font=SMALL, muted=True, wraplength=610).pack(fill='x')
+        label(info, textvariable=self.notice, font=SMALL, muted=True,
+              wraplength=610).pack(fill='x')
+        self.notice.set('Ready · Five tools and Exit')
+
 
     def go_home(self, event=None):
         self.home()
