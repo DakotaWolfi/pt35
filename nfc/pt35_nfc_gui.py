@@ -787,6 +787,9 @@ class NFCWindow(tk.Tk):
             if self.screen == 'pm3' and not self.closing:
                 self.pm3()
             self.sync_scan()
+        elif kind == 'tag_detected':
+            if not self.stopping and self.led_operation and self.settings['led_enabled'] and self.led is not None:
+                self.led.detected(item.get('protocol', ''), item.get('rssi_am'))
         elif kind == 'read_progress':
             protocol = PROTOCOLS.get(item['protocol'], item['protocol'])
             completed, total = item['completed'], item['total']
@@ -799,6 +802,10 @@ class NFCWindow(tk.Tk):
         elif kind == 'tag':
             self.read_progress = None
             self.newest = item['record']
+            if self.led is not None and self.led_operation and self.settings['led_enabled']:
+                # PM3 has no comparable per-tag RSSI; internal discovery already sent one.
+                if self.newest.get('backend') == 'proxmark3':
+                    self.led.detected(self.newest.get('protocol', ''), None)
             if not self.stopping and self.led_operation and self.settings['led_enabled'] and self.led is not None:
                 result = self.newest.get('dump_status')
                 if result in ('addressable_memory_complete', 'requested_range_complete'):
