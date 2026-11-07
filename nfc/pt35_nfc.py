@@ -14,7 +14,8 @@ from functools import partial
 from pathlib import Path
 
 import nfc_pm3 as pm3
-from nfc_archive import atomic_write, record_bytes, is_known_tonie, migrate_archive, now, record_path, save_record
+from nfc_archive import atomic_write, record_bytes, range_bytes, is_known_tonie, migrate_archive, now, record_path, save_record
+from nfc_ndef import extract_message, ndef_area, decode_message
 from nfc_capture_history import compare
 from nfc_diagnostics import Diagnostics, safe_event
 from nfc_poll import MODES, POLL, configure, read_ntag
@@ -159,6 +160,22 @@ def tag_event(args, emit, record):
                               'not_identified_as_tonie')
     if known:
         record.update(classification='known_tonie', classification_verified=True)
+    # Classify ordinary NDEF payloads only when a complete verified range
+    # supports decoding. Arbitrary partial bytes must not be treated as a card.
+    if not known:
+        try:
+            data = range_bytes(record)
+            decoded = decode_message(extract_message(ndef_area(record, data)) or b'') if data else []
+        except (ValueError, KeyError, TypeError):
+            decoded = []
+        if decoded:
+            record['content_preview'] = decoded[:16]
+            if decoded[0] == 'Business card (vCard)':
+                record.update(classification='business_card', classification_verified=True)
+            elif any(item.startswith('URI: ') for item in decoded):
+                record.update(classification='ndef_link', classification_verified=True)
+            elif any(item.startswith('Text: ') for item in decoded):
+                record.update(classification='ndef_text', classification_verified=True)
     uid = record['uid']
     # All scans, even partial/discovery-only ones, are saved LOCALLY. Invalid
     # frames are never silently passed off as verified blocks.
