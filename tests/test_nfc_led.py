@@ -37,11 +37,32 @@ class StateTests(unittest.TestCase):
         self.assertEqual(self.state.command(f'nfc {TOKEN} sweep 12 read 7 16'), 'OK')
         frame = self.state.frame()
         self.assertEqual({i for i, color in enumerate(frame) if color != (0, 0, 0)},
-                         {0, 15, 1, 14, 2, 13})
+                         {0, 1, 2})
         self.assertEqual(self.state.command(f'nfc {TOKEN} sweep 12 read 16 16'), 'OK')
-        self.assertEqual(self.state.frame(), ((0, 12, 3),) * 16)
+        self.assertEqual(self.state.frame(), ((0, 12, 3),) * 8 + led.BLACK[8:])
         self.state.command(f'nfc {TOKEN} release')
         self.assertEqual(self.state.frame(), ((1, 2, 3),) * 16)
+
+    def test_top_progress_and_bottom_technology_mapping(self):
+        self.assertEqual(self.state.command(f'nfc {TOKEN} sweep 12 read 3 8 ISO15693 15'), 'OK')
+        frame = self.state.frame()
+        self.assertEqual([i for i in range(8) if frame[i] != led.BLACK[i]], [0, 1, 2])
+        self.assertEqual([i for i in led.BOTTOM_LEFT_TO_RIGHT if frame[i] != led.BLACK[i]],
+                         list(led.BOTTOM_LEFT_TO_RIGHT))
+        self.assertEqual(self.state.command(f'nfc {TOKEN} sweep 12 scan 0 0 NFC-A -1'), 'OK')
+        frame = self.state.frame()
+        self.assertEqual([i for i in led.BOTTOM_LEFT_TO_RIGHT if frame[i] != led.BLACK[i]], [15])
+        self.assertGreater(frame[15][1], frame[15][0])
+        self.assertEqual(self.state.command(f'nfc {TOKEN} sweep 12 read 2 8 NFC-B 4'), 'OK')
+        frame = self.state.frame()
+        self.assertEqual([i for i in led.BOTTOM_LEFT_TO_RIGHT if frame[i] != led.BLACK[i]], [15, 14, 13])
+        self.assertGreater(frame[15][0], frame[15][2])
+        self.assertEqual(self.state.command(f'nfc {TOKEN} sweep 12 scan 0 0 ISO15693 16'),
+                         'ERR invalid NFC signal')
+
+    def test_rssi_zero_is_no_bar_not_a_fake_minimum(self):
+        self.state.command(f'nfc {TOKEN} minimal 12 scan 0 0 NFC-F 0')
+        self.assertEqual([i for i in led.BOTTOM_LEFT_TO_RIGHT if self.state.frame()[i] != led.BLACK[i]], [])
 
     def test_lost_process_lease_expires_and_other_clients_cannot_override_it(self):
         self.state.command('rainbow')
@@ -163,7 +184,7 @@ class SocketTests(unittest.TestCase):
                 client.close()
                 client.thread.join(2)
                 state.close()
-        self.assertIn('pulse 12 read 5 8', ''.join(messages))
+        self.assertIn('pulse 12 read 5 8 none -1', ''.join(messages))
         self.assertTrue(messages[-1].endswith('release\n'))
 
     def test_missing_socket_does_not_raise_in_caller(self):
