@@ -14,7 +14,7 @@ CAPTURE_KEYS = ('uid', 'protocol', 'backend', 'last_seen_utc', 'classification',
                 'geometry_known', 'capture_format', 'requested_blocks',
                 'requested_range_complete', 'addressable_memory_complete',
                 'system_info', 'verification', 'memory_start', 'cc', 'dsfid',
-                'read_capability', 'discovery', 'tonie_status')
+                'read_capability', 'discovery', 'tonie_status', 'content_preview')
 
 
 def evidence(record):
