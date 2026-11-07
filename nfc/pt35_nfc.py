@@ -81,7 +81,7 @@ def announce_pm3(link, emit):
 
 
 def backend_choice(args, emit):
-    pm3_action = args.action in ('identify', 'pm3-shell', 'pm3-dump', 'pm3-simulate')
+    pm3_action = args.action in ('identify', 'pm3-shell', 'pm3-dump', 'pm3-simulate', 'pm3-em410x')
     if args.backend == 'internal' and pm3_action:
         raise RuntimeError('This operation requires Proxmark3/Iceman')
     if args.backend != 'internal':
@@ -345,6 +345,12 @@ def pm3_operation(args, emit, client, port, actions=()):
                 raise ValueError('Archive UID does not match selected tag')
             pm3.simulate(client, port, record, emit)
             return
+        if args.action == 'pm3-em410x':
+            record = json.loads(record_path(args.archive, args.uid, 'EM410X').read_text(encoding='utf-8'))
+            if record.get('uid') != args.uid or record.get('protocol') != 'EM410X':
+                raise ValueError('EM410x archive identity does not match selected tag')
+            pm3.simulate_em410x(client, port, record, emit)
+            return
         try:
             if args.action == 'pm3-dump':
                 record = new_record(args.uid, 'proxmark3')
@@ -450,7 +456,7 @@ def main():
     p = argparse.ArgumentParser(description='PT35 NFC dual-reader and local archive')
     p.add_argument('--version', action='version', version=f'PT35 NFC {VERSION}')
     p.add_argument('action', choices=['status', 'scan', 'watch', 'list', 'show', 'identify', 'pm3-shell',
-                                       'migrate-archive', 'pm3-dump', 'pm3-simulate', 'rf-bench'], nargs='?', default='scan')
+                                       'migrate-archive', 'pm3-dump', 'pm3-simulate', 'pm3-em410x', 'rf-bench'], nargs='?', default='scan')
     p.add_argument('uid', nargs='?', help='tag identifier for show, pm3-dump or pm3-simulate')
     p.add_argument('--backend', choices=['auto', 'internal', 'proxmark3'], default='auto')
     p.add_argument('--pm3-mode', choices=pm3.PM3_MODES, default='HF')
@@ -497,7 +503,11 @@ def main():
         args.uid = (args.uid or '').upper()
         if not re.fullmatch(r'E0[0-9A-F]{14}', args.uid):
             p.error('This operation requires a 16-digit ISO15693 UID')
-    if args.action == 'pm3-simulate' and not args.confirm_emulation:
+    if args.action == 'pm3-em410x':
+        args.uid = (args.uid or '').upper()
+        if not re.fullmatch(r'[0-9A-F]{10}', args.uid):
+            p.error('EM410x simulation requires a 10-digit hex ID')
+    if args.action in ('pm3-simulate', 'pm3-em410x') and not args.confirm_emulation:
         p.error('Simulation requires --confirm-emulation after selecting an authorized bench tag')
     if args.allow_pm3_revision_mismatch and args.action != 'pm3-simulate':
         p.error('--allow-pm3-revision-mismatch is only valid for pm3-simulate')
