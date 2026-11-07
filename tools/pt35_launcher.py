@@ -215,12 +215,14 @@ class Launcher(tk.Tk):
             tile.grid(row=row_index, column=column, sticky='nsew', padx=4, pady=4)
             tile.grid_rowconfigure(0, weight=1)
             tile.grid_columnconfigure(0, weight=1)
-            Button(tile, name, actions[key], primary=(index == 0),
-                   anchor='center', justify='center', wraplength=220,
-                   padx=4, pady=5).grid(row=0, column=0, sticky='nsew')
-            label(tile, subtitle, font=SMALL, muted=True, anchor='center',
-                  justify='center', wraplength=220).grid(row=1, column=0, sticky='ew',
-                                                        pady=(0, 3))
+            button = Button(tile, name, actions[key], primary=(index == 0),
+                            wraplength=220)
+            button.configure(anchor='center', justify='center', padx=4, pady=5)
+            button.grid(row=0, column=0, sticky='nsew')
+            subtitle_label = label(tile, subtitle, font=SMALL, muted=True,
+                                   wraplength=220)
+            subtitle_label.configure(anchor='center', justify='center')
+            subtitle_label.grid(row=1, column=0, sticky='ew', pady=(0, 3))
         info = tk.Frame(self.frame, bg=self.palette.background)
         info.pack(fill='x', pady=(6, 0))
         label(info, 'R: launcher · A/Enter: select · Y/Esc: back',
