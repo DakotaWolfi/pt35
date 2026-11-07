@@ -38,7 +38,7 @@ PROTOCOL_COLORS = {'ISO15693': (0, 2, 4), 'NFC-A': (0, 4, 1),
                    'LF': (4, 0, 1)}
 BLACK = ((0, 0, 0),) * LED_COUNT
 EFFECTS = {'sweep', 'pulse', 'minimal'}
-STAGES = {'scan', 'read', 'success', 'partial', 'error'}
+STAGES = {'scan', 'read', 'success', 'partial', 'error', 'hold', 'same', 'improved', 'changed', 'uncertain'}
 
 
 def battery_sysfs():
@@ -114,10 +114,15 @@ def nfc_frame(lease, now):
         count = lease.completed * len(TOP_ROW) // lease.total
         for i in TOP_ROW[:count]:
             frame[i] = (0, brightness, max(1, brightness // 4))
-    elif lease.stage in ('success', 'partial', 'error'):
+    elif lease.stage in ('success', 'partial', 'error', 'same', 'improved', 'changed', 'uncertain', 'hold'):
         color = {'success': (0, brightness, 0),
                  'partial': (brightness, brightness // 3, 0),
-                 'error': (brightness, 0, 0)}[lease.stage]
+                 'error': (brightness, 0, 0),
+                 'same': (0, brightness // 2, brightness),
+                 'improved': (brightness // 3, brightness, 0),
+                 'changed': (brightness, 0, brightness),
+                 'uncertain': (brightness, brightness // 2, 0),
+                 'hold': (0, 0, max(1, brightness // 5))}[lease.stage]
         for i in TOP_ROW:
             frame[i] = color
     elif lease.effect == 'minimal':
