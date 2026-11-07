@@ -116,6 +116,14 @@ class IcemanTests(unittest.TestCase):
         self.assertFalse(any(' -u ' in cmd for cmd in commands))
         self.assertFalse(any('sim --timeout' in cmd for cmd in commands))
 
+    def test_em410x_cli_requires_confirmation_and_exact_uid(self):
+        for argv in (['pt35_nfc.py', 'pm3-em410x', '0F0368568B'],
+                     ['pt35_nfc.py', 'pm3-em410x', 'INVALID', '--confirm-emulation']):
+            with patch('sys.argv', argv), patch('sys.stderr'):
+                with self.assertRaises(SystemExit) as failure:
+                    main()
+                self.assertEqual(failure.exception.code, 2)
+
     def test_em410x_only_accepts_valid_five_byte_lf_ids(self):
         valid = {'uid': '0F0368568B', 'protocol': 'EM410X', 'read_errors': []}
         self.assertTrue(pm3.em410x_eligibility(valid)[0])
