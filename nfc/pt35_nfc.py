@@ -15,6 +15,7 @@ from pathlib import Path
 
 import nfc_pm3 as pm3
 from nfc_archive import atomic_write, record_bytes, is_known_tonie, migrate_archive, now, record_path, save_record
+from nfc_capture_history import compare
 from nfc_diagnostics import Diagnostics, safe_event
 from nfc_poll import MODES, POLL, configure, read_ntag
 from nfc_config import DEFAULT_ARCHIVE, LEGACY_ARCHIVE, handle_sigterm, reader_lock
@@ -142,7 +143,7 @@ def auto_watch(args, emit):
             # internal_operation has already cleared TX/RX and released I2C.
             announce_pm3(link, emit)
             try:
-                pm3_operation(args, emit, link.client, link.port)
+                pm3_operation(args, emit, link.client, link.port, link.actions)
                 return 0
             except (OSError, subprocess.TimeoutExpired):
                 emit('pm3_status', 'Proxmark3 connection lost · using internal reader', state='unresponsive')
@@ -159,14 +160,23 @@ def tag_event(args, emit, record):
     if known:
         record.update(classification='known_tonie', classification_verified=True)
     uid = record['uid']
-    emit('tag', f"FOUND {uid} | {record['protocol']} | {record['dump_status']}", record=record)
-    if args.save or (args.auto_tonie and known) or (args.auto_candidates and candidate):
-        try:
-            path = save_record(args.archive, record)
-        except (OSError, ValueError) as exc:
-            emit('fault', f'Archive save failed: {exc}')
-        else:
-            emit('archived', f'Archived {uid}', path=str(path))
+    # All scans, even partial/discovery-only ones, are saved LOCALLY. Invalid
+    # frames are never silently passed off as verified blocks.
+    try:
+        path = record_path(args.archive, uid, record['protocol'])
+        previous = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+        comparison = compare(previous, record)
+    except (OSError, ValueError, TypeError):
+        comparison = 'unknown'
+    record['rescan_comparison'] = comparison
+    emit('tag', f"FOUND {uid} | {record['protocol']} | {record['dump_status']}",
+         record=record, comparison=comparison)
+    try:
+        path = save_record(args.archive, record)
+    except (OSError, ValueError) as exc:
+        emit('fault', f'Archive save failed: {exc}')
+    else:
+        emit('archived', f'Archived {uid}', path=str(path), comparison=comparison)
 
 
 class InternalPoller:
@@ -305,7 +315,7 @@ def internal_operation(args, emit, reselect=None):
             reader.shutdown()
 
 
-def pm3_operation(args, emit, client, port):
+def pm3_operation(args, emit, client, port, actions=()):
     with reader_lock(Path(port).name):
         if args.action == 'pm3-shell':
             subprocess.run([client, '-p', port], check=True)
@@ -344,13 +354,33 @@ def pm3_operation(args, emit, client, port):
                     for protocol, uid in tags:
                         key = (protocol, uid)
                         current = time.monotonic()
-                        if current - last.get(key, float('-inf')) >= args.repeat_after:
+                        previous_seen, previous_read = last.get(key, (0.0, -1e9))
+                        # Presenting the tag again after absence rereads it;
+                        # an unchanged held tag is retried only periodically.
+                        re_presented = current - previous_seen >= 1.5
+                        retry_due = current - previous_read >= min(args.repeat_after, 5.0)
+                        if re_presented or retry_due:
                             if len(last) >= 256 and key not in last:
                                 last.pop(next(iter(last)))
-                            last[key] = current
                             record = new_record(uid, 'proxmark3', protocol=protocol)
                             record['pm3_log'] = output.strip()[-12000:]
+                            if protocol == 'ISO15693' and 'pm3-dump' in actions:
+                                # Read-only addressed ISO15693, capped so the PM3
+                                # scanner is not blocked by a huge requested range.
+                                progress = progress_events(emit, protocol, 'proxmark3')
+                                progress(0, None)
+                                try:
+                                    record.update(read_memory(
+                                        pm3.PM3Reader(client, port), uid, args.blocks,
+                                        args.verbose, cap=32, progress=progress))
+                                except (FrameError, TimeoutError, ValueError) as exc:
+                                    record['read_errors'].append(failure(exc))
+                                    record['dump_status'] = 'failed'
+                            else:
+                                record['read_capability'] = 'discovery_only'
                             tag_event(args, emit, record)
+                            previous_read = time.monotonic()
+                        last[key] = (time.monotonic(), previous_read)
                         found = True
                     if not tags and 'Valid ' in output and args.action != 'identify' and not args.verbose:
                         emit('log', f'{mode} result has no supported structured identifier:\n{output.strip()}')
