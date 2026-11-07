@@ -47,8 +47,8 @@ def decode_vcard(payload):
     text = payload.decode('utf-8-sig', errors='replace')
     # vCard folding uses one leading whitespace on continuation lines.
     lines = []
-    for line in text.replace('\\r\\n', '\\n').split('\\n'):
-        if line.startswith((' ', '\\t')) and lines:
+    for line in text.replace('\r\n', '\n').split('\n'):
+        if line.startswith((' ', '\t')) and lines:
             lines[-1] += line[1:]
         else:
             lines.append(line)
@@ -61,8 +61,8 @@ def decode_vcard(payload):
         key = field.split(';', 1)[0].upper()
         if not sep or key not in names:
             continue
-        value = value.replace('\\\\n', ' · ').replace('\\\\N', ' · ').replace('\\\\,', ',')
-        value = value.replace('\\\\;', ';').replace('\\\\\\\\', '\\\\')
+        value = value.replace('\\n', ' · ').replace('\\N', ' · ').replace('\\,', ',')
+        value = value.replace('\\;', ';').replace('\\\\', '\\')
         # Limit very large cards and avoid rendering embedded controls.
         value = ''.join(char if char.isprintable() else ' ' for char in value)[:240].strip()
         if value:
