@@ -88,7 +88,7 @@ class IcemanTests(unittest.TestCase):
         record = {'uid': UID, 'protocol': 'ISO15693', 'blocks': [{'index': 0, 'hex': '00000000'}],
                   'read_errors': []}
         set_coverage(record, 1, {'blocks': 1, 'size': 4})
-        responses = [(0, '--file'), (0, '--timeout'), (0, 'Memory image not matching')]
+        responses = [(0, 'options: -f --file'), (0, 'options: -t --timeout'), (0, 'Memory image not matching')]
         with patch.object(pm3, 'run_pm3', side_effect=responses) as client:
             with self.assertRaisesRegex(RuntimeError, 'did not confirm emulator'):
                 pm3.simulate('client', '/dev/fake', record, Mock())
@@ -108,7 +108,7 @@ class IcemanTests(unittest.TestCase):
             if command.startswith('hf 15 eload -f '):
                 return 0, 'uploaded 4 bytes to emulator memory'
             if command == 'hf 15 sim -t 10000':
-                return 0, 'Press pm3 button to abort simulation\\nDone!'
+                return 0, 'Press pm3 button to abort simulation\nDone!'
             if command == 'hw break':
                 return 0, 'OK'
             raise AssertionError(command)
