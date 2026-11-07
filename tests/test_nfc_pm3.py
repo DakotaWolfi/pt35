@@ -85,6 +85,18 @@ class IcemanTests(unittest.TestCase):
         self.assertIsNone(pm3.version_fault(0, result))
         self.assertIn('mismatch', pm3.version_fault(0, result.replace('-gcafebad1', '-gbedface0')))
 
+    def test_build_binary_is_preferred_to_upstream_shell_launcher(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            launcher = root / 'proxmark3/pm3'
+            binary = launcher.parent / 'client/build/proxmark3'
+            binary.parent.mkdir(parents=True)
+            for path in (launcher, binary):
+                path.touch(mode=0o755)
+            with patch.object(pm3.Path, 'home', return_value=root), patch.dict(os.environ, clear=True):
+                self.assertEqual(pm3.pm3_client(), str(binary))
+                self.assertEqual(pm3.pm3_client(str(launcher)), str(binary))
+
     def test_usb_identity_without_a_product_name(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

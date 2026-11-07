@@ -55,13 +55,20 @@ def pm3_client(configured=None):
     override = configured or os.environ.get('PT35_PM3_CLIENT')
     paths = [Path.home() / '.local/lib/pt35-iceman/current/client/proxmark3',
              Path.home() / 'proxmark3/client/proxmark3',
-             Path.home() / 'proxmark3/pm3', '/usr/local/bin/proxmark3',
-             Path.home() / '.local/bin/proxmark3', shutil.which('proxmark3'), shutil.which('pm3')]
+             Path.home() / 'proxmark3/client/build/proxmark3', '/usr/local/bin/proxmark3',
+             Path.home() / '.local/bin/proxmark3', shutil.which('proxmark3')]
     for value in ([override] if override else paths):
         if value:
-            path = Path(value).expanduser()
-            if path.is_file() and os.access(path, os.X_OK):
-                return str(path.resolve())
+            path = Path(value).expanduser().resolve()
+            candidates = [path]
+            if path.name == 'pm3':
+                # The upstream shell launcher forks the binary, which can
+                # otherwise keep a serial port and the child's pipes open.
+                candidates = [path.parent / relative for relative in (
+                    'client/proxmark3', 'client/build/proxmark3', 'proxmark3')] + candidates
+            for candidate in candidates:
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    return str(candidate.resolve())
     return None
 
 
@@ -88,7 +95,6 @@ def run_pm3(client, port, command, timeout=20, cwd=None, cancel=None):
                     continue
         except BaseException:
             proc.kill()
-            proc.communicate()
             raise
 
 
