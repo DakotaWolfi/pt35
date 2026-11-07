@@ -371,11 +371,14 @@ def pm3_operation(args, emit, client, port, actions=()):
                     for protocol, uid in tags:
                         key = (protocol, uid)
                         current = time.monotonic()
-                        previous_seen, previous_read = last.get(key, (0.0, -1e9))
-                        # Presenting the tag again after absence rereads it;
-                        # an unchanged held tag is retried only periodically.
+                        previous_seen, previous_read, previous_quality = last.get(
+                            key, (0.0, -1e9, 'not_requested'))
+                        # Presenting the tag again after absence rereads it.
+                        # Held tags are retried slowly, except after partial/failed reads.
                         re_presented = current - previous_seen >= 1.5
-                        retry_due = current - previous_read >= min(args.repeat_after, 5.0)
+                        retry_interval = (3.0 if previous_quality in ('partial', 'failed') else
+                                          max(5.0, min(args.repeat_after, 15.0)))
+                        retry_due = current - previous_read >= retry_interval
                         if re_presented or retry_due:
                             if len(last) >= 256 and key not in last:
                                 last.pop(next(iter(last)))
@@ -397,7 +400,8 @@ def pm3_operation(args, emit, client, port, actions=()):
                                 record['read_capability'] = 'discovery_only'
                             tag_event(args, emit, record)
                             previous_read = time.monotonic()
-                        last[key] = (time.monotonic(), previous_read)
+                            previous_quality = record.get('dump_status', 'not_requested')
+                        last[key] = (time.monotonic(), previous_read, previous_quality)
                         found = True
                     if not tags and 'Valid ' in output and args.action != 'identify' and not args.verbose:
                         emit('log', f'{mode} result has no supported structured identifier:\n{output.strip()}')
@@ -406,7 +410,7 @@ def pm3_operation(args, emit, client, port, actions=()):
                 if not found and not waiting:
                     emit('scan_state', 'Iceman waiting for a recognized tag', state='waiting')
                 waiting = not found
-                time.sleep(args.delay)
+                time.sleep(max(args.delay, 1.0))  # Avoid flooding PM3 with consecutive HF/LF searches.
         except (KeyboardInterrupt, subprocess.TimeoutExpired):
             pm3.stop_rf(client, port, emit)
             raise
