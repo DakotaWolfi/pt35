@@ -334,6 +334,42 @@ def simulate(client, port, record, emit):
         stop_rf(client, port, emit)
 
 
+def em410x_eligibility(record):
+    """Fixed-ID LF tag only; reject speculative and non-EM410x records."""
+    uid = str(record.get('uid', '')).upper()
+    if record.get('protocol') != 'EM410X' or not re.fullmatch(r'[0-9A-F]{10}', uid):
+        return False, 'EM410x requires a verified five-byte identifier'
+    if record.get('read_errors'):
+        return False, 'Tag scan has reported errors'
+    return True, 'EM410x · 125 kHz · 5-byte ID only · 10 s maximum'
+
+
+def simulate_em410x(client, port, record, emit):
+    allowed, explanation = em410x_eligibility(record)
+    if not allowed:
+        raise ValueError(explanation)
+    # Confirm command support separately; the on-device firmware may have a
+    # different command tree from a modern Iceman client.
+    code, help_text = run_pm3(client, port, 'lf em 410x help', timeout=5)
+    if code or not re.search(r'(?m)^\\s*(?:\\[.\\]\\s*)?sim\\s{2,}', help_text):
+        raise RuntimeError('Iceman did not advertise LF EM410x simulation')
+    uid = record['uid'].upper()
+    emit('scan_state', f'EM410x ID emulation requested for {SIM_SECONDS} seconds')
+    try:
+        # Iceman LF simulation often runs until a hardware button/USB break.
+        # The client is hard-limited to 10 seconds, even if its firmware isn't.
+        try:
+            code, output = run_pm3(client, port, f'lf em 410x sim --id {uid}',
+                                   timeout=SIM_SECONDS)
+        except subprocess.TimeoutExpired:
+            emit('log', 'LF simulation reached the 10-second client deadline; requesting hardware stop')
+        else:
+            emit('log', output.strip())
+            if code and not re.search(r'abort|button|interrupted', output, re.I):
+                raise RuntimeError(f'LF EM410x simulation failed (client exit {code})')
+    finally:
+        stop_rf(client, port, emit)
+
 def stop_rf(client, port, emit):
     if Path(port).exists():
         try:
