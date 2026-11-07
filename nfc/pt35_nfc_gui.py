@@ -199,7 +199,6 @@ class NFCWindow(tk.Tk):
         self.had_fault = False
         self.available_pm3_actions = set()
         self.pm3_simulation_capability = 'Check Iceman connection before starting emulation'
-        self.experimental_pm3_compat = False
         self.events = queue.Queue(maxsize=128)
         self.io = ThreadPoolExecutor(max_workers=1, thread_name_prefix='nfc-files')
         self.tasks = {}
@@ -756,14 +755,9 @@ class NFCWindow(tk.Tk):
                   muted=True)
         if 'pm3-simulate' not in self.available_pm3_actions:
             self.wrap(body, self.pm3_simulation_capability, muted=True)
-            if self.pm3_revision_blocked():
-                self.wrap(body, 'Experimental mode: permit simulation despite a detected '
-                          'client/firmware revision difference, only for one explicitly '
-                          'confirmed operation. The required emulator commands are '
-                          'still checked before transmission.', muted=True)
-                Button(body, 'Custom firmware override: ' +
-                       ('ENABLED' if self.experimental_pm3_compat else 'OFF'),
-                       self.toggle_pm3_compat, anchor='w').pack(fill='x', pady=4)
+            self.wrap(body, 'A firmware revision difference is advisory, not an emulation '
+                      'blocker. Simulation requires a verified hardware ping plus supported '
+                      'Iceman ISO15693 eload/sim commands.', muted=True)
         else:
             self.wrap(body, 'Iceman ISO15693 emulation commands advertised.',
                       muted=True)
@@ -793,28 +787,8 @@ class NFCWindow(tk.Tk):
                       muted=True)
         self.finish_page()
 
-    def pm3_revision_blocked(self):
-        return 'simulation disabled' in self.pm3_status.get().lower() and (
-            'revisions differ' in self.pm3_status.get().lower() or
-            'revision unknown' in self.pm3_status.get().lower())
-
-    def toggle_pm3_compat(self):
-        if not self.experimental_pm3_compat:
-            agreed = messagebox.askyesno(
-                'Experimental custom Iceman emulation',
-                'Your client and PM3 firmware revisions differ or are unknown. '
-                'Attempting emulator commands may fail or require a PM3 reset. '
-                'This does NOT flash firmware. Use only your own test tag. '
-                'Enable the compatibility override for a confirmed 10-second run?',
-                parent=self)
-            if not agreed:
-                return
-        self.experimental_pm3_compat = not self.experimental_pm3_compat
-        self.emulation_menu()
-
     def pm3_simulation_allowed(self):
-        return 'pm3-simulate' in self.available_pm3_actions or (
-            self.experimental_pm3_compat and self.pm3_revision_blocked())
+        return 'pm3-simulate' in self.available_pm3_actions
 
     def emulation_archive_loaded(self, records):
         if records is not None:
@@ -848,9 +822,6 @@ class NFCWindow(tk.Tk):
                   'do not reproduce protected authentication.', muted=True)
         if 'pm3-simulate' not in self.available_pm3_actions:
             self.wrap(body, self.pm3_simulation_capability, muted=True)
-        if self.experimental_pm3_compat and self.pm3_revision_blocked():
-            self.wrap(body, 'Experimental compatibility override ON for this run.',
-                      muted=True)
         self.finish_page()
 
     def begin_simulation(self, uid):
@@ -901,10 +872,6 @@ class NFCWindow(tk.Tk):
                 cmd.append(flag)
         if action == 'pm3-simulate':
             cmd.append('--confirm-emulation')
-            if self.experimental_pm3_compat and self.pm3_revision_blocked():
-                cmd.append('--allow-pm3-revision-mismatch')
-            # Explicit acknowledgement applies to this one operation only.
-            self.experimental_pm3_compat = False
         if action == 'watch':
             self.last_rf_bits = None
         self.worker = ScanWorker(cmd, self.events)
@@ -999,19 +966,20 @@ class NFCWindow(tk.Tk):
             if item['state'] != 'connected':
                 self.available_pm3_actions.clear()
                 self.pm3_simulation_capability = 'Proxmark3 unavailable: ' + message
-            elif 'simulation disabled' in message.lower():
-                self.pm3_simulation_capability = ('Simulation disabled because client and custom '
-                    'firmware revisions differ or are unknown. Read-only discovery remains '
-                    'available; use an Iceman client built for this firmware.')
             else:
                 self.pm3_simulation_capability = (
-                    'Select Check PM3 to verify emulator commands on this connection.')
+                    'Connected · emulator availability depends on supported Iceman commands. '
+                    'Firmware revision differences are advisory.')
         elif kind == 'backend':
             self.reader_backend = item['backend']
             self.reader.set(message)
             self.available_pm3_actions = set(item.get('pm3_actions', []))
             if 'pm3-simulate' in self.available_pm3_actions:
-                self.pm3_simulation_capability = 'Verified PM3 offers ISO15693 simulation commands'
+                self.pm3_simulation_capability = 'Iceman advertises ISO15693 emulator commands'
+            else:
+                self.pm3_simulation_capability = (
+                    'Iceman does not advertise both hf 15 eload and hf 15 sim. '
+                    'Check command support; version matching alone will not fix this.')
             self.status.set('Scanning · hold a tag by the antenna')
         elif kind == 'fault':
             self.had_fault = True
