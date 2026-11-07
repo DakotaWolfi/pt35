@@ -19,7 +19,7 @@ from nfc_config import DEFAULT_ARCHIVE
 from nfc_diagnostics import Diagnostics
 from nfc_led import NFCLeds
 from nfc_ndef import decode_message, extract_message, ndef_area
-from nfc_pm3 import SIM_SECONDS, simulation_image
+from nfc_pm3 import SIM_SECONDS, simulation_eligibility, simulation_image
 from nfc_touch import FONT, LARGE, MONO, SMALL, THEMES, Button, ScrollArea, font_for, label, row, touch_size
 
 BACKEND_SCRIPT = Path(__file__).resolve().with_name('pt35_nfc.py')
@@ -197,6 +197,7 @@ class NFCWindow(tk.Tk):
         self.closing = False
         self.had_fault = False
         self.available_pm3_actions = set()
+        self.pm3_simulation_capability = 'Check Iceman connection before starting emulation'
         self.events = queue.Queue(maxsize=128)
         self.io = ThreadPoolExecutor(max_workers=1, thread_name_prefix='nfc-files')
         self.tasks = {}
@@ -722,36 +723,104 @@ class NFCWindow(tk.Tk):
         self.wrap(body, textvariable=self.status, muted=True)
         enabled = 'disabled' if self.worker else 'normal'
         target = self.current or self.newest
-        iso_v = bool(target and target['protocol'] == 'ISO15693')
-        self.wrap(body, f"Selected tag: {target['uid']}" if iso_v else 'Open an ISO15693 tag to select it.', muted=True)
+        iso_v = bool(target and target.get('protocol') == 'ISO15693')
+        self.wrap(body, f"Selected tag: {target['uid']}" if iso_v else
+                  'Open an ISO15693 tag to select it.', muted=True)
         for title, action, state in (
             ('Check Iceman connection', lambda: self.launch('status', 'proxmark3'), enabled),
             ('Identify HF / LF', lambda: self.launch('identify', 'proxmark3'), enabled),
             ('Read selected NFC-V tag', lambda: self.launch('pm3-dump', 'proxmark3', target['uid']),
              enabled if iso_v and 'pm3-dump' in self.available_pm3_actions else 'disabled'),
-            ('Simulate saved NFC-V tag', lambda: self.confirm_simulation(target),
-             enabled if iso_v and 'pm3-simulate' in self.available_pm3_actions else 'disabled'),
+            ('Emulation · saved tags', self.emulation_menu, enabled),
             ('View last Iceman output', lambda: self.log_view(self.pm3_log, self.pm3),
              'normal' if self.pm3_log else 'disabled'),
         ):
             Button(body, title, action, state=state, anchor='w').pack(fill='x', pady=4)
         self.finish_page()
 
+    def emulation_menu(self):
+        """A dedicated, non-RF page for browsing safely emulatable local captures."""
+        self.screen = 'emulation'
+        body = self.page('PM3 · Emulation', self.pm3, footer=(
+            ('Refresh archive', self.reload_emulation_archive, {}),
+            ('Check PM3', lambda: self.launch('status', 'proxmark3'),
+             {'state': 'disabled' if self.worker else 'normal'})))
+        self.wrap(body, 'Experimental ISO15693 (NFC-V) user-memory emulation only.',
+                  font=FONT)
+        self.wrap(body, 'NFC-A / MIFARE / LF emulation and Tonie authentication are not supported.',
+                  muted=True)
+        self.wrap(body, f'Maximum {SIM_SECONDS} seconds per run · Stop or PM3 button aborts.',
+                  muted=True)
+        if 'pm3-simulate' not in self.available_pm3_actions:
+            self.wrap(body, self.pm3_simulation_capability, muted=True)
+        else:
+            self.wrap(body, 'Iceman ISO15693 emulation commands advertised.',
+                      muted=True)
+        self.wrap(body, textvariable=self.pm3_status, muted=True)
+        self.wrap(body, textvariable=self.status, muted=True)
+        self.wrap(body, 'Verified saved ISO15693 captures', font=FONT)
+        if self.archive_dirty:
+            self.wrap(body, 'Loading archive…', muted=True)
+            self.submit('read emulation archive', lambda: read_archive(self.archive),
+                        self.emulation_archive_loaded)
+        items = [record for record in self.saved if record.get('protocol') == 'ISO15693']
+        if not items and not self.archive_dirty:
+            self.wrap(body, 'No ISO15693 tags in the local archive. Read a tag fully first.',
+                      muted=True)
+        eligible = [record for record in items if simulation_eligibility(record)[0]]
+        self.wrap(body, f'{len(eligible)} verified complete / {len(items)} ISO15693 records',
+                  muted=True)
+        for record in eligible:
+            _, summary = simulation_eligibility(record)
+            title = f"{record['uid']}\n{summary}"
+            Button(body, title, lambda item=record: self.confirm_simulation(item),
+                   state='normal' if not self.worker else 'disabled',
+                   lines=2, anchor='w').pack(fill='x', pady=3)
+        incomplete = [record for record in items if not simulation_eligibility(record)[0]]
+        if incomplete:
+            self.wrap(body, f'{len(incomplete)} incomplete/unsupported captures are not selectable.',
+                      muted=True)
+        self.finish_page()
+
+    def emulation_archive_loaded(self, records):
+        if records is not None:
+            self.saved = records
+            self.archive_dirty = False
+            if self.screen == 'emulation':
+                self.emulation_menu()
+
+    def reload_emulation_archive(self):
+        self.archive_dirty = True
+        self.emulation_menu()
+
     def confirm_simulation(self, record):
-        try:
-            simulation_image(record)
-        except (ValueError, KeyError, TypeError) as exc:
-            self.notice.set(str(exc))
+        if self.worker:
+            self.notice.set('Stop the current NFC operation before emulation.')
+            return
+        allowed, reason = simulation_eligibility(record)
+        if not allowed:
+            self.notice.set(reason)
             return
         self.screen = 'confirm'
-        body = self.page('Confirm simulation', self.pm3, footer=(
-            ('Cancel', self.pm3, {}), ('Start simulation', lambda: self.begin_simulation(record['uid']), {'primary': True})))
-        self.wrap(body, f"Simulate the saved tag {record['uid']} for {SIM_SECONDS} seconds.")
-        self.wrap(body, 'Use a tag and reader you are authorized to test. Authentication is outside this simulation.', muted=True)
+        body = self.page('Confirm PM3 emulation', self.emulation_menu, footer=(
+            ('Cancel', self.emulation_menu, {}),
+            ('Start 10 s', lambda: self.begin_simulation(record['uid']), {'primary': True,
+              'state': 'normal' if 'pm3-simulate' in self.available_pm3_actions else 'disabled'})))
+        self.wrap(body, f"Saved tag: {record['uid']}", font=FONT)
+        self.wrap(body, reason, muted=True)
+        self.wrap(body, 'Iceman will temporarily load this verified user-memory image '
+                  'into the PM3 emulator; it does not reprogram firmware or your physical tag.')
+        self.wrap(body, 'Only use your own or authorized bench tags. UID and user memory '
+                  'do not reproduce protected authentication.', muted=True)
+        if 'pm3-simulate' not in self.available_pm3_actions:
+            self.wrap(body, self.pm3_simulation_capability, muted=True)
         self.finish_page()
 
     def begin_simulation(self, uid):
-        self.pm3()
+        if self.worker or 'pm3-simulate' not in self.available_pm3_actions:
+            self.notice.set('Simulation is unavailable on this Proxmark3 connection.')
+            return
+        self.emulation_menu()
         self.launch('pm3-simulate', 'proxmark3', uid)
 
     def log_view(self, output, back):
