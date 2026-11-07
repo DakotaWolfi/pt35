@@ -5,35 +5,49 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from nfc_archive import range_bytes
+from nfc_config import reader_lock
 from nfcv_dump import Reader
 from nfcv_scan import FrameError, crc15693
 
 CONTROL = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
-DESCRIPTOR = re.compile(r'proxmark3?|\bpm3\b', re.I)
+DESCRIPTOR = re.compile(r'proxmark(?:[ _.-]*3|\.org)|\bpm3(?:[ _-]rdv4)?\b', re.I)
+USB_IDS = {('9ac4', '4b8f'), ('502d', '502d'), ('2d2d', '504d')}
 PM3_MODES = ('HF', 'LF', 'ISO15693')
 SIM_SECONDS = 10
 
 
-def usb_ports():
+def usb_ports(dev=Path('/dev'), sys_tty=Path('/sys/class/tty')):
+    def read(path):
+        try:
+            return path.read_text(errors='replace').strip()
+        except OSError:
+            return ''
+
     ports = set()
-    for item in Path('/dev/serial/by-id').glob('*'):
-        if item.exists() and DESCRIPTOR.search(item.name):
-            ports.add(str(item.resolve()))
-    for item in (*Path('/dev').glob('ttyACM*'), *Path('/dev').glob('ttyUSB*')):
-        if str(item) in ports:
-            continue
-        node = (Path('/sys/class/tty') / item.name / 'device').resolve()
+    for item in (*dev.glob('ttyACM*'), *dev.glob('ttyUSB*')):
+        node = (sys_tty / item.name / 'device').resolve()
+        description = []
         for parent in (node, *node.parents):
-            try:
-                product = (parent / 'product').read_text(errors='replace')
-            except OSError:
-                continue
-            if DESCRIPTOR.search(product):
-                ports.add(str(item))
-            break
+            description.extend((read(parent / 'product'), read(parent / 'manufacturer'),
+                                read(parent / 'interface')))
+            vendor = read(parent / 'idVendor').lower()
+            if vendor:
+                ids = vendor, read(parent / 'idProduct').lower()
+                if ids in USB_IDS or any(DESCRIPTOR.search(value) for value in description):
+                    ports.add(str(item.resolve()))
+                break
+    # Some kernel/udev setups only expose the explicit Proxmark model in by-id.
+    for link in (dev / 'serial/by-id').glob('*'):
+        if (link.is_symlink() and link.exists() and
+                re.search(r'^usb-(?:proxmark[._]org|proxmark[_-]?3)', link.name, re.I)):
+            target = link.resolve()
+            if target.parent == dev.resolve() and re.fullmatch(r'tty(?:ACM|USB)\d+', target.name):
+                ports.add(str(target))
     return sorted(ports)
 
 
@@ -42,7 +56,7 @@ def pm3_client(configured=None):
     paths = [Path.home() / '.local/lib/pt35-iceman/current/client/proxmark3',
              Path.home() / 'proxmark3/client/proxmark3',
              Path.home() / 'proxmark3/pm3', '/usr/local/bin/proxmark3',
-             shutil.which('proxmark3')]
+             Path.home() / '.local/bin/proxmark3', shutil.which('proxmark3'), shutil.which('pm3')]
     for value in ([override] if override else paths):
         if value:
             path = Path(value).expanduser()
@@ -51,38 +65,116 @@ def pm3_client(configured=None):
     return None
 
 
-def run_pm3(client, port, command, timeout=20, cwd=None):
+def run_pm3(client, port, command, timeout=20, cwd=None, cancel=None):
     # Iceman commands are fixed strings or validated hex; shell=False.
-    proc = subprocess.run([client, '-p', port, '--incognito', '-c', command], cwd=cwd, stdin=subprocess.DEVNULL,
-                          text=True, errors='replace', capture_output=True, timeout=timeout,
-                          env={**os.environ, 'NO_COLOR': '1'})
-    return proc.returncode, CONTROL.sub('', proc.stdout + '\n' + proc.stderr)
+    args = [client, '-p', port, '--incognito', '-c', command]
+    deadline = time.monotonic() + timeout
+    with subprocess.Popen(args, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, text=True, errors='replace',
+                          env={**os.environ, 'NO_COLOR': '1'}) as proc:
+        try:
+            while True:
+                if cancel is not None and cancel.is_set():
+                    raise InterruptedError('Iceman probe cancelled')
+                if not Path(port).exists():
+                    raise OSError(f'Iceman disconnected on {port}')
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(args, timeout)
+                try:
+                    out, err = proc.communicate(timeout=min(remaining, .2))
+                    return proc.returncode, CONTROL.sub('', out + '\n' + err)
+                except subprocess.TimeoutExpired:
+                    continue
+        except BaseException:
+            proc.kill()
+            proc.communicate()
+            raise
+
+
+def revisions(output):
+    client = re.search(r'^\s*(?:\[.\]\s*)?(?:Client(?:\.{2,}|:)\s+)?Iceman/(\S+)', output, re.M | re.I)
+    firmware = re.search(r'^\s*(?:\[.\]\s*)?OS(?:\.{2,}|:)\s+Iceman/(\S+)', output, re.M | re.I)
+    return tuple(match[1].split('/')[-1] if match else '' for match in (client, firmware))
 
 
 def version_fault(code, output):
-    if re.search(r'mismatch|firmware does not match', output, re.I):
+    if re.search(r'firmware does not match|device\s*/\s*fw mismatch|client.*firmware mismatch', output, re.I):
         return 'Iceman client and firmware mismatch'
-    client = re.search(r'^\s*(?:\[.\]\s*)?(?:Client\.{2,}\s+)?Iceman/(\S+)', output, re.M)
-    firmware = re.search(r'^\s*(?:\[.\]\s*)?OS\.{2,}\s+Iceman/(\S+)', output, re.M)
-    if code or not re.search(r'Ping response received[^\n]+content\s*\(\s*ok\s*\)', output):
+    if (code or not re.search(r'Ping response received\b', output, re.I) or
+            re.search(r'content\s*\(\s*fail', output, re.I)):
         return 'Iceman did not receive a valid hardware ping'
-    if (not client or not firmware or client[1].split('/')[-1] != firmware[1].split('/')[-1] or
-            '...' in client[1] or 'dirty' in client[1] or client[1].endswith('/release')):
-        return 'No verified matching Iceman client and firmware revision'
+    client, firmware = revisions(output)
+    if any(not re.fullmatch(r'[\w-]+(?:\.[\w-]+)*', revision) or
+           revision.lower() in ('release', 'unknown') or 'dirty' in revision.lower()
+           for revision in (client, firmware)):
+        return 'No verified Iceman client or firmware revision'
+    commit_hashes = [re.search(r'(?:^|-g)([a-f0-9]{7,40})$', revision, re.I) for revision in (client, firmware)]
+    if all(commit_hashes):
+        first, second = (match[1].lower() for match in commit_hashes)
+        if first.startswith(second) or second.startswith(first):
+            return None
+    if client != firmware:
+        return f'Iceman revision mismatch · client {client}, firmware {firmware}'
     return None
 
 
-def probe(client, port):
-    try:
-        code, output = run_pm3(client, port, 'hw ping; hw version', timeout=8)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return str(exc)
-    return version_fault(code, output)
+@dataclass(frozen=True)
+class Link:
+    state: str
+    message: str
+    client: str = ''
+    port: str = ''
+    firmware: str = ''
+    actions: tuple = ()
 
 
-def iso15693_actions(client, port):
+def connect(client_override=None, port_override=None, cancel=None):
+    ports = usb_ports()
+    if port_override:
+        requested = str(Path(port_override).expanduser().resolve())
+        ports = [port for port in ports if port == requested]
+    if not ports:
+        return Link('absent', 'No Proxmark3 USB serial device detected')
+    client = pm3_client(client_override)
+    if not client:
+        return Link('no_client', 'Proxmark3 found · install its matching Iceman client')
+    link = None
+    for port in ports:
+        if cancel is not None and cancel.is_set():
+            break
+        if not os.access(port, os.R_OK | os.W_OK):
+            link = Link('inaccessible', f'{Path(port).name} inaccessible · check Debian dialout access')
+            continue
+        try:
+            with reader_lock(Path(port).name):
+                code, output = run_pm3(client, port, 'hw ping; hw version', timeout=5, cancel=cancel)
+                fault = version_fault(code, output)
+                if fault is None:
+                    firmware = revisions(output)[1]
+                    actions = tuple(iso15693_actions(client, port, cancel))
+                    if Path(port).exists():
+                        return Link('connected', f'Proxmark3 connected · {Path(port).name} · {firmware}',
+                                    client, port, firmware, actions)
+                    link = Link('unresponsive', 'Proxmark3 disconnected during setup')
+                elif re.search(r'permission denied|could not open.*permission', output, re.I):
+                    link = Link('inaccessible', f'{Path(port).name} inaccessible · check Debian dialout access')
+                elif 'revision' in fault or 'mismatch' in fault:
+                    link = Link('mismatch', fault)
+                else:
+                    link = Link('unresponsive', f'{fault} · check USB and port availability')
+        except PermissionError:
+            link = Link('inaccessible', f'{Path(port).name} inaccessible · check Debian dialout access')
+        except RuntimeError:
+            link = Link('busy', f'{Path(port).name} in use · close the other reader')
+        except (OSError, subprocess.TimeoutExpired):
+            link = Link('unresponsive', f'{Path(port).name} did not respond · check USB and serial access')
+    return link or Link('absent', 'No responsive Proxmark3 USB serial device')
+
+
+def iso15693_actions(client, port, cancel=None):
     try:
-        code, output = run_pm3(client, port, 'hf 15 help', timeout=5)
+        code, output = run_pm3(client, port, 'hf 15 help', timeout=2, cancel=cancel)
     except (OSError, subprocess.TimeoutExpired):
         return []
     if code:

@@ -7,7 +7,9 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 
@@ -64,44 +66,89 @@ class Events:
             print(message, flush=True)
 
 
-def backend_choice(args, emit, *, quiet=False):
-    if args.action in ('identify', 'pm3-shell', 'pm3-dump', 'pm3-simulate') and args.backend == 'auto':
-        args.backend = 'proxmark3'
+def announce_pm3(link, emit):
+    emit('pm3_status', link.message, state=link.state, firmware=link.firmware)
+    if link.state == 'connected':
+        capabilities = ['HF discovery', 'explicit LF search']
+        if 'pm3-dump' in link.actions:
+            capabilities.append('ISO15693 addressed reads')
+        if 'pm3-simulate' in link.actions:
+            capabilities.append('Experimental manual ISO15693 simulation')
+        emit('backend', 'Proxmark3 · Iceman', backend='proxmark3', capabilities=capabilities,
+             port=link.port, pm3_actions=list(link.actions))
+
+
+def backend_choice(args, emit):
+    pm3_action = args.action in ('identify', 'pm3-shell', 'pm3-dump', 'pm3-simulate')
+    if args.backend == 'internal' and pm3_action:
+        raise RuntimeError('This operation requires Proxmark3/Iceman')
     if args.backend != 'internal':
-        client = pm3.pm3_client(args.client)
-        ports = pm3.usb_ports()
-        if args.port:
-            requested = str(Path(args.port).resolve())
-            ports = [port for port in ports if str(Path(port).resolve()) == requested]
-        reason = ('Iceman client missing or not executable' if not client else
-                  'No matching Proxmark3 USB descriptor' if not ports else '')
-        if client:
-            for port in ports:
-                actions = []
-                try:
-                    with reader_lock(Path(port).name):
-                        reason = pm3.probe(client, port)
-                        if reason is None:
-                            actions = pm3.iso15693_actions(client, port)
-                except RuntimeError as exc:
-                    reason = str(exc)
-                if reason is None:
-                    if args.action in ('pm3-dump', 'pm3-simulate') and args.action not in actions:
-                        reason = 'Connected firmware does not advertise the requested ISO15693 operation'
-                        continue
-                    capabilities = ['HF/LF search']
-                    if 'pm3-dump' in actions:
-                        capabilities.append('ISO15693 addressed reads')
-                    if 'pm3-simulate' in actions:
-                        capabilities.append('Experimental manual ISO15693 simulation')
-                    emit('backend', f'Proxmark3/Iceman connected on {port}', backend='proxmark3',
-                         capabilities=capabilities, port=port, pm3_actions=actions)
-                    return 'proxmark3', client, port
-        if not quiet:
-            emit('fault', f'Proxmark3 unavailable: {reason}', backend='proxmark3')
-        if args.backend == 'proxmark3':
+        link = pm3.connect(args.client, args.port)
+        announce_pm3(link, emit)
+        if link.state == 'connected':
+            if args.action in ('pm3-dump', 'pm3-simulate') and args.action not in link.actions:
+                raise RuntimeError('Connected firmware does not advertise the requested ISO15693 operation')
+            return 'proxmark3', link.client, link.port
+        if args.backend == 'proxmark3' or pm3_action:
             return None, None, None
     return 'internal', None, None
+
+
+class PM3Monitor:
+    """Probe one USB candidate in parallel with internal RF scans."""
+    def __init__(self, args, emit):
+        self.args = args
+        self.emit = emit
+        self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='pm3-probe')
+        self.cancel = threading.Event()
+        self.future = None
+        self.next_probe = 0
+        self.reported = None
+
+    def poll(self):
+        now = time.monotonic()
+        if self.future is not None and self.future.done():
+            link = self.future.result()
+            self.future = None
+            self.next_probe = now + (1 if link.state == 'absent' else 3)
+            if link.state == 'connected':
+                return link
+            if link != self.reported:
+                self.emit('pm3_status', link.message, state=link.state)
+                self.reported = link
+        if self.future is None and now >= self.next_probe:
+            self.future = self.pool.submit(pm3.connect, self.args.client, self.args.port, self.cancel)
+        return None
+
+    def close(self):
+        self.cancel.set()
+        self.pool.shutdown(cancel_futures=True)
+
+
+def auto_watch(args, emit):
+    monitor = PM3Monitor(args, emit)
+    try:
+        while True:
+            try:
+                link = internal_operation(args, emit, monitor.poll)
+            except OSError as exc:
+                emit('fault', f'Internal reader unavailable: {exc}. Retrying reader selection.')
+                time.sleep(.5)
+                link = monitor.poll()
+                if not link:
+                    continue
+            if not link:
+                return 0
+            # internal_operation has already cleared TX/RX and released I2C.
+            announce_pm3(link, emit)
+            try:
+                pm3_operation(args, emit, link.client, link.port)
+                return 0
+            except (OSError, subprocess.TimeoutExpired):
+                emit('pm3_status', 'Proxmark3 connection lost · using internal reader', state='unresponsive')
+                monitor.reported = None
+    finally:
+        monitor.close()
 
 
 def tag_event(args, emit, record):
@@ -316,56 +363,31 @@ def pm3_operation(args, emit, client, port):
 
 
 def run_reader(args, emit):
-    selected = backend_choice(args, emit)
-    next_probe = time.monotonic() + 4
-
-    def reselect():
-        nonlocal next_probe
-        if time.monotonic() >= next_probe:
-            next_probe = time.monotonic() + 4
-            candidate = backend_choice(args, emit, quiet=True)
-            if candidate[0] == 'proxmark3':
-                return candidate
-        return None
-
+    if args.watch and args.backend == 'auto':
+        return auto_watch(args, emit)
     while True:
-        backend, client, port = selected
+        backend, client, port = backend_choice(args, emit)
         if backend is None:
             if not args.watch:
                 return 2
-            time.sleep(2)
-            selected = backend_choice(args, emit)
+            time.sleep(1)
             continue
         if backend == 'internal':
-            if args.action in ('identify', 'pm3-shell', 'pm3-dump', 'pm3-simulate'):
-                raise RuntimeError('This operation requires a responsive Proxmark3/Iceman')
-            try:
-                selected = internal_operation(args, emit, reselect if args.watch and args.backend == 'auto' else None)
-            except OSError as exc:
-                if not args.watch or args.backend != 'auto':
-                    raise
-                emit('fault', f'Internal reader unavailable: {exc}. Retrying reader selection.')
-                time.sleep(2)
-                selected = backend_choice(args, emit)
-            if not selected:
+            internal_operation(args, emit)
+            return 0
+        try:
+            if args.action != 'status':
+                pm3_operation(args, emit, client, port)
+            return 0
+        except (OSError, subprocess.TimeoutExpired):
+            if args.action == 'scan' and args.backend == 'auto':
+                emit('pm3_status', 'Proxmark3 connection lost · using internal reader', state='unresponsive')
+                internal_operation(args, emit)
                 return 0
-        else:
-            try:
-                if args.action != 'status':
-                    pm3_operation(args, emit, client, port)
-                return 0
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                if args.action not in ('scan', 'watch'):
-                    raise
-                emit('fault', f'Proxmark3 unavailable: {exc}', backend='proxmark3')
-                if args.backend == 'auto':
-                    next_probe = time.monotonic() + 4
-                    selected = ('internal', None, None)
-                elif args.watch:
-                    time.sleep(2)
-                    selected = backend_choice(args, emit)
-                else:
-                    raise
+            if not args.watch:
+                raise
+            emit('pm3_status', 'Proxmark3 connection lost · waiting for USB', state='unresponsive')
+            time.sleep(1)
 
 
 def main():

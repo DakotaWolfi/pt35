@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from argparse import Namespace
 from pathlib import Path
@@ -78,16 +79,78 @@ class IcemanTests(unittest.TestCase):
                 pm3.simulate('client', '/dev/fake', record, Mock())
         self.assertEqual(client.call_count, 3)
 
+    def test_older_ping_and_git_revision_aliases(self):
+        result = ('[+] Ping response received in 2 ms\n'
+                  'Client.... Iceman/HEAD/cafebad1\nOS........ Iceman/master/v4.123-9-gcafebad1\n')
+        self.assertIsNone(pm3.version_fault(0, result))
+        self.assertIn('mismatch', pm3.version_fault(0, result.replace('-gcafebad1', '-gbedface0')))
+
+    def test_usb_identity_without_a_product_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dev, sys_tty = root / 'dev', root / 'tty'
+            dev.mkdir()
+            for name, vendor, product in (('ttyACM0', '9ac4', '4b8f'), ('ttyUSB0', '10c4', 'ea60')):
+                (dev / name).touch()
+                parent = sys_tty / name / 'device'
+                parent.mkdir(parents=True)
+                (parent / 'idVendor').write_text(vendor)
+                (parent / 'idProduct').write_text(product)
+                (parent / 'product').write_text('USB Serial Device')
+            self.assertEqual(pm3.usb_ports(dev, sys_tty), [str(dev / 'ttyACM0')])
+
+    def test_no_client_inaccessible_and_mismatch_states(self):
+        with patch.object(pm3, 'usb_ports', return_value=[]):
+            self.assertEqual(pm3.connect().state, 'absent')
+        with patch.object(pm3, 'usb_ports', return_value=['/dev/ttyACM5']):
+            with patch.object(pm3, 'pm3_client', return_value=None):
+                self.assertEqual(pm3.connect().state, 'no_client')
+            with patch.object(pm3, 'pm3_client', return_value='/bin/fake'):
+                with patch('nfc_pm3.os.access', return_value=False):
+                    self.assertEqual(pm3.connect().state, 'inaccessible')
+                with patch('nfc_pm3.os.access', return_value=True), patch.object(
+                        pm3, 'run_pm3', return_value=(0, 'ARM firmware does not match')):
+                    self.assertEqual(pm3.connect().state, 'mismatch')
+
+    def test_probe_does_not_block_the_internal_scan_loop(self):
+        from pt35_nfc import PM3Monitor
+        started, finish = threading.Event(), threading.Event()
+
+        def probe(client, port, cancel):
+            started.set()
+            finish.wait(2)
+            return pm3.Link('absent', 'No USB device')
+
+        args = Namespace(client=None, port=None)
+        with patch('nfc_pm3.connect', side_effect=probe):
+            monitor = PM3Monitor(args, Mock())
+            try:
+                self.assertIsNone(monitor.poll())
+                self.assertTrue(started.wait(1))
+                self.assertIsNone(monitor.poll())
+            finally:
+                finish.set()
+                monitor.close()
+
     def test_auto_releases_internal_before_resuming_pm3_after_unplug(self):
         args = Namespace(action='watch', watch=True, backend='auto')
         emit = Mock()
-        pm3_selected = ('proxmark3', 'client', 'serial')
-        with patch('pt35_nfc.backend_choice', return_value=pm3_selected), \
-                patch('pt35_nfc.internal_operation', return_value=pm3_selected) as internal, \
-                patch('pt35_nfc.pm3_operation', side_effect=[OSError('unplugged'), None]) as external:
+        link = pm3.Link('connected', 'Ready', 'client', 'serial')
+        actions = []
+
+        def internal(*_):
+            actions.append('internal released')
+            return link
+
+        def external(*_):
+            actions.append('pm3 active')
+            if actions.count('pm3 active') == 1:
+                raise OSError('unplugged')
+
+        with patch('pt35_nfc.PM3Monitor'), patch('pt35_nfc.internal_operation', side_effect=internal), \
+                patch('pt35_nfc.pm3_operation', side_effect=external):
             self.assertEqual(run_reader(args, emit), 0)
-        self.assertEqual(external.call_count, 2)
-        internal.assert_called_once()
+        self.assertEqual(actions, ['internal released', 'pm3 active'] * 2)
 
     def test_package_prompt_precedes_installation(self):
         with tempfile.TemporaryDirectory() as directory:
