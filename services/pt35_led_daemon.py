@@ -31,6 +31,11 @@ LEASE_SECONDS = 2
 MAX_NFC_BRIGHTNESS = 32
 INDEX_SECONDS = .24
 COLUMNS = tuple((column, 15 - column) for column in range(8))
+TOP_ROW = tuple(range(8))
+BOTTOM_LEFT_TO_RIGHT = tuple(range(15, 7, -1))
+PROTOCOL_COLORS = {'ISO15693': (0, 2, 4), 'NFC-A': (0, 4, 1),
+                   'NFC-B': (4, 2, 0), 'NFC-F': (3, 0, 4),
+                   'LF': (4, 0, 1)}
 BLACK = ((0, 0, 0),) * LED_COUNT
 EFFECTS = {'sweep', 'pulse', 'minimal'}
 STAGES = {'scan', 'read', 'success', 'partial', 'error'}
@@ -92,31 +97,53 @@ class Lease:
     completed: int
     total: int
     expires: float
+    protocol: str = 'none'
+    rssi: int = -1
 
 
 def nfc_frame(lease, now):
-    brightness = lease.brightness
-    if lease.stage == 'read' and lease.total:
-        # Fill paired columns from left to right in the physical rear view.
-        # Integer floor preserves a true 0% and never shows 100% early.
-        count = lease.completed * len(COLUMNS) // lease.total
-        lit = {index for pair in COLUMNS[:count] for index in pair}
-        return tuple((0, brightness, brightness // 4) if i in lit else BLACK[i] for i in range(LED_COUNT))
-    if lease.stage in ('success', 'partial', 'error'):
-        color = {'success': (0, brightness, 0), 'partial': (brightness, brightness // 3, 0),
-                 'error': (brightness, 0, 0)}[lease.stage]
-        return (color,) * LED_COUNT
-    if lease.effect == 'pulse':
-        level = max(1, int(brightness * (.45 + .35 * math.sin(now * 4))))
-        return ((0, level // 4, level),) * LED_COUNT
-    if lease.effect == 'minimal':
-        level = max(1, brightness // 3)
-        return ((0, 0, level),) + BLACK[1:]
-    head = int(now * 12) % LED_COUNT
-    return tuple((0, brightness // 5, brightness) if i == head else
-                 (0, 0, brightness // 3) if i == (head - 1) % LED_COUNT else BLACK[i]
-                 for i in range(LED_COUNT))
+    """Top 8 pixels: scan/progress; bottom 8: tag type and optional relative RSSI.
 
+    RSSI is a 4-bit receiver peak measurement, not calibrated field strength.
+    Absent RSSI only illuminates one dim bottom type marker; never fake bars.
+    """
+    brightness = lease.brightness
+    frame = list(BLACK)
+    if lease.stage == 'read' and lease.total:
+        # Real completed blocks; floor avoids displaying completion prematurely.
+        count = lease.completed * len(TOP_ROW) // lease.total
+        for i in TOP_ROW[:count]:
+            frame[i] = (0, brightness, max(1, brightness // 4))
+    elif lease.stage in ('success', 'partial', 'error'):
+        color = {'success': (0, brightness, 0),
+                 'partial': (brightness, brightness // 3, 0),
+                 'error': (brightness, 0, 0)}[lease.stage]
+        for i in TOP_ROW:
+            frame[i] = color
+    elif lease.effect == 'minimal':
+        frame[0] = (0, 0, max(1, brightness // 3))
+    elif lease.effect == 'pulse':
+        level = max(1, int(brightness * (.45 + .35 * math.sin(now * 4))))
+        for i in TOP_ROW:
+            frame[i] = (0, level // 4, level)
+    else:
+        head = int(now * 9) % len(TOP_ROW)
+        frame[head] = (0, brightness // 5, brightness)
+        frame[(head - 1) % 8] = (0, 0, brightness // 3)
+
+    if lease.protocol in PROTOCOL_COLORS:
+        base = PROTOCOL_COLORS[lease.protocol]
+        # Use brightness as the peak for the largest color component.
+        maximum = max(base)
+        color = tuple(max(0, brightness * value // maximum) for value in base)
+        if lease.rssi >= 0:
+            count = min(8, max(0, (lease.rssi * 8 + 14) // 15))
+            for index in BOTTOM_LEFT_TO_RIGHT[:count]:
+                frame[index] = color
+        else:
+            # Type-only status, explicitly distinct from a signal-strength bar.
+            frame[BOTTOM_LEFT_TO_RIGHT[0]] = tuple(max(1, value // 3) if value else 0 for value in color)
+    return tuple(frame)
 
 class LEDState:
     """Command handlers change state only. The renderer alone owns GPIO."""
@@ -177,7 +204,7 @@ class LEDState:
         if parts[2:] == ['release']:
             self.lease = None
             return 'OK'
-        if len(parts) != 7 or parts[2] not in EFFECTS or parts[4] not in STAGES:
+        if len(parts) not in (7, 9) or parts[2] not in EFFECTS or parts[4] not in STAGES:
             return 'ERR invalid NFC frame'
         try:
             brightness, completed, total = map(int, (parts[3], parts[5], parts[6]))
@@ -186,7 +213,11 @@ class LEDState:
         if not 1 <= brightness <= MAX_NFC_BRIGHTNESS or not 0 <= completed <= 2048 or not (
                 total == 0 or completed <= total <= 2048):
             return 'ERR invalid NFC frame'
-        self.lease = Lease(token, parts[2], brightness, parts[4], completed, total, now + LEASE_SECONDS)
+        protocol, rssi = ('none', -1) if len(parts) == 7 else (parts[7], int(parts[8]) if re.fullmatch(r'-1|[0-9]{1,2}', parts[8]) else -2)
+        if protocol != 'none' and protocol not in PROTOCOL_COLORS or not -1 <= rssi <= 15:
+            return 'ERR invalid NFC signal'
+        self.lease = Lease(token, parts[2], brightness, parts[4], completed, total, now + LEASE_SECONDS,
+                           protocol, rssi)
         return 'OK'
 
     def command(self, command):
