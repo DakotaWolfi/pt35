@@ -111,8 +111,8 @@ def version_fault(code, output):
     Custom PM3 firmware commonly has a deliberately different revision from
     its userspace client. A working hardware ping is the connection gate.
     """
-    if (code or not re.search(r'Ping response received\\b', output, re.I) or
-            re.search(r'content\\s*\\(\\s*fail', output, re.I)):
+    if (code or not re.search(r'Ping response received\b', output, re.I) or
+            re.search(r'content\s*\(\s*fail', output, re.I)):
         return 'Iceman did not receive a valid hardware ping'
     return None
 
