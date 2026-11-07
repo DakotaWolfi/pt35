@@ -307,7 +307,7 @@ def simulation_eligibility(record):
         image = simulation_image(record)
     except (ValueError, KeyError, TypeError) as exc:
         return False, str(exc)
-    return True, f"ISO15693 · {image['Card']['pagescount']} blocks × 4 bytes · 10 s maximum"
+    return True, f"ISO15693 · {record['geometry']['blocks']} blocks × 4 bytes · {SIM_SECONDS} s maximum"
 
 
 def simulate(client, port, record, emit):
