@@ -22,6 +22,16 @@ class LaunchTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             launcher.target_command('unrecognized')
 
+    def test_lra_test_commands_are_bounded_and_noncontinuous(self):
+        self.assertEqual(launcher.lra_command('status'), ['/usr/local/bin/lra_ctl', 'status'])
+        self.assertEqual(launcher.lra_command('play', 10),
+                         ['/usr/local/bin/lra_ctl', 'play', '10'])
+        self.assertEqual(launcher.lra_command('stop'), ['/usr/local/bin/lra_ctl', 'stop'])
+        for action, effect in (('rtp', 80), ('play', 123), ('play', -1),
+                               ('test', None), ('play', '10')):
+            with self.assertRaises(ValueError):
+                launcher.lra_command(action, effect)
+
     def test_recent_archive_reads_without_touching_hardware(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
