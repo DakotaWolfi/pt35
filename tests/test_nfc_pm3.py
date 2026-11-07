@@ -88,11 +88,11 @@ class IcemanTests(unittest.TestCase):
         record = {'uid': UID, 'protocol': 'ISO15693', 'blocks': [{'index': 0, 'hex': '00000000'}],
                   'read_errors': []}
         set_coverage(record, 1, {'blocks': 1, 'size': 4})
-        responses = [(0, 'options: -f --file'), (0, 'options: -t --timeout'), (0, 'Memory image not matching')]
+        responses = [(0, 'Memory image not matching')]
         with patch.object(pm3, 'run_pm3', side_effect=responses) as client:
             with self.assertRaisesRegex(RuntimeError, 'did not confirm emulator'):
                 pm3.simulate('client', '/dev/fake', record, Mock())
-        self.assertEqual(client.call_count, 3)
+        self.assertEqual(client.call_count, 1)
 
     def test_patched_slix_emulator_uses_short_timeout_and_loaded_uid(self):
         record = {'uid': UID, 'protocol': 'ISO15693',
@@ -101,10 +101,6 @@ class IcemanTests(unittest.TestCase):
         commands = []
         def fake_client(client, port, command, **kwargs):
             commands.append(command)
-            if command == 'hf 15 eload -h':
-                return 0, 'options: -f <filename>  --file'
-            if command == 'hf 15 sim -h':
-                return 0, 'options: -t <milliseconds>  --timeout'
             if command.startswith('hf 15 eload -f '):
                 return 0, 'uploaded 4 bytes to emulator memory'
             if command == 'hf 15 sim -t 10000':
@@ -116,6 +112,7 @@ class IcemanTests(unittest.TestCase):
             with patch.object(pm3.Path, 'exists', return_value=True):
                 pm3.simulate('client', '/dev/fake', record, Mock())
         self.assertIn('hf 15 sim -t 10000', commands)
+        self.assertFalse(any(command.endswith(' -h') for command in commands))
         self.assertFalse(any(' -u ' in cmd for cmd in commands))
         self.assertFalse(any('sim --timeout' in cmd for cmd in commands))
 
