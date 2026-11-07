@@ -79,10 +79,10 @@ def target_command(name):
     if name == 'reader':
         return [sys.executable, str(ROOT / 'nfc/pt35_nfc_gui.py')]
     if name == 'spectrum':
-        script = ROOT / 'tools/pt35_tools.py'
+        script = ROOT / 'tools/as7341_gui.py'
         python = Path.home() / 'as7341-env/bin/python'
         interpreter = str(python) if python.is_file() else sys.executable
-        return [interpreter, str(script), '--device', 'as7341']
+        return [interpreter, str(script)]
     raise ValueError('Unknown PT35 application')
 
 
@@ -178,7 +178,7 @@ class Launcher(tk.Tk):
         self.add(area, 'NFC Reader', lambda: self.launch('reader'),
                  'Internal ST25R3916 and USB Proxmark3 · scans and archive')
         self.add(area, 'Spectrum Analyzer', lambda: self.launch('spectrum'),
-                 'Existing AS7341 spectrum application in a terminal')
+                 'AS7341 live spectrum · touchscreen chart and sensor recovery')
         self.add(area, 'LED Test', self.led_page,
                  'Rear 16-pixel WS2812 strip · shared service, no direct GPIO')
         self.add(area, 'LRA Haptic Test', self.lra_page,
@@ -191,11 +191,6 @@ class Launcher(tk.Tk):
 
     def launch(self, name):
         command = target_command(name)
-        if name == 'spectrum':
-            command = terminal_command(command)
-            if command is None:
-                self.notice.set('A desktop terminal is required for the existing spectrum analyzer.')
-                return
         try:
             subprocess.Popen(command, start_new_session=True, cwd=str(ROOT),
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
