@@ -42,6 +42,36 @@ def extract_message(area):
     return None
 
 
+def decode_vcard(payload):
+    """Small, read-only vCard preview. Do not execute URLs or import contacts."""
+    text = payload.decode('utf-8-sig', errors='replace')
+    # vCard folding uses one leading whitespace on continuation lines.
+    lines = []
+    for line in text.replace('\\r\\n', '\\n').split('\\n'):
+        if line.startswith((' ', '\\t')) and lines:
+            lines[-1] += line[1:]
+        else:
+            lines.append(line)
+    output = []
+    names = {'FN': 'Name', 'N': 'Name components', 'ORG': 'Organization',
+             'TITLE': 'Title', 'TEL': 'Phone', 'EMAIL': 'Email',
+             'URL': 'Website', 'ADR': 'Address', 'NOTE': 'Note'}
+    for line in lines:
+        field, sep, value = line.partition(':')
+        key = field.split(';', 1)[0].upper()
+        if not sep or key not in names:
+            continue
+        value = value.replace('\\\\n', ' · ').replace('\\\\N', ' · ').replace('\\\\,', ',')
+        value = value.replace('\\\\;', ';').replace('\\\\\\\\', '\\\\')
+        # Limit very large cards and avoid rendering embedded controls.
+        value = ''.join(char if char.isprintable() else ' ' for char in value)[:240].strip()
+        if value:
+            output.append(f'{names[key]}: {value}')
+        if len(output) == 16:
+            break
+    return output
+
+
 def decode_message(message):
     pos = 0
     result = []
@@ -65,6 +95,9 @@ def decode_message(message):
         if flags & 7 == 1 and tag_type == b'T' and payload and 1 + (payload[0] & 0x3f) <= len(payload):
             encoding = 'utf-16' if payload[0] & 0x80 else 'utf-8'
             result.append('Text: ' + payload[1 + (payload[0] & 0x3f):].decode(encoding, errors='replace'))
+        elif flags & 7 == 2 and tag_type.lower().split(b';', 1)[0] in (b'text/vcard', b'text/x-vcard'):
+            details = decode_vcard(payload)
+            result.extend(['Business card (vCard)', *details] if details else ['vCard data present'])
         elif flags & 7 == 1 and tag_type == b'U' and payload:
             prefix = URI_PREFIXES[payload[0]] if payload[0] < len(URI_PREFIXES) else f'[prefix {payload[0]:02X}]'
             result.append('URI: ' + prefix + payload[1:].decode('utf-8', errors='replace'))
