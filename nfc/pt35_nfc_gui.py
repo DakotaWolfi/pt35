@@ -585,7 +585,7 @@ class NFCWindow(tk.Tk):
         for entry in reversed(entries[-150:]):
             label_text = (str(entry.get('at', '?'))[:19] + ' · ' +
                           str(entry.get('comparison', 'unknown')).replace('_', ' ') +
-                          '\\n' + str(entry.get('status', '?')) + ' · ' +
+                          '\n' + str(entry.get('status', '?')) + ' · ' +
                           str(entry.get('blocks', 0)) + ' blocks · ' +
                           str(entry.get('classification', 'unknown')))
             Button(body, label_text,
@@ -873,13 +873,6 @@ class NFCWindow(tk.Tk):
                     self.led.result('success' if self.newest.get('dump_status') in (
                         'addressable_memory_complete', 'requested_range_complete') else
                         'partial' if self.newest.get('dump_status') in ('partial', 'failed') else 'hold')
-            if False:  # Result stages are selected above, including discovery-only tags.
-                result = self.newest.get('dump_status')
-                if result in ('addressable_memory_complete', 'requested_range_complete'):
-                    self.led.result('success')
-                elif result in ('partial', 'failed'):
-                    self.led.result('partial')
-                # Discovery-only tags retain the current scan animation and type indicator.
             if self.newest['protocol'] == 'ISO15693' and self.newest['uid'].startswith('E002'):
                 self.latest_st = self.newest['uid']
             self.update_latest()
