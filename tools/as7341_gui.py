@@ -19,6 +19,19 @@ from pt35_tools import WAVES, make_as7341
 
 WAVE_COLORS = ("#9279e8", "#6987ef", "#4aaee9", "#4dc7b0",
                "#a6d66a", "#e6c75b", "#f6a05f", "#e97b75")
+
+# Clear is broadband and NIR is near infrared, not additional wavelength
+# bins. They are shown on either side of the eight original spectral bands.
+GAUGE_LABELS = ("Clear", *(str(wave) for wave in WAVES), "NIR")
+GAUGE_COLORS = ("#f2f7fb", *WAVE_COLORS, "#f07dc6")
+
+
+def gauge_values(sample):
+    """Order ten sensor channels for the display, retaining raw counts."""
+    if sample is None:
+        return (0,) * len(GAUGE_LABELS)
+    return (sample["clear"], *sample["values"], sample["nir"])
+
 POLL_SECONDS = 0.4
 
 
@@ -175,7 +188,7 @@ class SpectrumWindow(tk.Tk):
         self.paused = False
         self.closing = False
         self.status = tk.StringVar(self, "Connecting to AS7341…")
-        self.info = tk.StringVar(self, "Clear —    NIR —    I²C errors 0")
+        self.info = tk.StringVar(self, "Ten channels · I²C errors 0")
         self.caption = tk.StringVar(self, "Raw relative counts · not calibrated irradiance")
         self.configure_ui()
         self.bind("<Configure>", self.resize_ui, add="+")
@@ -237,23 +250,25 @@ class SpectrumWindow(tk.Tk):
             y = bottom - (bottom - top) * step / 4
             canvas.create_line(left, y, right, y, fill=self.palette.border if step == 0 else "#304351",
                                dash=() if step == 0 else (2, 7))
-        data = self.sample["values"] if self.sample else (0,) * 8
+        data = gauge_values(self.sample)
         heights = relative_heights(data, bottom - top)
-        column = (right - left) / len(WAVES)
-        for i, (nm, value, extent) in enumerate(zip(WAVES, data, heights)):
+        column = (right - left) / len(GAUGE_LABELS)
+        for i, (name, value, extent) in enumerate(zip(GAUGE_LABELS, data, heights)):
             center = left + (i + .5) * column
-            half = max(5, column * .28)
+            half = max(4, column * .29)
+            color = GAUGE_COLORS[i]
             canvas.create_rectangle(center - half, bottom - extent, center + half, bottom,
-                                    fill=WAVE_COLORS[i], outline="")
-            canvas.create_text(center, bottom + 14, text=str(nm),
-                               fill=self.palette.text, font=("DejaVu Sans", 10))
-            canvas.create_text(center, bottom + 30, text=str(value) if self.sample else "—",
-                               fill=self.palette.muted, font=("DejaVu Sans", 9))
+                                    fill=color, outline="")
+            # Ten bars fit 640 px: labels and numeric counts remain legible.
+            canvas.create_text(center, bottom + 13, text=name,
+                               fill=self.palette.text, font=("DejaVu Sans", 9))
+            canvas.create_text(center, bottom + 29, text=str(value) if self.sample else "—",
+                               fill=self.palette.muted, font=("DejaVu Sans", 8))
         if self.sample is None:
             canvas.create_text(width / 2, (top + bottom) / 2, text="Waiting for spectral data…",
                                fill=self.palette.text, font=("DejaVu Sans", 14))
         else:
-            peak = max(self.sample["values"])
+            peak = max(data)
             canvas.create_text(right, top, text=f"Peak {peak} counts", fill=self.palette.muted,
                                anchor="ne", font=("DejaVu Sans", 9))
 
@@ -284,7 +299,7 @@ class SpectrumWindow(tk.Tk):
                 self.sample = event
                 self.info.set(f"Clear {event['clear']:>5}    NIR {event['nir']:>5}    "
                               f"I²C errors {event['errors']}")
-                self.status.set(event["warning"] or "Live · 8 spectral channels at ~2.5 Hz")
+                self.status.set(event["warning"] or "Live · 8 spectral + Clear/NIR at ~2.5 Hz")
                 self.draw_graph()
             elif kind == "state":
                 self.led_on = event["led"]
