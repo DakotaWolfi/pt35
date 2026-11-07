@@ -20,7 +20,7 @@ class LaunchTests(unittest.TestCase):
         spectrum = launcher.target_command('spectrum')
         self.assertEqual(Path(tag[-1]), ROOT / 'nfc/pt35_i2c_tag_gui.py')
         self.assertEqual(Path(reader[-1]), ROOT / 'nfc/pt35_nfc_gui.py')
-        self.assertEqual(Path(spectrum[1]), ROOT / 'tools/pt35_tools.py')
+        self.assertEqual(Path(spectrum[1]), ROOT / 'tools/as7341_gui.py')
         with self.assertRaises(ValueError):
             launcher.target_command('unrecognized')
 
