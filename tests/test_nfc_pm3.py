@@ -157,6 +157,30 @@ class IcemanTests(unittest.TestCase):
         self.assertEqual(link.actions, ('pm3-dump',))
         self.assertTrue(link.client.endswith('/proxmark3'))
 
+    def test_custom_firmware_simulation_requires_explicit_compatibility_override(self):
+        output = ('[+] Ping response received in 2 ms\n'
+                  'Client.... Iceman/master/v4.2-1-gcafebad1\n'
+                  'OS........ Iceman/custom/v4.2-1-gbedface0\n')
+        helpers = [
+            patch.object(pm3, 'usb_ports', return_value=['/dev/ttyACM0']),
+            patch.object(pm3, 'pm3_client', return_value='/bin/pm3'),
+            patch('nfc_pm3.os.access', return_value=True),
+            patch.object(pm3, 'reader_lock'),
+            patch.object(pm3, 'run_pm3', return_value=(0, output)),
+            patch.object(pm3, 'iso15693_actions', return_value=['pm3-dump', 'pm3-simulate']),
+            patch.object(pm3.Path, 'exists', return_value=True),
+        ]
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for context in helpers:
+                stack.enter_context(context)
+            default = pm3.connect()
+            self.assertNotIn('pm3-simulate', default.actions)
+            self.assertIn('simulation disabled', default.message)
+            permitted = pm3.connect(allow_simulation_mismatch=True)
+            self.assertIn('pm3-simulate', permitted.actions)
+            self.assertIn('experimental emulation override enabled', permitted.message)
+
     def test_automatically_finds_owners_existing_iceman_checkout(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
