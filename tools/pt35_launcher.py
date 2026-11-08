@@ -96,7 +96,9 @@ def target_command(name):
     if name == 'reader':
         return [sys.executable, str(ROOT / 'nfc/pt35_nfc_gui.py')]
     if name == 'radiacode':
-        return [sys.executable, str(ROOT / 'tools/radiacode_gui.py')]
+        venv = ROOT / '.venv/bin/python'
+        return [str(venv) if venv.is_file() else sys.executable,
+                str(ROOT / 'tools/radiacode_gui.py')]
     if name == 'spectrum':
         script = ROOT / 'tools/as7341_gui.py'
         python = Path.home() / 'as7341-env/bin/python'
