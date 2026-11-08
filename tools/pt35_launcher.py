@@ -232,7 +232,7 @@ class Launcher(tk.Tk):
               font=SMALL, muted=True, wraplength=610).pack(fill='x')
         label(info, textvariable=self.notice, font=SMALL, muted=True,
               wraplength=610).pack(fill='x')
-        self.notice.set('Ready · Seven tools and Exit')
+        self.notice.set('Ready · Six tools and Exit')
 
 
     def go_home(self, event=None):
