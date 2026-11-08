@@ -21,6 +21,8 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual(Path(tag[-1]), ROOT / 'nfc/pt35_i2c_tag_gui.py')
         self.assertEqual(Path(reader[-1]), ROOT / 'nfc/pt35_nfc_gui.py')
         self.assertEqual(Path(spectrum[1]), ROOT / 'tools/as7341_gui.py')
+        self.assertEqual(Path(launcher.target_command('radiacode')[-1]),
+                         ROOT / 'tools/radiacode_gui.py')
         with self.assertRaises(ValueError):
             launcher.target_command('unrecognized')
 
@@ -39,13 +41,13 @@ class LaunchTests(unittest.TestCase):
                 if node.func.id == 'label':
                     self.assertTrue(keys.isdisjoint({'anchor', 'justify'}))
 
-    def test_start_page_is_two_columns_by_three_rows(self):
-        self.assertEqual(len(launcher.HOME_TILES), 6)
+    def test_start_page_is_two_columns_by_four_rows(self):
+        self.assertEqual(len(launcher.HOME_TILES), 7)
         self.assertEqual([entry[2] for entry in launcher.HOME_TILES],
-                         ['tag', 'reader', 'spectrum', 'led', 'lra', 'exit'])
+                         ['tag', 'reader', 'spectrum', 'led', 'lra', 'radiacode', 'exit'])
         self.assertEqual([(row, column) for _, row, column in
                           launcher.home_tile_positions()],
-                         [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)])
+                         [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0)])
 
     def test_lra_test_commands_are_bounded_and_noncontinuous(self):
         self.assertEqual(launcher.lra_command('status'), ['/usr/local/bin/lra_ctl', 'status'])
