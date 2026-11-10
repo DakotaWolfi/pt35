@@ -108,7 +108,11 @@ def _save(path, items):
 def add_scan(root, record):
     """Add/upsert one scan; the existing archive is never modified."""
     root = Path(root)
-    if eligibility(record, root) is None:
+    if eligibility(record, root) is None and not (
+            isinstance(record, dict) and record.get('protocol') == 'ISO15693' and
+            UID.fullmatch(str(record.get('uid', '')).upper()) and
+            record.get('classification_verified') is True and
+            record.get('classification') in ('ndef_link', 'ndef_text', 'business_card')):
         return False
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     with file_lock(root / '.possible_tonies.lock'):
