@@ -26,9 +26,6 @@ def eligibility(record, root):
     uid = str(record.get('uid', '')).upper()
     if record.get('protocol') != 'ISO15693' or not UID.fullmatch(uid):
         return None
-    if record.get('read_errors') and not record.get('blocks'):
-        # Discovery is still useful, but do not imply verified memory.
-        pass
     if record.get('classification_verified') and record.get('classification') in (
             'ndef_link', 'ndef_text', 'business_card'):
         return None
@@ -64,6 +61,22 @@ def _read(path):
 def _merge(items, record, root):
     evidence = eligibility(record, root)
     if evidence is None:
+        # A later verified ordinary NDEF capture can disprove an earlier
+        # vendor-prefix-only candidate. Do not keep exporting that false
+        # positive. Preserve user-enriched entries but mark them excluded.
+        uid = str(record.get('uid', '')).upper()
+        excluded = (record.get('protocol') == 'ISO15693' and UID.fullmatch(uid) and
+                    record.get('classification') in ('ndef_link', 'ndef_text', 'business_card') and
+                    record.get('classification_verified') is True)
+        if excluded:
+            old = next((item for item in items if item.get('uid') == uid), None)
+            if old is not None:
+                if old.get('teddycloud'):
+                    old.update(status='excluded_non_tonie',
+                               evidence='verified_non_tonie_ndef', verified=False)
+                else:
+                    items.remove(old)
+                return True
         return False
     previous = next((item for item in items if item['uid'] == evidence['uid']), None)
     if previous is None:
@@ -143,7 +156,7 @@ def shareable_catalog(root, destination):
         items = _read(catalog_path(root))
     public = [{key: item[key] for key in (
         'uid', 'protocol', 'manufacturer', 'status', 'evidence', 'verified') if key in item}
-        for item in items]
+        for item in items if item.get('status') in ('possible_tonie', 'known_tonie')]
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     atomic_write(destination, (json.dumps(public, indent=2, ensure_ascii=False) + '\n').encode())
@@ -160,6 +173,8 @@ def teddy_custom_entries(root):
         items = _read(catalog_path(root))
     entries = []
     for item in items:
+        if item.get('status') == 'excluded_non_tonie':
+            continue
         meta = item.get('teddycloud')
         if not isinstance(meta, dict):
             continue
