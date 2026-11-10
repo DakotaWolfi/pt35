@@ -17,6 +17,7 @@ import nfc_pm3 as pm3
 from nfc_archive import atomic_write, record_bytes, range_bytes, is_known_tonie, migrate_archive, now, record_path, save_record
 from nfc_ndef import extract_message, ndef_area, decode_message
 from nfc_capture_history import compare
+from nfc_tonies import add_scan as add_tonie_scan, scan_archive as index_tonie_archive, shareable_catalog as share_tonie_catalog, export_teddy_custom
 from nfc_diagnostics import Diagnostics, safe_event
 from nfc_poll import MODES, POLL, configure, read_ntag
 from nfc_config import DEFAULT_ARCHIVE, LEGACY_ARCHIVE, handle_sigterm, reader_lock
@@ -196,6 +197,11 @@ def tag_event(args, emit, record):
         emit('fault', f'Archive save failed: {exc}')
     else:
         emit('archived', f'Archived {uid}', path=str(path), comparison=comparison)
+        try:
+            if add_tonie_scan(args.archive, record):
+                emit('tonie_candidate', f'Updated local possible_tonies.json · {uid}')
+        except (OSError, ValueError) as exc:
+            emit('fault', f'Candidate catalog not updated: {exc}')
 
 
 class InternalPoller:
@@ -456,7 +462,8 @@ def main():
     p = argparse.ArgumentParser(description='PT35 NFC dual-reader and local archive')
     p.add_argument('--version', action='version', version=f'PT35 NFC {VERSION}')
     p.add_argument('action', choices=['status', 'scan', 'watch', 'list', 'show', 'identify', 'pm3-shell',
-                                       'migrate-archive', 'pm3-dump', 'pm3-simulate', 'pm3-em410x', 'rf-bench'], nargs='?', default='scan')
+                                       'migrate-archive', 'tonies-index', 'tonies-share', 'tonies-teddy-export',
+                                       'pm3-dump', 'pm3-simulate', 'pm3-em410x', 'rf-bench'], nargs='?', default='scan')
     p.add_argument('uid', nargs='?', help='tag identifier for show, pm3-dump or pm3-simulate')
     p.add_argument('--backend', choices=['auto', 'internal', 'proxmark3'], default='auto')
     p.add_argument('--pm3-mode', choices=pm3.PM3_MODES, default='HF')
@@ -516,6 +523,21 @@ def main():
     try:
         if args.action == 'migrate-archive':
             print(f'Copied {migrate_archive(LEGACY_ARCHIVE, args.archive)} missing archive files.')
+            return 0
+        if args.action == 'tonies-index':
+            print(json.dumps(index_tonie_archive(args.archive), indent=2))
+            return 0
+        if args.action == 'tonies-share':
+            index_tonie_archive(args.archive)
+            path, count = share_tonie_catalog(args.archive, args.archive.parent / 'exports' /
+                                               'possible_tonies-share.json')
+            print(f'Exported {count} candidate UIDs/metadata to {path}; share only with consent.')
+            return 0
+        if args.action == 'tonies-teddy-export':
+            index_tonie_archive(args.archive)
+            path, count = export_teddy_custom(args.archive, args.archive.parent / 'exports' /
+                                             'tonies.custom.json')
+            print(f'Exported {count} verified TeddyCloud model/audio mappings to {path}')
             return 0
         if args.action == 'list':
             for path in sorted(args.archive.glob('*/record.json')):
