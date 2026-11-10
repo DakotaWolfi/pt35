@@ -52,6 +52,22 @@ Physical checklist: verify live eight-channel bars and Clear/NIR, LED on/off, Pa
 
 **PM3 NTAG/Ultralight, MIFARE Classic and FeliCa:** Iceman exposes additional emulator commands on many builds, but PT35's existing captures are not automatically sufficient. The internal NTAG read deliberately archives only **user pages starting at page 4**, omitting original UID/manufacturer, lock and configuration pages. Those cannot be advertised as full-tag images. NFC-A/B/F scanning may contain only identifiers, not the full data and behavior required by their respective card types. The UI explains these limitations rather than offering a misleading or unsafe "clone" action. Full archive format and emulator capability discovery are follow-up tasks, preserving the custom SLIX-L firmware.
 
+### Possible Tonies metadata catalog
+
+NFC Reader **Tools → Possible Tonies catalog** indexes observed **NXP ISO15693 (`E004…`) UIDs** in `~/pt35-nfc/archive/possible_tonies.json` after an ordinary archived scan, deduplicating by UID. An NXP manufacturer prefix **does not prove the tag is a Tonie**: entries remain `possible_tonie` unless their UIDs are explicitly present in the pre-existing locally maintained `known_tonies.txt`. Identified ordinary NDEF/business-card captures are omitted. No scan writes to the user's TeddyCloud, changes a tag, or fetches/downloads audio.
+
+The toolbox provides **Scan saved NFC archives** (incremental, preserves curated metadata), **Export candidate UIDs (metadata only)** (explicit confirmation and separate `~/pt35-nfc/exports/possible_tonies-share.json`), and **Export verified TeddyCloud metadata** (`~/pt35-nfc/exports/tonies.custom.json`). The public candidate export contains only UID, technology, vendor, candidate status and evidence. **A UID may still identify or function as a simple access credential: review before sharing.** It never includes tag memory, passwords, RF logs, visit timestamps, TAF or audio.
+
+TeddyCloud's `tonies.json` / `tonies.custom.json` is **not a UID database**: its model, `audio_id` and 40-hex SHA1 hash belong to actual Tonie/TAF content. The custom-format export includes **only** candidate entries explicitly enriched under a `teddycloud` object in the local catalog with a validated nonempty `model`, matched `audio_id` and `hash` lists. Values are **not guessed** from an NXP UID. If no independently verified content metadata has been added, the export will correctly be `[]`; do not load an empty export over an existing curated TeddyCloud file. The PT35 does **not** modify `tonies.custom.json` on the TeddyCloud server or its official `tonies.json`.
+
+CLI (no RF required):
+```bash
+python3 nfc/pt35_nfc.py tonies-index
+python3 nfc/pt35_nfc.py tonies-share
+python3 nfc/pt35_nfc.py tonies-teddy-export
+python3 -m unittest discover -s tests -p 'test_nfc_tonies.py' -v
+```
+
 ## NFC (work in progress)
 - Internal M5Stack ST25R3916 on I2C bus 1, address 0x50; direct 3.3 V supply (board modified to bypass its original regulator); IRQ not connected.
 - See the [NFC application guide](docs/NFC.md) for installation, archive behavior and the PT35 hardware checklist.
