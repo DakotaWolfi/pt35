@@ -717,9 +717,9 @@ class NFCWindow(tk.Tk):
                self.tonies_share_confirm, anchor='w').pack(fill='x', pady=5)
         self.wrap(body, 'TeddyCloud tonies.custom.json maps model numbers to '
                   'audio IDs and hashes, not raw NFC UIDs. Only records enriched '
-                  'with verified metadata can be exported in that format.',
+                  'with independently supplied model/audio metadata can be exported in that format.',
                   muted=True)
-        Button(body, 'Export verified TeddyCloud metadata',
+        Button(body, 'Export supplied TeddyCloud metadata',
                self.tonies_export_custom, anchor='w').pack(fill='x', pady=5)
         self.wrap(body, 'Files are saved under the NFC archive or adjacent exports '
                   'folder; TeddyCloud is not modified or contacted.', muted=True)
@@ -757,7 +757,7 @@ class NFCWindow(tk.Tk):
                 self.exports / 'tonies.custom.json')
         self.submit('export TeddyCloud metadata', work,
                     lambda output: self.notice.set(
-                        f'Exported {output[1]} verified TeddyCloud entries to {output[0]}. '
+                        f'Exported {output[1]} user-supplied TeddyCloud mappings to {output[0]}. '
                         'An empty [] means no model/audio mappings were supplied.'))
 
     def toggle_fullscreen(self):
