@@ -69,6 +69,19 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(summary['changed'], 1)
             self.assertEqual(scan_archive(root)['changed'], 0)
 
+    def test_later_ndef_verification_revokes_false_positive_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            observed = {'uid': UID, 'protocol': 'ISO15693', 'classification': 'tonie_candidate'}
+            self.assertTrue(add_scan(root, observed))
+            proven_ndef = {**observed, 'classification': 'ndef_text',
+                           'classification_verified': True,
+                           'content_preview': ['Text: example']}
+            self.assertTrue(add_scan(root, proven_ndef))
+            self.assertEqual(json.loads(catalog_path(root).read_text()), [])
+            _, count = shareable_catalog(root, root / 'share.json')
+            self.assertEqual(count, 0)
+
     def test_share_export_has_no_private_dump_or_internal_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
