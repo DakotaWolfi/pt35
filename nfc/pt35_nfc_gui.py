@@ -21,6 +21,7 @@ from nfc_diagnostics import Diagnostics
 from nfc_led import NFCLeds
 from nfc_ndef import decode_message, extract_message, ndef_area
 from nfc_pm3 import SIM_SECONDS, simulation_eligibility, simulation_image, em410x_eligibility
+from nfc_tonies import scan_archive as index_tonie_archive, shareable_catalog as share_tonie_catalog, export_teddy_custom, catalog_path as tonie_catalog_path
 from nfc_touch import FONT, LARGE, MONO, SMALL, THEMES, Button, ScrollArea, font_for, label, row, touch_size
 
 BACKEND_SCRIPT = Path(__file__).resolve().with_name('pt35_nfc.py')
@@ -690,10 +691,74 @@ class NFCWindow(tk.Tk):
         body = self.page('Tools', self.home)
         for title, action in (('RF diagnostics', self.diagnostics), ('Proxmark3', self.pm3),
                               ('PM3 · Emulation', self.emulation_menu),
+                              ('Possible Tonies catalog', self.tonies_tool),
                               ('Reader status', lambda: self.launch('status')),
                               ('Toggle full screen', self.toggle_fullscreen)):
             Button(body, title, action, anchor='w').pack(fill='x', pady=4)
         self.finish_page()
+
+    def tonies_tool(self):
+        self.screen = 'tonies'
+        body = self.page('Possible Tonies', self.tools)
+        path = tonie_catalog_path(self.archive)
+        self.wrap(body, 'NXP ISO15693 UIDs are candidates only, not confirmed '
+                  'Tonies. A confirmed UID from known_tonies.txt is marked separately.',
+                  muted=True)
+        self.wrap(body, 'Local catalog: ' + str(path), font=SMALL, muted=True)
+        self.wrap(body, 'A live scan already updates this file automatically '
+                  'after the archive is saved. Existing records can be indexed below.',
+                  muted=True)
+        Button(body, 'Scan saved NFC archives', self.tonies_reindex,
+               anchor='w').pack(fill='x', pady=5)
+        self.wrap(body, 'Review before sharing: even a UID can identify a physical '
+                  'tag. Share export omits memory, audio, timestamps and reader logs.',
+                  muted=True)
+        Button(body, 'Export candidate UIDs (metadata only)',
+               self.tonies_share_confirm, anchor='w').pack(fill='x', pady=5)
+        self.wrap(body, 'TeddyCloud tonies.custom.json maps model numbers to '
+                  'audio IDs and hashes, not raw NFC UIDs. Only records enriched '
+                  'with verified metadata can be exported in that format.',
+                  muted=True)
+        Button(body, 'Export verified TeddyCloud metadata',
+               self.tonies_export_custom, anchor='w').pack(fill='x', pady=5)
+        self.wrap(body, 'Files are saved under the NFC archive or adjacent exports '
+                  'folder; TeddyCloud is not modified or contacted.', muted=True)
+        self.finish_page()
+
+    def tonies_reindex(self):
+        def done(summary):
+            self.notice.set(f"Indexed {summary['scanned']} archives · "
+                            f"{summary['candidates']} candidates · "
+                            f"{summary['changed']} additions/updates · "
+                            f"{summary['invalid']} invalid files")
+        self.submit('index possible tonies', lambda: index_tonie_archive(self.archive), done)
+
+    def tonies_share_confirm(self):
+        if not messagebox.askyesno(
+            'Share candidate UIDs?',
+            'Export candidate NFC UIDs and limited evidence only?\\n\\n'
+            'Tag UIDs may identify a physical object or be reusable in simple '
+            'identifier-based systems. The output does NOT contain audio or '
+            'NFC memory. Review the file before publishing.',
+            parent=self):
+            return
+        def work():
+            index_tonie_archive(self.archive)
+            return share_tonie_catalog(self.archive,
+                self.exports / 'possible_tonies-share.json')
+        self.submit('export possible tonies', work,
+                    lambda output: self.notice.set(
+                        f'Exported {output[1]} entries to {output[0]}'))
+
+    def tonies_export_custom(self):
+        def work():
+            index_tonie_archive(self.archive)
+            return export_teddy_custom(self.archive,
+                self.exports / 'tonies.custom.json')
+        self.submit('export TeddyCloud metadata', work,
+                    lambda output: self.notice.set(
+                        f'Exported {output[1]} verified TeddyCloud entries to {output[0]}. '
+                        'An empty [] means no model/audio mappings were supplied.'))
 
     def toggle_fullscreen(self):
         self.attributes('-fullscreen', not self.attributes('-fullscreen'))
