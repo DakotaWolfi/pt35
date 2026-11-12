@@ -37,12 +37,13 @@ HOME_TILES = (
     ('Spectrum Analyzer', 'AS7341 · 10 channels', 'spectrum'),
     ('LED Test', '16 WS2812 LEDs', 'led'),
     ('LRA Haptic Test', 'DRV2605L motor', 'lra'),
+    ('RadiaCode 103', 'Gamma telemetry · logger', 'radiacode'),
     ('Exit', 'Close launcher', 'exit'),
 )
 
 
 def home_tile_positions():
-    """Stable two-column, three-row layout for the six launcher actions."""
+    """Stable two-column grid for all launcher actions."""
     return [(name, row, column) for index, (name, _, _) in enumerate(HOME_TILES)
             for row, column in [divmod(index, 2)]]
 
@@ -94,6 +95,10 @@ def target_command(name):
         return [sys.executable, str(ROOT / 'nfc/pt35_i2c_tag_gui.py')]
     if name == 'reader':
         return [sys.executable, str(ROOT / 'nfc/pt35_nfc_gui.py')]
+    if name == 'radiacode':
+        venv = ROOT / '.venv/bin/python'
+        return [str(venv) if venv.is_file() else sys.executable,
+                str(ROOT / 'tools/radiacode_gui.py')]
     if name == 'spectrum':
         script = ROOT / 'tools/as7341_gui.py'
         python = Path.home() / 'as7341-env/bin/python'
@@ -188,8 +193,7 @@ class Launcher(tk.Tk):
         return button
 
     def home(self, event=None):
-        # Fixed 2 × 3 grid fits the native 640×480 PT35 display without
-        # requiring scrolling. Information/status stays BELOW the buttons.
+        # Two-column four-row grid for seven tools plus Exit; compact at 640x480.
         if self.frame is not None:
             self.frame.destroy()
         self.frame = tk.Frame(self, bg=self.palette.background, padx=10, pady=7)
@@ -199,12 +203,13 @@ class Launcher(tk.Tk):
         grid.pack(fill='both', expand=True)
         for col in range(2):
             grid.grid_columnconfigure(col, weight=1, uniform='tiles')
-        for row_index in range(3):
+        for row_index in range(4):
             grid.grid_rowconfigure(row_index, weight=1, uniform='tiles')
         actions = {
             'tag': lambda: self.launch('tag'),
             'reader': lambda: self.launch('reader'),
             'spectrum': lambda: self.launch('spectrum'),
+            'radiacode': lambda: self.launch('radiacode'),
             'led': self.led_page,
             'lra': self.lra_page,
             'exit': self.destroy,
@@ -229,7 +234,7 @@ class Launcher(tk.Tk):
               font=SMALL, muted=True, wraplength=610).pack(fill='x')
         label(info, textvariable=self.notice, font=SMALL, muted=True,
               wraplength=610).pack(fill='x')
-        self.notice.set('Ready · Five tools and Exit')
+        self.notice.set('Ready · Six tools and Exit')
 
 
     def go_home(self, event=None):
@@ -244,7 +249,7 @@ class Launcher(tk.Tk):
             self.notice.set('Cannot launch: ' + str(exc)[:130])
         else:
             self.notice.set('Opened ' + {'tag': 'I²C NFC Tag', 'reader': 'NFC Reader',
-                                         'spectrum': 'Spectrum Analyzer'}[name])
+                                         'spectrum': 'Spectrum Analyzer', 'radiacode': 'RadiaCode 103'}[name])
 
     def led_page(self):
         area = self.page('LED Test · WS2812', self.home)
