@@ -52,7 +52,7 @@ cat > "$BIN/cp-connect" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 source "$HOME/.config/collarpet/link.conf"
-ip="$(cp-discover | python3 -c 'import sys,json; x=json.load(sys.stdin); print(x.get("_source_ip",""))')" || {
+ip="$("$HOME/.local/bin/cp-discover" | python3 -c 'import sys,json; x=json.load(sys.stdin); print(x.get("_source_ip",""))')" || {
   echo "Collar Pet not discovered. Pair when it is available."; exit 1;
 }
 args=(-p "${COLLARPET_SSH_PORT:-22}")
@@ -66,7 +66,7 @@ set -euo pipefail
 source "$HOME/.config/collarpet/link.conf"
 key="$HOME/.ssh/id_ed25519_collarpet"
 [[ -f "$key" ]] || ssh-keygen -t ed25519 -f "$key" -N "" -C "PT35 -> CollarPet"
-ip="$(cp-discover | python3 -c 'import sys,json; x=json.load(sys.stdin); print(x.get("_source_ip",""))')" || {
+ip="$("$HOME/.local/bin/cp-discover" | python3 -c 'import sys,json; x=json.load(sys.stdin); print(x.get("_source_ip",""))')" || {
   read -r -p "Collar Pet hostname/IP: " ip;
 }
 ssh-copy-id -i "$key.pub" -p "${COLLARPET_SSH_PORT:-22}" "${COLLARPET_USER:-jenna}@$ip"
