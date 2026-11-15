@@ -77,6 +77,7 @@ else
 fi
 echo "[6/7] Installing Collar Pet desktop and PetMind tools"
 # Use vetted PT35-targeted installation helpers from the project's own repository.
+bash "$ROOT/scripts/setup_pi5_collar_link.sh"
 bash "$CROOT/pt35/Desktop/Collar_Pet/install-pm35-collarpet-dashboard.sh"
 install -m 0755 "$CROOT/pt35/training/cp-petmind-training" "$HOME/.local/bin/cp-petmind-training"
 bash "$CROOT/pt35/scripts/update-pt35-petmind-training-ui-v2.sh"
