@@ -27,7 +27,7 @@ if (( ! NO_UPGRADE )); then sudo apt-get -y full-upgrade; fi
 echo "[2/7] Installing dependencies"
 sudo apt-get install -y git ca-certificates python3 python3-pip python3-venv \
   python3-evdev python3-smbus2 python3-lgpio python3-gpiozero python3-tk \
-  i2c-tools raspi-utils jq xdotool network-manager
+  i2c-tools raspi-utils jq xdotool network-manager openssh-client python3-pil python3-pil.imagetk
 if apt-cache show wtype >/dev/null 2>&1; then sudo apt-get install -y wtype; fi
 echo "[3/7] Configuring I2C and hardware-access groups"
 CONFIG="/boot/firmware/config.txt"
