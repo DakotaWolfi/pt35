@@ -387,6 +387,10 @@ class Handler(BaseHTTPRequestHandler):
                 receipt = {"name": name, "message": message, **details,
                            "amount": amount, "currency": currency}
                 raw = make_ticket(name, message, self.conf, details)
+            receipt["rendered_text"] = raw.decode("ascii")
+            receipt["print_options"] = {"feed_mm": self.conf["feed_mm"], "cut": self.conf["cut"],
+                                        "dry_run": self.conf["dry_run"],
+                                        "logo_enabled": self.conf.get("logo_enabled",False)}
             global last_job_at
             now = time.monotonic()
             ip = self.client_address[0]
