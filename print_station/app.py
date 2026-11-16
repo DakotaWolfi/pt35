@@ -75,7 +75,7 @@ def allowed(addr, conf):
 def make_ticket(name, message, conf):
     # ASCII-only on purpose: reliable across older Epson ESC/POS models.
     def safe(x):
-        return x.encode("ascii", errors="replace").decode("ascii")
+        return "".join(ch if (ord(ch) >= 32 or ch == "\n") else " " for ch in x).encode("ascii", errors="replace").decode("ascii")
     lines = [safe(conf["station_name"])[:42], "-" * 32,
              "AWOO FINE / FMI TICKET", "To: " + safe(name),
              safe(message), "-" * 32, safe(conf["footer"]), ""]
