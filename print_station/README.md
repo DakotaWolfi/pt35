@@ -16,7 +16,7 @@ python3 app.py
 
 Browse http://127.0.0.1:8767. Default **dry_run=true**: no paper consumed.
 To print, set \`printer_host\` to the Ethernet Epson's reachable IP, set \`dry_run=false\`, and restart.
-The printer is accessed using ESC/POS over TCP/9100. Paper feeds 3 lines before optional partial cut.
+The printer is accessed using ESC/POS over TCP/9100. Paper feeds 50 mm before optional partial cut by default (`feed_mm`: 50).
 
 ## Modes / hosting
 
