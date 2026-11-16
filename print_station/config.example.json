@@ -23,5 +23,11 @@
   "max_queue": 8,
   "station_name": "FMI PRINT STATION",
   "footer": "AWOO responsibly!",
-  "admin_token_env": "FMI_PRINT_ADMIN_TOKEN"
+  "admin_token_env": "FMI_PRINT_ADMIN_TOKEN",
+  "admin_token": "",
+  "logo_enabled": true,
+  "logo_width": 384,
+  "subtitle": "Department of Unlicensed Howling",
+  "default_amount": "350.00",
+  "currency": "CHF"
 }
