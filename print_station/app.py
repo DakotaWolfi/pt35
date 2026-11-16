@@ -142,7 +142,7 @@ def raster_logo(path, max_width):
                 data[y * row_bytes + x // 8] |= 0x80 >> (x % 8)
     return (bytes([27, 97, 1, 29, 118, 48, 0,
                    row_bytes & 255, row_bytes >> 8,
-                   height & 255, height >> 8]) + data + b"\\n")
+                   height & 255, height >> 8]) + data + b"\n")
 
 def admin_allowed(handler):
     configured = handler.conf.get("admin_token") or os.environ.get(handler.conf.get("admin_token_env", "FMI_PRINT_ADMIN_TOKEN"), "")
@@ -279,7 +279,7 @@ class Handler(BaseHTTPRequestHandler):
                     saved = json.loads(target.read_text()) if target.exists() else {}
                     saved.update(changed)
                     temp = target.with_suffix(".json.tmp")
-                    temp.write_text(json.dumps(saved, indent=2) + "\\n")
+                    temp.write_text(json.dumps(saved, indent=2) + "\n")
                     temp.replace(target)
                     return self.reply(200, public_config(self.conf))
                 logo = ROOT / "header_logo.png"
@@ -327,7 +327,7 @@ class Handler(BaseHTTPRequestHandler):
                 last_job_at = now
                 statistics["queued"] += 1
             return self.reply(202, {"message": "Ticket queued!", "queue": jobs.qsize()})
-        except (ValueError, TypeError, json.JSONDecodeError, OSError) as exc:
+        except Exception as exc:
             LOG.warning("Request rejected: %s", exc)
             return self.reply(400, {"error": "Invalid JSON data"})
 
