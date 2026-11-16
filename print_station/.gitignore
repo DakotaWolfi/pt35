@@ -3,3 +3,6 @@ header_logo.png
 *.tmp
 __pycache__/
 *.pyc
+
+# Local print history (SQLite and WAL files)
+print_history.sqlite3*
