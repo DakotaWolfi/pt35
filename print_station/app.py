@@ -33,6 +33,7 @@ DEFAULT = {
     "admin_token": "", "logo_enabled": True, "logo_width": 384,
     "subtitle": "Department of Unlicensed Howling",
     "default_amount": "350.00", "currency": "CHF",
+    "display": {"enabled": True, "rotation": 180, "refresh_interval_seconds": 90},
 }
 LOG = logging.getLogger("fmi.print")
 jobs = queue.Queue()
