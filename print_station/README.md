@@ -45,3 +45,16 @@ python3 -m unittest discover -s tests
 \`\`\`
 
 Do not put secrets in config.json or commit it. The global PT35 .gitignore might not ignore this file, so keep credentials in environment files stored outside Git.
+
+
+## v0.3 — AWOO Fine Office-inspired interface
+
+Dark blue/cyan styling, live receipt preview, optional logo image (PNG/JPEG/WebP),
+expanded fine fields and administrator-controlled printer/receipt settings.
+Install `sudo apt install python3-pil` for image printing.
+To unlock settings and image uploads from the browser, configure a long random
+`admin_token` in the private, untracked `config.json`. Enter it in the
+page's Admin token field. Do not publish the token or expose this prototype on
+an untrusted network. Printer settings update immediately and persist on disk.
+The ticket print endpoint remains subject to the existing cooldown and limits.
+The displayed preview is approximate, and the ticket history remains future work.
