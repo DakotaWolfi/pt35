@@ -22,7 +22,7 @@ DEFAULT = {
     "local_networks": ["127.0.0.0/8", "::1/128", "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"],
     "public_base_url": "", "nfc_url": "",
     "printer_host": "192.168.50.2", "printer_port": 9100,
-    "dry_run": True, "cut": True, "feed_lines": 3,
+    "dry_run": True, "cut": True, "feed_lines": 3, "feed_mm": 50,
     "max_message_chars": 160, "max_jobs_per_hour_per_ip": 3,
     "global_min_interval_seconds": 10, "max_queue": 8,
     "station_name": "FMI PRINT STATION", "footer": "AWOO responsibly!",
@@ -51,6 +51,8 @@ def load_config(path=CONFIG_FILE):
         raise ValueError("max_message_chars must be 1..500")
     if int(conf["max_queue"]) < 1 or int(conf["max_queue"]) > 50:
         raise ValueError("max_queue must be 1..50")
+    if not 0 <= int(conf["feed_mm"]) <= 200:
+        raise ValueError("feed_mm must be 0..200")
     for net in conf["local_networks"]:
         ipaddress.ip_network(net, strict=False)
     if conf["access_mode"] in ("public", "both") and not conf["public_base_url"].startswith("https://"):
@@ -85,8 +87,13 @@ def send_printer(data, conf):
     if conf["dry_run"]:
         LOG.info("DRY RUN: %r", data)
         return
-    # ESC @ initialize; feed a little for cutter clearance, then partial cut.
-    raw = bytes([27, 64]) + data + bytes([27, 100, int(conf["feed_lines"])])
+    # ESC @ initialize, then feed a configurable length before cutting.
+    raw = bytes([27, 64]) + data
+    dots = round(float(conf["feed_mm"]) * 8)  # Epson 203 dpi is approximately 8 dots/mm
+    while dots > 0:
+        step = min(255, dots)
+        raw += bytes([27, 74, step])  # ESC J n: feed n dots
+        dots -= step
     if conf["cut"]:
         raw += bytes([29, 86, 1])
     with socket.create_connection((conf["printer_host"], int(conf["printer_port"])), timeout=5) as conn:
