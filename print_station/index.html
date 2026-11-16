@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FMI | AWOO Fine Office</title>
+<style>
+:root{color-scheme:dark;--bg:#10151e;--card:#1b2431;--line:#344155;--ink:#f3f5fa;--muted:#abb8c9;--accent:#a4d7f5}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,Segoe UI,Arial,sans-serif}
+main{max-width:1150px;margin:auto;padding:24px}header{display:flex;align-items:center;gap:15px;margin-bottom:22px}header .moon{font-size:48px}h1{margin:0;font-size:26px}h2{margin:0 0 12px;font-size:20px}
+p{color:var(--muted);margin:4px 0}.grid{display:grid;grid-template-columns:1.12fr .88fr;gap:18px}.card{border:1px solid var(--line);border-radius:15px;padding:19px;background:var(--card);margin-bottom:18px}
+label{display:block;color:var(--muted);font-size:13px;margin:10px 0 4px}input,select,textarea{width:100%;background:#101923;border:1px solid #526176;border-radius:7px;padding:10px;color:var(--ink);font:inherit}
+textarea{min-height:76px;resize:vertical}.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}.controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+button{padding:10px 14px;border:0;border-radius:8px;background:var(--accent);color:#112131;font:inherit;font-weight:700;cursor:pointer}
+button.secondary{background:#344457;color:var(--ink)}button:disabled{opacity:.5;cursor:wait}
+.receipt{background:white;color:#111;max-width:320px;margin:12px auto;padding:17px;text-align:center;box-shadow:0 8px 30px #0007;font:13px/1.4 monospace;overflow-wrap:anywhere;white-space:pre-wrap}
+.receipt img{max-width:100%;max-height:150px;object-fit:contain}.receipt .big{font-size:25px;font-weight:900}.receipt .rule{margin:9px 0;border-top:1px dashed #555}.receipt .left{text-align:left}
+.small{font-size:12px;color:var(--muted)}.check{display:flex;align-items:center;gap:8px}.check input{width:auto}.status{min-height:24px;margin:12px 0}.ok{color:#9bebb2}.error{color:#ffb0b0}
+.imagebox{background:#101923;border:1px dashed #526176;border-radius:9px;padding:12px;text-align:center}.imagebox img{max-width:100%;max-height:155px;background:white}
+summary{cursor:pointer;font-weight:bold}.pill{font-size:12px;border:1px solid var(--line);border-radius:20px;padding:5px 10px;color:var(--muted)}
+@media(max-width:760px){.grid,.two{grid-template-columns:1fr}main{padding:14px}h1{font-size:22px}}
+</style></head><body><main>
+<header><span class="moon">🐺</span><div><h1>FMI AWOO Fine Office</h1><p>Department of Unlicensed Howling · Powered by FMI Print Station</p></div><span class="pill" id="mode">Checking…</span></header>
+<div class="grid"><section>
+<div class="card"><h2>Issue an AWOO Fine</h2><form id="fine">
+<div class="two"><div><label>Offender / furry name<input name="name" maxlength="40" required placeholder="Suspiciously fluffy wolf"></label></div><div><label>Fine issued by<input name="issuer" maxlength="80" placeholder="Jenna / Mel"></label></div></div>
+<label>Offence<select name="offence" id="offence"><option>Unlicensed AWOO</option><option>Excessive howling</option><option>Unauthorized tail wagging</option><option>Being suspiciously fluffy</option><option>Disturbing the peace with AWOOOO</option><option value="Other">Other</option></select></label>
+<div class="two"><label>Fine amount<input name="amount" type="number" min="0" step="0.01" value="350"></label><label>Currency<input name="currency" maxlength="8" value="CHF"></label></div>
+<label>Location<input name="location" maxlength="80" placeholder="40C3 / Maker Space"></label>
+<label>Additional notes<textarea name="message" maxlength="160" required placeholder="Officer observations, suspicious awoo intensity…"></textarea></label>
+<div class="controls"><button type="submit" id="print">Print AWOO fine</button><button type="reset" class="secondary">Clear</button></div></form>
+<div class="status" id="status" role="status"></div></div>
+<div class="card"><h2>Printer status</h2><p id="health">Checking print station…</p><p class="small">Visitor requests are rate-limited. The printer is connected directly by Ethernet. Parody fines have no legal force.</p></div>
+</section><section>
+<div class="card"><h2>Live receipt preview</h2><div class="receipt" id="preview"></div><p class="small" style="text-align:center">Approximate preview; paper output depends on fonts and image rendering.</p></div>
+<div class="card"><h2>Header picture</h2><p class="small">PNG, JPG or WebP; images are converted to monochrome for the Epson.</p><div class="imagebox"><img id="logo" src="/api/logo" alt="Current header image" onerror="this.hidden=true"></div>
+<label>Replace picture (administrator)<input type="file" id="upload" accept="image/png,image/jpeg,image/webp"></label>
+<div class="controls"><button class="secondary" id="remove">Remove picture</button></div></div>
+<div class="card"><details><summary>Printer & receipt settings · administrator</summary>
+<label>Admin token<input type="password" id="token" autocomplete="off" placeholder="Token from local config.json"></label>
+<div class="controls"><button id="load" class="secondary">Unlock settings</button><button id="probe" class="secondary">Test printer (no paper)</button></div>
+<form id="settings" hidden><div class="two"><label>Printer IP<input name="printer_host"></label><label>Printer port<input name="printer_port" type="number"></label></div>
+<label>Header title<input name="station_name"></label><label>Subtitle<input name="subtitle"></label><label>Footer<textarea name="footer"></textarea></label>
+<div class="two"><label>Extra feed before cut (mm)<input name="feed_mm" type="number" min="0" max="200"></label><label>Image width (dots)<select name="logo_width"><option>256</option><option>384</option><option>512</option><option>576</option></select></label></div>
+<label class="check"><input name="logo_enabled" type="checkbox">Print header image</label><label class="check"><input name="cut" type="checkbox">Cut paper</label><label class="check"><input name="dry_run" type="checkbox">Dry-run (no paper)</label>
+<div class="controls"><button type="submit">Save settings</button></div></form>
+<p class="small">Your token stays in this page only. Never make the print server publicly accessible without additional protections.</p></details></div>
+</section></div></main>
+<script>
+const $=s=>document.querySelector(s),esc=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let settings={station_name:"FMI PRINT STATION",subtitle:"Department of Unlicensed Howling",footer:"AWOO responsibly!"};
+function notify(s,bad=false){$('#status').textContent=s;$('#status').className='status '+(bad?'error':'ok')}
+function details(){return Object.fromEntries(new FormData($('#fine')))}
+function preview(){const t=details();$('#preview').innerHTML='<img src="/api/logo?v='+Date.now()+'" onerror="this.hidden=true"><b>'+esc(settings.station_name)+'</b><div>'+esc(settings.subtitle)+'</div><div class="rule"></div><div class="big">AWOO FINE</div><div class="rule"></div><div class="left">Offender: '+esc(t.name)+'<br>Issued by: '+esc(t.issuer)+'<br>Location: '+esc(t.location)+'<br>Offence: '+esc(t.offence)+'</div><div class="rule"></div><div class="big">'+esc(t.currency)+' '+esc(t.amount)+'</div><div class="left">'+esc(t.message)+'</div><div class="rule"></div>'+esc(settings.footer)+'<br><b>PARODY - NO LEGAL FORCE</b>'}
+async function api(path,method='GET',body){const r=await fetch(path,{method,headers:{...(body?{'Content-Type':'application/json'}:{}),...( $('#token').value?{'X-FMI-Admin':$('#token').value}:{})},body:body?JSON.stringify(body):undefined});const j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j}
+$('#fine').addEventListener('input',preview);$('#fine').addEventListener('change',preview);$('#fine').addEventListener('reset',()=>setTimeout(preview,0));
+$('#fine').onsubmit=async e=>{e.preventDefault();$('#print').disabled=true;try{let j=await api('/api/print','POST',details());notify(j.message||'Ticket queued!');refresh()}catch(err){notify(err.message,true)}finally{$('#print').disabled=false}};
+async function refresh(){try{let d=await api('/api/status');$('#health').textContent='Queued: '+d.queue+' · Printed: '+d.stats.printed+' · Failed: '+d.stats.failed;$('#mode').textContent=d.dry_run?'DRY RUN':'LIVE PRINT';}catch(e){$('#health').textContent=e.message}}
+$('#load').onclick=async()=>{try{settings=await api('/api/settings');let f=$('#settings');for(let [k,v]of Object.entries(settings)){if(f.elements[k]){if(f.elements[k].type==='checkbox')f.elements[k].checked=!!v;else f.elements[k].value=v}}f.hidden=false;preview();notify('Settings unlocked')}catch(e){notify(e.message,true)}};
+$('#settings').onsubmit=async e=>{e.preventDefault();let f=e.target,d={};for(let k of ['printer_host','printer_port','station_name','subtitle','footer','feed_mm','logo_width'])d[k]=f.elements[k].value;for(let k of ['logo_enabled','cut','dry_run'])d[k]=f.elements[k].checked;try{settings=await api('/api/settings','POST',d);notify('Settings saved');preview();refresh()}catch(e){notify(e.message,true)}};
+$('#probe').onclick=async()=>{try{notify((await api('/api/probe','POST',{})).message)}catch(e){notify(e.message,true)}};
+$('#upload').onchange=async()=>{const f=$('#upload').files[0];if(!f)return;if(f.size>1500000)return notify('Max image size: 1.5 MB',true);let data=await new Promise((yes,no)=>{let r=new FileReader;r.onload=()=>yes(r.result.split(',')[1]);r.onerror=no;r.readAsDataURL(f)});try{await api('/api/logo','POST',{data});$('#logo').hidden=false;$('#logo').src='/api/logo?v='+Date.now();preview();notify('Header image uploaded')}catch(e){notify(e.message,true)}};
+$('#remove').onclick=async()=>{try{await api('/api/logo/remove','POST',{});$('#logo').hidden=true;preview();notify('Header image removed')}catch(e){notify(e.message,true)}};
+preview();refresh();
+</script></body></html>
