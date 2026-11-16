@@ -14,6 +14,7 @@ import queue
 import socket
 import threading
 import time
+import receipt_store
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -98,6 +99,55 @@ def make_ticket(name, message, conf, details=None):
     lines += [safe(message), "-" * 32, safe(conf["footer"]), ""]
     return "\n".join(lines).encode("ascii")
 
+def make_custom_receipt(payload, conf):
+    """Structured ESC/POS-safe custom receipt; fixed layout options, no raw commands."""
+    title = clean_line(payload.get("title", "CUSTOM RECEIPT"), 48)
+    subtitle = clean_line(payload.get("subtitle", ""), 64)
+    footer = clean_line(payload.get("footer", conf["footer"]), 100)
+    lines = [title]
+    if subtitle: lines.append(subtitle)
+    lines.append("-" * 32)
+    for item in payload.get("lines", []):
+        kind = item["type"]
+        value = clean_line(item.get("text", ""), 160)
+        if kind == "rule":
+            lines.append("-" * 32)
+        elif kind == "blank":
+            lines.append("")
+        elif kind == "heading":
+            lines.append(value.upper()[:42])
+        elif kind == "pair":
+            lines.append(clean_line(item.get("label", ""), 40) + ": " + value)
+        else:
+            lines.append(value)
+    lines.extend(["-" * 32, footer, ""])
+    return "\n".join(lines).encode("ascii", errors="replace")
+
+def clean_line(value, limit):
+    return "".join(c if 32 <= ord(c) < 127 else "?" for c in str(value))[:limit]
+
+def validate_custom(payload, conf):
+    title = str(payload.get("title", "")).strip()
+    items = payload.get("lines", [])
+    if not (1 <= len(title) <= 48 and isinstance(items, list) and 1 <= len(items) <= 25):
+        raise ValueError("Custom receipt needs a title and 1–25 lines")
+    allowed_types = {"text", "heading", "pair", "rule", "blank"}
+    clean_items=[]
+    for entry in items:
+        if not isinstance(entry, dict) or entry.get("type") not in allowed_types:
+            raise ValueError("Unsupported receipt item")
+        typ=entry["type"]
+        v=str(entry.get("text", ""))
+        label=str(entry.get("label", ""))
+        if len(v)>160 or len(label)>40 or "\n" in v or "\n" in label:
+            raise ValueError("Receipt item too long")
+        if typ in ("text","heading","pair") and not v.strip():
+            raise ValueError("Receipt line cannot be empty")
+        clean_items.append({"type":typ,"text":v,"label":label})
+    return {"title":title,"subtitle":str(payload.get("subtitle",""))[:64],
+            "footer":str(payload.get("footer",conf["footer"]))[:100],
+            "lines":clean_items}
+
 def send_printer(data, conf):
     if conf["dry_run"]:
         LOG.info("DRY RUN: %r", data)
@@ -159,12 +209,16 @@ def public_config(conf):
 def worker(conf):
     while True:
         entry = jobs.get()
+        job_id, raw = entry
         try:
-            send_printer(entry, conf)
+            send_printer(raw, conf)
+            receipt_store.complete(job_id, True)
             with lock:
                 statistics["printed"] += 1
-        except Exception:
+        except Exception as exc:
             LOG.exception("Print failed")
+            try: receipt_store.complete(job_id, False, str(exc))
+            except Exception: LOG.exception("Could not record failed job")
             with lock:
                 statistics["failed"] += 1
         finally:
@@ -207,7 +261,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.permitted(): return
         path = urlsplit(self.path).path
-        if path == "/":
+        if path in ("/", "/fines", "/custom", "/history", "/settings"):
             self.reply(200, (ROOT / "index.html").read_text(encoding="utf-8"), "text/html")
         elif path == "/api/logo":
             logo = ROOT / "header_logo.png"
@@ -220,6 +274,18 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
+        elif path == "/api/history":
+            if not admin_allowed(self):
+                return self.reply(403, {"error": "Admin token required"})
+            self.reply(200, {"jobs": receipt_store.list_jobs(60)})
+        elif path.startswith("/api/history/"):
+            if not admin_allowed(self):
+                return self.reply(403, {"error": "Admin token required"})
+            try: job_id = int(path.rsplit("/",1)[1])
+            except ValueError: return self.reply(400, {"error": "Invalid job ID"})
+            item = receipt_store.get_job(job_id)
+            if item is None: return self.reply(404, {"error": "Job not found"})
+            self.reply(200, item)
         elif path == "/api/settings":
             if not admin_allowed(self):
                 return self.reply(403, {"error": "Admin token required"})
@@ -233,7 +299,7 @@ class Handler(BaseHTTPRequestHandler):
         else: self.reply(404, {"error": "Not found"})
     def do_POST(self):
         if not self.permitted(): return
-        if urlsplit(self.path).path not in ("/api/print", "/api/settings", "/api/logo", "/api/logo/remove", "/api/probe"):
+        if urlsplit(self.path).path not in ("/api/print", "/api/custom", "/api/settings", "/api/logo", "/api/logo/remove", "/api/probe"):
             return self.reply(404, {"error": "Not found"})
         # Same-origin check prevents common cross-site drive-by printing.
         origin = self.headers.get("Origin")
@@ -300,12 +366,27 @@ class Handler(BaseHTTPRequestHandler):
                     img.thumbnail((1200, 700))
                     img.save(logo, "PNG", optimize=True)
                 return self.reply(200, {"message": "Header image saved"})
-            name = str(payload.get("name", "")).strip()
-            message = str(payload.get("message", "")).strip()
-            if not (1 <= len(name) <= 40 and 1 <= len(message) <= self.conf["max_message_chars"]):
-                return self.reply(400, {"error": "Enter a name and a shorter message"})
-            if any(ord(ch) < 32 and ch not in "\n\t" for ch in name + message):
-                return self.reply(400, {"error": "Invalid control characters"})
+            kind = "custom" if path == "/api/custom" else "fine"
+            if kind == "custom":
+                try: receipt = validate_custom(payload, self.conf)
+                except ValueError as exc: return self.reply(400, {"error": str(exc)})
+                raw = make_custom_receipt(receipt, self.conf)
+            else:
+                name = str(payload.get("name", "")).strip()
+                message = str(payload.get("message", "")).strip()
+                if not (1 <= len(name) <= 40 and 1 <= len(message) <= self.conf["max_message_chars"]):
+                    return self.reply(400, {"error": "Enter a name and a shorter message"})
+                if any(ord(ch) < 32 and ch not in "\n\t" for ch in name + message):
+                    return self.reply(400, {"error": "Invalid control characters"})
+                details = {}
+                for key in ("issuer", "location", "offence"):
+                    details[key] = str(payload.get(key, ""))[:80]
+                amount = str(payload.get("amount", ""))[:24]
+                currency = str(payload.get("currency", "CHF"))[:8]
+                details["amount"] = (currency + " " + amount) if amount else ""
+                receipt = {"name": name, "message": message, **details,
+                           "amount": amount, "currency": currency}
+                raw = make_ticket(name, message, self.conf, details)
             global last_job_at
             now = time.monotonic()
             ip = self.client_address[0]
@@ -317,17 +398,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(429, {"error": "Printer cooldown; try again shortly"})
                 if jobs.full():
                     return self.reply(503, {"error": "Printer queue full"})
-                details = {}
-                for key in ("issuer", "location", "offence"):
-                    details[key] = str(payload.get(key, ""))[:80]
-                amount = str(payload.get("amount", ""))[:24]
-                currency = str(payload.get("currency", "CHF"))[:8]
-                details["amount"] = (currency + " " + amount) if amount else ""
-                jobs.put_nowait(make_ticket(name, message, self.conf, details))
+                job_id = receipt_store.record(kind, receipt)
+                jobs.put_nowait((job_id, raw))
                 history[ip].append(now)
                 last_job_at = now
                 statistics["queued"] += 1
-            return self.reply(202, {"message": "Ticket queued!", "queue": jobs.qsize()})
+            return self.reply(202, {"message": "Receipt queued!", "id": job_id, "queue": jobs.qsize()})
         except Exception as exc:
             LOG.warning("Request rejected: %s", exc)
             return self.reply(400, {"error": "Invalid JSON data"})
@@ -339,6 +415,7 @@ def main():
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     conf = load_config(Path(args.config))
+    with receipt_store.connection() as db: pass
     jobs.maxsize = conf["max_queue"]
     Handler.conf = conf
     threading.Thread(target=worker, args=(conf,), daemon=True).start()
