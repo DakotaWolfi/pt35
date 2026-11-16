@@ -29,5 +29,10 @@
   "logo_width": 384,
   "subtitle": "Department of Unlicensed Howling",
   "default_amount": "350.00",
-  "currency": "CHF"
+  "currency": "CHF",
+  "display": {
+    "enabled": true,
+    "rotation": 180,
+    "refresh_interval_seconds": 90
+  }
 }
