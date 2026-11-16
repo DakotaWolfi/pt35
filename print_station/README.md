@@ -58,3 +58,16 @@ page's Admin token field. Do not publish the token or expose this prototype on
 an untrusted network. Printer settings update immediately and persist on disk.
 The ticket print endpoint remains subject to the existing cooldown and limits.
 The displayed preview is approximate, and the ticket history remains future work.
+
+
+## Multi-page web interface and compact receipt history
+
+The web interface now provides Overview, AWOO Fines, Custom Receipt, Print History and Settings (hash navigation in one HTML document).
+Custom receipts support up to 25 structured blocks: text, heading, label/value, divider and blank line.
+The live preview approximates the printer output. No raw ESC/POS commands are accepted from the web browser.
+
+Every submitted receipt is stored in local \`print_history.sqlite3\`, using SQLite with zlib-compressed JSON containing its form fields, exact queued ASCII text, and selected print settings. SQLite records the time and final \`queued\` / \`printed\` / \`failed\` outcome. This database stays on the machine and is ignored by Git. It survives process restarts but is **not** mirrored to GitHub. Include it in your local backups. The history page requires the administrator token and can load saved fields into the editors. Reprinting creates a new record.
+
+History is *not* an image archive: existing uploaded logo images are not versioned or retained per job, and ESC/POS printer output (font metrics, cutting, and physical printing) cannot be guaranteed to reconstruct byte-for-byte from these records. The text of the receipt is retained.
+
+The update timer automatically fetches changes on the feature branch every 30 minutes and refuses updates on a dirty tracked working tree. Follow service logs after deploying changes.
