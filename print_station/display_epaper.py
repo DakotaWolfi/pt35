@@ -26,19 +26,18 @@ def icon_printer(draw,x,y,online):
     draw.line((x+9,y+22,x+21,y+22),fill=0)
     if not online: draw.line((x,y,x+30,y+29),fill=0,width=3)
 
-def icon_paw(draw,x,y):
-    draw.ellipse((x+5,y+12,x+19,y+23),fill=1)
-    for dx,dy in ((2,5),(9,0),(17,0),(24,5)):
-        draw.ellipse((x+dx,y+dy,x+dx+5,y+dy+7),fill=1)
+def paste_paw(img, x=218, y=2):
+    """Paste the reusable bitmap silhouette as a white mask on black."""
+    with Image.open(ROOT / "assets" / "paw.pbm") as original:
+        mask = original.convert("L")
+    img.paste(1, (x, y), mask)
 
 def render(state,rotation=180):
     img=Image.new("1",(W,H),1)
     d=ImageDraw.Draw(img)
     d.rectangle((0,0,W-1,28),fill=0)
     d.text((7,5),"FMI PRINT STATION",font=font(14,True),fill=1)
-    # White paw on dark header
-    for dx,dy in ((218,2),):
-        icon_paw(d,dx,dy)
+    paste_paw(img)
     d.text((9,34),"AWOO FINE OFFICE",font=font(12,True),fill=0)
     d.line((8,53,242,53),fill=0)
     online=state.get("printer_ok",False)
