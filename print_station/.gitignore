@@ -1,0 +1,5 @@
+config.json
+header_logo.png
+*.tmp
+__pycache__/
+*.pyc
