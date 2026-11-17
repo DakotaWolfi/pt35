@@ -20,6 +20,7 @@ from mailbox_protocol import pack, unpack
 from mailbox_image import ImageReceiver
 from mailbox_auth import read_key, verify, HOST_KEY
 from nfc_pairing import handle_pair, handle_pair_key, issue_completed, handle_done
+from nfc_replay import ReplayGuard
 
 LOG=logging.getLogger("fmi.mailbox")
 TAG=0x53
@@ -137,6 +138,7 @@ def main():
         key=None
         LOG.warning("NFC printing disabled: no pairing key: %s",exc)
     seen={}
+    replay=ReplayGuard()
     image_receiver=ImageReceiver(http_json,key)
     bus=None
     failures=0
@@ -154,7 +156,7 @@ def main():
                         request=unpack(msg)
                         uid=request["id"]
                         now=time.monotonic()
-                        seen={key:val for key,val in seen.items() if now-val[0]<90}
+                        seen={ident:val for ident,val in seen.items() if now-val[0]<300}
                         pairing_update=None
                         if uid in seen:
                             response=seen[uid][1]
@@ -169,6 +171,12 @@ def main():
                             try:key=read_key(args.pair_key)
                             except (OSError,ValueError):key=None
                             image_receiver.key=key
+                        elif request["t"]=="print":
+                            response=replay.lookup(msg)
+                            if response is None:
+                                response=process(msg,args.api,key)
+                                if unpack(response).get("ok"):
+                                    replay.record(msg,response)
                         else:
                             response=(image_receiver.process(request,args.api)
                                       if request["t"] in ("img0","img1","img2")
