@@ -71,3 +71,64 @@ Every submitted receipt is stored in local \`print_history.sqlite3\`, using SQLi
 History is *not* an image archive: existing uploaded logo images are not versioned or retained per job, and ESC/POS printer output (font metrics, cutting, and physical printing) cannot be guaranteed to reconstruct byte-for-byte from these records. The text of the receipt is retained.
 
 The update timer automatically fetches changes on the feature branch every 30 minutes and refuses updates on a dirty tracked working tree. Follow service logs after deploying changes.
+
+## HTTPS and private audit history (40C3 preparation)
+
+**Do not use this kiosk on a shared event Wi-Fi over plain HTTP.** The admin
+token and visitor receipt content would otherwise cross that network in
+plaintext.
+
+The recommended topology is:
+
+    Browser --HTTPS--> Caddy (:443) --HTTP loopback--> Print Station (127.0.0.1:8767)
+                                                    |
+                                                    +--> isolated Ethernet printer
+
+There is an example in `Caddyfile.example`. For a publicly trusted certificate,
+configure a DNS name, Caddy's certificate issuance, and Internet reachability
+for HTTP-01/TLS-ALPN-01 or an appropriate validated DNS-01 challenge. Event
+Wi-Fi often blocks inbound traffic, so a DNS name alone does not make this
+work. A trusted tunnel to a server you control is another possibility.
+Self-signed / `tls internal` certs are **not automatically trusted on visitors'
+phones** and should not be used for a public guest-facing page.
+
+Caddy's default reverse_proxy handling ignores untrusted client-provided
+X-Forwarded-For headers. Keep Caddy as the single trusted frontend. Do not
+configure arbitrary trusted_proxies or expose localhost port 8767 directly.
+The Python app uses the forwarded source IP **only** when
+`require_https_proxy` is enabled and the connecting peer is loopback.
+The web app rate-limits based on this IP (other protective controls are needed
+for a public event). The event log also records limited User-Agent metadata.
+These are investigative clues, not verified identity, and IPs may be shared.
+
+After Caddy is live and reachable over HTTPS, run from `print_station`:
+
+    bash enable_https_proxy.sh https://YOUR-REAL-HOSTNAME
+    sudo systemctl restart fmi-print-station
+
+The script backs up the ignored config to
+`config.before-https.json`, then sets `listen=127.0.0.1`,
+`access_mode=both`, `require_https_proxy=true`,
+`public_base_url=https://...`. This deliberately disables direct
+HTTP access to the app from LAN clients. The e-paper's local status check
+is permitted over loopback.
+
+Administrator history lives in `print_history.sqlite3`. It includes exact
+queued text (no per-print bitmap), structured form fields, timestamps,
+queue outcome, source IP, and a bounded User-Agent string. Historical rows
+get empty source fields on migration. The admin-only History page has a View
+print action and an Edit/Reprint action. Unauthorized attempts to access the
+history endpoints are reported to the service journal (without recording
+admin tokens).
+
+**Privacy:** Receipt content and IP metadata are personal data. Disclose that
+the kiosk stores receipts; protect local backups; establish a retention/deletion
+policy. No evidence of visitor identity is guaranteed by an IP address.
+The database is compressed, **not encrypted at rest**. Protect filesystem
+access and full-disk/backups accordingly.
+
+**Deployment**: Caddy's Debian installer is documented at
+https://caddyserver.com/docs/install. Validate config using
+`sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`
+before reloading, and confirm the browser shows a valid certificate without
+warnings. Set restrictive permissions on the local config and DB.
