@@ -284,7 +284,7 @@ $('#import-template').onchange=async()=>{
 };
 refreshTemplates();
 $('#reset-custom').click();
-async function refresh(){try{const data=await api('/api/status');$('#challenge-panel').hidden=!data.challenge_enabled;$('#health').textContent='Queued: '+data.queue+' · Printed: '+data.stats.printed+' · Failed: '+data.stats.failed;$('#mode').textContent=data.dry_run?'DRY RUN':'LIVE PRINT'}catch(err){$('#health').textContent=err.message}}
+async function refresh(){try{const data=await api('/api/status');$('#challenge-panel').hidden=!data.challenge_enabled;$('#health').textContent='Queued: '+data.queue+' · Printed: '+data.stats.printed+' · Failed: '+data.stats.failed+' · Epson DHCP: '+(data.printer_dhcp_ip||'No matching lease');$('#mode').textContent=data.dry_run?'DRY RUN':'LIVE PRINT'}catch(err){$('#health').textContent=err.message}}
 function lockHistory(){historyUnlocked=false;historyJobs=[];$('#history-list').replaceChildren();$('#history-detail').hidden=true;$('#history-text').textContent='';$('#history-meta').textContent='';$('#history-lock').hidden=false;$('#history-private').hidden=true;$('#history-token').value='';$('#token').value='';$('#settings-form').hidden=true}
 $('#history-lock-button').onclick=()=>{lockHistory();notice('History locked')};
 $('#history-unlock').onclick=async()=>{if(!secureAdmin)return notice('HTTPS required for admin history',true);const key=$('#history-token').value;if(!key)return notice('Enter administrator token',true);try{
