@@ -35,8 +35,8 @@ HOME_TILES = (
     ('NFC Tag · I²C', 'Built-in ST25DV16K', 'tag'),
     ('NFC Reader', 'ST25R3916 · Proxmark3', 'reader'),
     ('Spectrum Analyzer', 'AS7341 · 10 channels', 'spectrum'),
-    ('LED Test', '16 WS2812 LEDs', 'led'),
-    ('LRA Haptic Test', 'DRV2605L motor', 'lra'),
+    ('Print Pet', 'NFC printer · text · pictures', 'printpet'),
+    ('Diagnostics', 'LRA haptics · LED test', 'diagnostics'),
     ('Exit', 'Close launcher', 'exit'),
 )
 
@@ -94,6 +94,16 @@ def target_command(name):
         return [sys.executable, str(ROOT / 'nfc/pt35_i2c_tag_gui.py')]
     if name == 'reader':
         return [sys.executable, str(ROOT / 'nfc/pt35_nfc_gui.py')]
+    if name == 'printpet':
+        # The Print Pet app lives in the main PT35 checkout, not the NFC bench.
+        candidates=(Path.home()/'pt35/nfc/print_pet_gui.py',
+                    ROOT/'nfc/print_pet_gui.py')
+        app=next((path for path in candidates if path.is_file()),None)
+        if app is None:
+            raise FileNotFoundError('Install Print Pet GUI in ~/pt35/nfc first')
+        python=Path.home()/'as7341-env/bin/python3'
+        interpreter=str(python) if python.is_file() else sys.executable
+        return [interpreter,str(app)]
     if name == 'spectrum':
         script = ROOT / 'tools/as7341_gui.py'
         python = Path.home() / 'as7341-env/bin/python'
@@ -205,8 +215,8 @@ class Launcher(tk.Tk):
             'tag': lambda: self.launch('tag'),
             'reader': lambda: self.launch('reader'),
             'spectrum': lambda: self.launch('spectrum'),
-            'led': self.led_page,
-            'lra': self.lra_page,
+            'printpet': lambda: self.launch('printpet'),
+            'diagnostics': self.diagnostics_page,
             'exit': self.destroy,
         }
         for index, (name, subtitle, key) in enumerate(HOME_TILES):
@@ -229,25 +239,34 @@ class Launcher(tk.Tk):
               font=SMALL, muted=True, wraplength=610).pack(fill='x')
         label(info, textvariable=self.notice, font=SMALL, muted=True,
               wraplength=610).pack(fill='x')
-        self.notice.set('Ready · Five tools and Exit')
+        self.notice.set('Ready · Print Pet and Diagnostics available')
 
 
     def go_home(self, event=None):
         self.home()
 
     def launch(self, name):
-        command = target_command(name)
         try:
+            command = target_command(name)
             subprocess.Popen(command, start_new_session=True, cwd=str(ROOT),
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError as exc:
             self.notice.set('Cannot launch: ' + str(exc)[:130])
         else:
             self.notice.set('Opened ' + {'tag': 'I²C NFC Tag', 'reader': 'NFC Reader',
-                                         'spectrum': 'Spectrum Analyzer'}[name])
+                                         'spectrum': 'Spectrum Analyzer',
+                                         'printpet': 'Print Pet'}[name])
+
+    def diagnostics_page(self):
+        area=self.page('Diagnostics', self.home)
+        label(area,'Hardware tests — existing controls preserved',font=FONT).pack(fill='x',pady=(0,8))
+        self.add(area,'LRA Haptic Test',self.lra_page,
+                 'DRV2605L: status, click effects, stop')
+        self.add(area,'LED Test',self.led_page,
+                 'WS2812: indexing, status, battery and color flashes')
 
     def led_page(self):
-        area = self.page('LED Test · WS2812', self.home)
+        area = self.page('LED Test · WS2812', self.diagnostics_page)
         label(area, '16 rear LEDs · GPIO12 · service-controlled only', font=FONT).pack(fill='x')
         label(area, 'Rear-view serpentine: top 0–7 left→right; '
                     'bottom 15–8 left→right. Tests stay dim.',
@@ -273,7 +292,7 @@ class Launcher(tk.Tk):
               muted=True, font=SMALL, wraplength=550).pack(fill='x', pady=8)
 
     def lra_page(self):
-        area = self.page('LRA Haptic Test', self.home)
+        area = self.page('LRA Haptic Test', self.diagnostics_page)
         label(area, 'DRV2605L · I²C bus 1 · address 0x5A', font=FONT).pack(fill='x')
         label(area, 'Test existing motor driver without changing its configuration '
                     'outside the normal effect playback initialization. '
