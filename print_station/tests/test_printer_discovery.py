@@ -72,7 +72,7 @@ class DiscoveryTests(unittest.TestCase):
     @patch("app.subprocess.run")
     def test_resolves_changed_ip(self, run, lease):
         run.return_value=Mock(stdout=RESULT,returncode=0)
-        conf=dict(app.DEFAULT, printer_mdns_name="Printer-79EB5F.local",printer_interface="enx9cebe8ec46e1")
+        conf=dict(app.DEFAULT, printer_mac=app.EPSON_MAC, printer_mdns_name="Printer-79EB5F.local",printer_interface="enx9cebe8ec46e1")
         self.assertEqual(app.printer_destination(conf),("169.254.235.98",9100))
 
 if __name__=="__main__": unittest.main()
