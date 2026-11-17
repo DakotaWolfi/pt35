@@ -342,7 +342,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", mime + ("; charset=utf-8" if mime.startswith("text/") else ""))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline' 'self'; style-src 'unsafe-inline' 'self'; object-src 'none'; base-uri 'none'")
+        self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' blob: data:; script-src 'unsafe-inline' 'self'; style-src 'unsafe-inline' 'self'; object-src 'none'; base-uri 'none'")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
