@@ -21,6 +21,7 @@ from mailbox_image import ImageReceiver
 from mailbox_auth import read_key, verify, HOST_KEY
 from nfc_pairing import handle_pair, handle_pair_key, issue_completed, handle_done
 from nfc_replay import ReplayGuard
+from pet_activity import report as pet_report
 
 LOG=logging.getLogger("fmi.mailbox")
 TAG=0x53
@@ -156,6 +157,7 @@ def main():
                         request=unpack(msg)
                         uid=request["id"]
                         now=time.monotonic()
+                        pet_report("pair" if request["t"].startswith("pair") else "nfc")
                         seen={ident:val for ident,val in seen.items() if now-val[0]<300}
                         pairing_update=None
                         if uid in seen:
@@ -171,16 +173,21 @@ def main():
                             try:key=read_key(args.pair_key)
                             except (OSError,ValueError):key=None
                             image_receiver.key=key
+                            if unpack(response).get("ok"):
+                                pet_report("pair")
                         elif request["t"]=="print":
                             response=replay.lookup(msg)
                             if response is None:
                                 response=process(msg,args.api,key)
                                 if unpack(response).get("ok"):
                                     replay.record(msg,response)
+                                    pet_report("nfc_print")
                         else:
                             response=(image_receiver.process(request,args.api)
                                       if request["t"] in ("img0","img1","img2")
                                       else process(msg,args.api,key))
+                            if request["t"]=="img2" and response and unpack(response).get("ok"):
+                                pet_report("nfc_print")
                         if response is not None and request["t"]!="pair":
                             seen[uid]=(now,response)
                     except (ValueError,UnicodeError,KeyError,TypeError) as exc:
