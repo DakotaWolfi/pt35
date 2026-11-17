@@ -156,11 +156,11 @@ function postDraftField(element){
   const form=element.form;
   if(!form||!['fine','custom-fine'].includes(form.id))return;
   if(!draftFields.has(element.name))return;
-  const value=String(element.value||'').replace(/\\s+/g,' ').trim();
+  const value=String(element.value||'').replace(/\s+/g,' ').trim();
   if(value.length<2||Date.now()-draftLastSent<24000)return;
   // Not every completed field gets attention. Keep it playful.
   const thisSequence=++draftSequence;
-  if(thisSequence%3===0)return;
+  if(thisSequence%4===0)return;
   draftLastSent=Date.now();
   fetch('/api/pet/draft',{
     method:'POST',credentials:'same-origin',
