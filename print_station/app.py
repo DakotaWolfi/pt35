@@ -18,6 +18,9 @@ import time
 import receipt_store
 import challenge
 from image_prepare import prepare_receipt_image, MAX_UPLOAD
+IMAGE_PREPARE_SLOTS=threading.BoundedSemaphore(2)
+IMAGE_PREPARE_LOCK=threading.Lock()
+IMAGE_PREPARE_HISTORY={}
 from pet_activity import report as pet_report
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -594,7 +597,23 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(413,{"error":"Image upload limit: 12 MiB"})
                 if self.headers.get("Content-Type","").split(";")[0].strip()!="application/octet-stream":
                     return self.reply(415,{"error":"Binary image upload required"})
-                image=prepare_receipt_image(self.rfile.read(size))
+                ip=request_identity(self)
+                now=time.monotonic()
+                with IMAGE_PREPARE_LOCK:
+                    recent=[t for t in IMAGE_PREPARE_HISTORY.get(ip,[]) if now-t<60]
+                    if len(recent)>=8:
+                        return self.reply(429,{"error":"Image conversions limited to 8 per minute"})
+                    IMAGE_PREPARE_HISTORY[ip]=recent+[now]
+                    if len(IMAGE_PREPARE_HISTORY)>1000:
+                        stale=[k for k,v in IMAGE_PREPARE_HISTORY.items()
+                               if not v or now-v[-1]>60]
+                        for k in stale:IMAGE_PREPARE_HISTORY.pop(k,None)
+                if not IMAGE_PREPARE_SLOTS.acquire(blocking=False):
+                    return self.reply(429,{"error":"Image converter busy; retry shortly"})
+                try:
+                    image=prepare_receipt_image(self.rfile.read(size))
+                finally:
+                    IMAGE_PREPARE_SLOTS.release()
                 return self.reply(200,image)
             except ValueError as exc:
                 return self.reply(400,{"error":str(exc)})
