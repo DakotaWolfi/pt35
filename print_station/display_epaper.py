@@ -48,57 +48,73 @@ def render_access_qr(url):
     return raw.resize((raw.width * scale, raw.height * scale), Image.Resampling.NEAREST)
 
 def render(state,rotation=180):
-    if rotation not in (0,180): raise ValueError("Rotation must be 0 or 180")
+    """Monochrome 250x122 display: wolf | state | QR and web code."""
+    if rotation not in (0,180):raise ValueError("Rotation must be 0 or 180")
     img=Image.new("1",(W,H),1)
     d=ImageDraw.Draw(img)
-    d.rectangle((0,0,249,19),fill=0)
-    d.text((5,2),"FMI PRINT PET",font=font(12,True),fill=1)
     printing=bool(state.get("printing"))
     online=bool(state.get("printer_ok"))
     status="PRINTING" if printing else ("READY" if online else "OFFLINE")
     mood="EXCITED" if printing else ("HAPPY" if online else "SAD")
-    # Real Collar Pet expression sprites; install with fetch_collarpet_assets.sh.
-    sprites=ROOT / "assets" / "wolves"
+    d.rectangle((0,0,249,19),fill=0)
+    d.text((4,3),"FMI PRINT PET",font=font(11,True),fill=1)
+    d.text((136,4),status,font=font(9,True),fill=1)
+    d.text((190,4),"Q:{} P:{}".format(state.get("queue",0),state.get("printed",0)),
+           font=font(8,True),fill=1)
+    d.line((70,21,70,121),fill=0,width=1)
+    sprites=ROOT/"assets"/"wolves"
     expression="startled" if printing else ("happy" if online else "annoyed")
-    sprite=sprites / ("wolf_" + expression + ".png")
-    if not sprite.exists():
-        sprite=sprites / "wolf_idle.png"
+    sprite=sprites/("wolf_"+expression+".png")
+    if not sprite.exists():sprite=sprites/"wolf_idle.png"
     if sprite.exists():
         from PIL import ImageOps
         with Image.open(sprite) as original:
             art=original.convert("RGBA")
-            # Match the original Collar Pet face, preserving alpha on white.
             white=Image.new("RGBA",art.size,"white")
             white.alpha_composite(art)
             artwork=ImageOps.grayscale(white.convert("RGB"))
-            artwork.thumbnail((64,78),Image.Resampling.LANCZOS)
-            bw=artwork.point(lambda level: 255 if level>=155 else 0).convert("1")
-            img.paste(bw,((68-bw.width)//2,25+(79-bw.height)//2))
+            artwork.thumbnail((65,77),Image.Resampling.LANCZOS)
+            bw=artwork.point(lambda level:255 if level>=155 else 0).convert("1")
+            img.paste(bw,((70-bw.width)//2,23+(77-bw.height)//2))
     else:
-        d.rectangle((4,27,66,98),outline=0,width=2)
-        d.text((11,57),"PET?",font=font(12,True),fill=0)
-        LOG.warning("Collar Pet artwork missing; run fetch_collarpet_assets.sh")
-    d.text((8,106),mood,font=font(9,True),fill=0)
-    d.text((69,27),status,font=font(12,True),fill=0)
-    d.text((69,44),"Q:{} P:{}".format(state.get("queue",0),state.get("printed",0)),font=font(10),fill=0)
-    if state.get("challenge_code"):
-        d.text((69,63),"PRINT CODE",font=font(9,True),fill=0)
-        d.text((69,78),str(state["challenge_code"]),font=font(17,True),fill=0)
-    else:
-        d.text((69,74),"AWOO :3",font=font(10,True),fill=0)
+        d.rectangle((4,24,66,95),outline=0,width=1)
+        d.text((12,54),"PET?",font=font(12,True),fill=0)
+        LOG.warning("Wolf sprite missing: fetch_collarpet_assets.sh")
+    d.text((5,105),mood,font=font(9,True),fill=0)
+    d.line((174,21,174,121),fill=0,width=1)
+    d.text((75,26),status,font=font(12,True),fill=0)
+    d.line((76,44,167,44),fill=0,width=1)
+    d.text((75,49),"PRINTER "+("OK" if online else "OFF"),font=font(10,True),fill=0)
+    d.text((75,65),"Q:{} P:{}".format(state.get("queue",0),state.get("printed",0)),
+           font=font(10),fill=0)
+    nfc=("PAIR ARMED" if state.get("pair_armed") else
+         ("NFC PAIRED" if state.get("nfc_paired") else "NFC UNPAIRED"))
+    d.text((75,86),nfc,font=font(9,True),fill=0)
+    if state.get("pair_armed"):
+        d.text((75,103),"TAP TO PAIR",font=font(8),fill=0)
     url=state.get("guest_url","")
     if url:
         try:
             import qrcode
-            qr=qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L,box_size=1,border=4)
+            qr=qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L,
+                             box_size=1,border=2)
             qr.add_data(url);qr.make(fit=True)
             bitmap=qr.make_image(fill_color="black",back_color="white").convert("1")
-            scale=max(1,76//bitmap.width)
-            bitmap=bitmap.resize((bitmap.width*scale,bitmap.height*scale),Image.Resampling.NEAREST)
-            img.paste(bitmap,(W-bitmap.width-2,25))
-            d.text((183,106),"SCAN / TAP",font=font(8,True),fill=0)
-        except (ImportError, ValueError) as exc:
+            if bitmap.width>68:
+                LOG.warning("Guest QR needs %d modules: cannot fit",bitmap.width)
+            else:
+                scale=max(1,68//bitmap.width)
+                bitmap=bitmap.resize((bitmap.width*scale,bitmap.height*scale),
+                                     Image.Resampling.NEAREST)
+                img.paste(bitmap,(178+(68-bitmap.width)//2,21))
+        except (ImportError,ValueError) as exc:
             LOG.warning("QR unavailable: %s",exc)
+    d.text((181,91),"WEB CODE",font=font(8,True),fill=0)
+    code=str(state.get("challenge_code") or "OFF")
+    if len(code)==6 and code.isdecimal():
+        d.text((182,103),code,font=font(13,True),fill=0)
+    else:
+        d.text((184,105),"OFF",font=font(11,True),fill=0)
     return img.rotate(rotation) if rotation else img
 
 def guest_print_url(conf):
@@ -132,7 +148,15 @@ def snapshot(conf):
         code=challenge.current_code(challenge.get_key()) if conf.get("challenge_enabled") else ""
     except (OSError, ValueError):
         code="------"
+    try:
+        from nfc_pairing import paired, state as pairing_state
+        nfc_paired=paired()
+        pair_armed=pairing_state() is not None
+    except (OSError,ValueError):
+        nfc_paired=False
+        pair_armed=False
     return {"guest_url":guest_print_url(conf),"challenge_code":code,
+            "nfc_paired":nfc_paired,"pair_armed":pair_armed,
             "printing":bool(status.get("printing",False)),
             "printer_ok":online,"queue":status.get("queue","?"),
             "printed":stats.get("printed","?"),"dry_run":status.get("dry_run",conf.get("dry_run",True))}
