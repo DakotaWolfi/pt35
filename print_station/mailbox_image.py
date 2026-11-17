@@ -53,6 +53,9 @@ class ImageReceiver:
             state["data"].extend(chunk)
             state["seq"]+=1
             return pack("reply",rid,ok=True,seq=state["seq"])
+        status=self.http_json(api+"/api/status")
+        if not status.get("challenge_enabled"):
+            return pack("reply",rid,ok=False,error="Print challenge disabled")
         data=bytes(state["data"])
         if len(data)!=state["length"] or hashlib.sha256(data).hexdigest()[:16]!=state["sha"]:
             return pack("reply",rid,ok=False,error="Image hash mismatch")
@@ -65,7 +68,7 @@ class ImageReceiver:
                 im.verify()
         except (OSError,ValueError,ImportError):
             return pack("reply",rid,ok=False,error="Invalid PNG")
-        result=http_json(api+"/api/custom",{
+        result=self.http_json(api+"/api/custom",{
             "title":state["title"],
             "lines":[{"type":"image","image":base64.b64encode(data).decode("ascii")}],
             "challenge_code":state["code"],
