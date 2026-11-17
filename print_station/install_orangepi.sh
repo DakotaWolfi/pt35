@@ -21,6 +21,7 @@ WorkingDirectory=/home/jenna/pt35/print_station
 ExecStart=/usr/bin/python3 /home/jenna/pt35/print_station/app.py
 Restart=on-failure
 RestartSec=3
+UMask=0077
 NoNewPrivileges=true
 
 [Install]
