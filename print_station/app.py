@@ -198,8 +198,8 @@ def raster_image_block(png_b64, max_width=384):
     try:
         binary = base64.b64decode(png_b64, validate=True)
         with Image.open(io.BytesIO(binary)) as im:
-            if im.format != "PNG" or im.width > max_width or im.height > 240 or im.width < 1 or im.height < 1:
-                raise ValueError("Image must be a PNG at most 384 x 240")
+            if im.format != "PNG" or im.width > max_width or im.height > 1024 or im.width < 1 or im.height < 1:
+                raise ValueError(f"Image must be a PNG at most {max_width} x 1024")
             im.load()
             rgba = im.convert("RGBA")
         on_white = Image.new("RGBA", rgba.size, "white")
