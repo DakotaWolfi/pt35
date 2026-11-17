@@ -240,3 +240,7 @@ ignored config, restart the web service. Do not assign a static IP to the Epson.
 ## Detailed AWOO Fine ticket layout
 
 The AWOO Fine page uses the longer receipt format: AWOO FINE title, a five-digit ticket number derived from the persisted SQLite job ID, the actual issue timestamp with local timezone offset, offender, issuer, location, offence, officer notes, fine amount, UNPAID status and parody footer. The top header logo remains controlled independently by the admin logo setting. The compact ticket style is not used for AWOO Fines. The UI preview shows a ticket-number and timestamp placeholder until printing. The completed structured audit record contains the final printed text, assigned ticket number and issue timestamp. No custom receipt changes.
+
+## Custom Fine
+
+A separate **Custom Fine** page keeps the detailed numbered fine receipt layout while allowing a visitor to customize the ticket heading, status, offence, offender, issuer, notes, amount, currency and location. It submits to the existing protected/rate-limited `/api/print` endpoint as a normal `fine` audit entry with `custom_fine=true`. The SQLite job ID supplies its ticket number; the parody legal disclaimer remains fixed. The in-browser preview approximates the printout before the number/time are assigned. Private History → Edit / Reprint opens custom fine entries in the Custom Fine editor, not the normal AWOO form. The custom free-form receipt designer remains separate.
