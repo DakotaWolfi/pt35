@@ -7,6 +7,9 @@ Explicit --confirm is needed for print actions. Never writes EEPROM.
 Do not run at the same time as PT35 NFC scanner/GUI (shared reader).
 """
 import argparse
+import base64
+import hashlib
+import io
 from pathlib import Path
 import secrets
 import sys
@@ -93,31 +96,60 @@ def transact(reader,uid,packet,timeout=5):
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("action",choices=("status","print"))
+    ap.add_argument("action",choices=("status","print","image"))
     ap.add_argument("--uid",required=True,help="EXTERNAL Print Pet ST25DV ISO15693 UID (16 hex chars)")
     ap.add_argument("--bus",type=int,default=1)
     ap.add_argument("--name",default="PT35")
     ap.add_argument("--message",default="AWOO from PT35")
     ap.add_argument("--code",default="",help="Six-digit physical code shown on Print Pet")
     ap.add_argument("--confirm",action="store_true",help="Required for physical printing")
+    ap.add_argument("--image",type=Path,help="Image file for NFC transfer (PNG/JPEG)")
     args=ap.parse_args()
     uid=args.uid.upper()
     if len(uid)!=16 or any(c not in "0123456789ABCDEF" for c in uid):
         ap.error("--uid must contain exactly 16 hexadecimal digits")
-    if args.action=="print" and not args.confirm:
+    if args.action in ("print","image") and not args.confirm:
         ap.error("Printing requires explicit --confirm")
-    if args.action=="print" and not (len(args.code)==6 and args.code.isascii() and args.code.isdecimal()):
+    if args.action in ("print","image") and not (len(args.code)==6 and args.code.isascii() and args.code.isdecimal()):
         ap.error("Printing requires --code from the Print Pet e-paper")
+    if args.action=="image" and not args.image:
+        ap.error("--image PATH is required for image printing")
     ident=secrets.token_hex(4)
-    payload=pack(args.action,ident,**(
+    payload=(pack(args.action,ident,**(
         {"name":args.name,"message":args.message,"code":args.code}
-        if args.action=="print" else {}))
+        if args.action=="print" else {})) if args.action!="image" else None)
     with SMBus(args.bus) as bus:
         reader=MailboxReader(bus)
         try:
             reader.initialize()
             print("Hold PT35's NFC reader at the Print Pet tag throughout exchange.",flush=True)
-            reply=transact(reader,uid,payload)
+            if args.action=="image":
+                from PIL import Image, ImageOps
+                with Image.open(args.image.expanduser()) as im:
+                    im=ImageOps.exif_transpose(im)
+                    im.thumbnail((160,120), Image.Resampling.LANCZOS)
+                    bw=ImageOps.autocontrast(im.convert("L")).point(lambda x:255 if x>=150 else 0).convert("1")
+                    out=io.BytesIO()
+                    bw.save(out,format="PNG",optimize=True)
+                png=out.getvalue()
+                if len(png)>7680:
+                    raise ValueError("Compressed image exceeds 7.5 KiB NFC limit; crop or simplify it")
+                sid=secrets.token_hex(4)
+                def ask(kind,**values):
+                    req=pack(kind,secrets.token_hex(4),s=sid,**values)
+                    result=transact(reader,uid,req,timeout=8)
+                    if not result.get("ok"):
+                        raise RuntimeError("Print Pet rejected transfer: "+str(result))
+                    return result
+                reply=ask("img0",n=len(png),h=hashlib.sha256(png).hexdigest()[:16],c=args.code)
+                step=30
+                for idx,start in enumerate(range(0,len(png),step)):
+                    segment=base64.b64encode(png[start:start+step]).decode("ascii")
+                    reply=ask("img1",i=idx,d=segment)
+                    print(f"Image NFC {min(start+step,len(png))}/{len(png)} bytes",flush=True)
+                reply=ask("img2")
+            else:
+                reply=transact(reader,uid,payload)
             print("Print Pet:",reply,flush=True)
             return 0 if reply.get("ok") else 2
         finally:
