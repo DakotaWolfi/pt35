@@ -269,7 +269,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
     def permitted(self):
         if self.conf.get("require_https_proxy"):
-            if self.client_address[0] not in ("127.0.0.1", "::1") or self.headers.get("X-Forwarded-Proto","").lower() != "https":
+            internal_status = (urlsplit(self.path).path == "/api/status" and
+                               self.client_address[0] in ("127.0.0.1", "::1") and
+                               not self.headers.get("X-Forwarded-For"))
+            if not internal_status and (self.client_address[0] not in ("127.0.0.1", "::1") or self.headers.get("X-Forwarded-Proto","").lower() != "https"):
                 self.reply(403, {"error": "HTTPS required"})
                 return False
         if not allowed(self.client_address[0], self.conf):
@@ -294,10 +297,12 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(content)
         elif path == "/api/history":
             if not admin_allowed(self):
+                LOG.warning("Unauthorized history access from %s", request_identity(self))
                 return self.reply(403, {"error": "Admin token required"})
             self.reply(200, {"jobs": receipt_store.list_jobs(60)})
         elif path.startswith("/api/history/"):
             if not admin_allowed(self):
+                LOG.warning("Unauthorized receipt access from %s", request_identity(self))
                 return self.reply(403, {"error": "Admin token required"})
             try: job_id = int(path.rsplit("/",1)[1])
             except ValueError: return self.reply(400, {"error": "Invalid job ID"})
