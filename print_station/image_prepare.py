@@ -21,6 +21,7 @@ def prepare_receipt_image(raw):
                 raise ValueError("Image dimensions exceed 32 megapixels")
             if im.format not in ("PNG","JPEG","WEBP","BMP","GIF","TIFF"):
                 raise ValueError("Unsupported image type")
+            source_width,source_height=im.size
             if im.format=="JPEG":
                 im.draft("RGB",TARGET)
             im.seek(0)  # first page/frame for GIF and TIFF
@@ -46,7 +47,7 @@ def prepare_receipt_image(raw):
                 raise ValueError("Image cannot be compressed for receipt")
             return {"image":base64.b64encode(png).decode("ascii"),
                     "width":bw.width,"height":bw.height,
-                    "source_width":im.width,"source_height":im.height,
+                    "source_width":source_width,"source_height":source_height,
                     "bytes":len(png)}
     except (OSError,UnidentifiedImageError,Image.DecompressionBombError) as exc:
         raise ValueError("Cannot decode this image") from exc
