@@ -453,7 +453,7 @@ The 800x480 GUI has Status, Text receipt and Picture tabs. Image prints
 are compressed to a monochrome 160x120 PNG (<=7680 bytes) and sent as
 30-byte binary chunks encoded in FMP1 messages. The host stages <=8192
 bytes, checks a truncated SHA-256 identifier, verifies the PNG and then
-calls the existing /api/custom endpoint with the physical print challenge.
+calls the local /api/custom endpoint through the paired owner bridge.
 This pathway is **experimental and not yet hardware tested**. Moving the
 antennas mid-transfer can fail the operation; a lost final acknowledgement
 means the sender must not auto-retry printing.
@@ -465,96 +465,95 @@ overwrite it. Before migrating menu slots, inspect the live file and
 preserve its old LRA / LED test entrypoint commands; the requested layout is
 LRA slot -> Diagnostics (contains LRA and LED), LED slot -> Print Pet.
 
-### Paired PT35 owner printing over NFC (no e-paper challenge code)
+### One-shot PT35 owner pairing (SSH arm + encrypted NFC transfer)
 
-The six-digit print challenge belongs to web/visitor printing and is not used by
-the PT35 NFC owner remote. Offline status remains publicly readable over RF.
-Text/image **printing** requires a 32-byte shared owner key, installed manually
-on both devices using a trusted SSH/USB connection. The secret is **never**
-transmitted in an NFC mailbox frame.
+The six-digit web visitor challenge is **not required over NFC**. Pairing is
+disabled by default, and can only be armed locally on Print Pet from a trusted
+SSH session. Arming creates a fresh 32-byte owner secret and a maximum
+90-second window, without replacing the currently active key yet. PT35 uses
+an ephemeral X25519 key pair to encrypt the secret transfer under AES-GCM.
+NFC pairing requires three RF exchanges: ephemeral public-key exchange,
+encrypted secret retrieval, and a keyed `pair-done` confirmation. After
+confirmation Print Pet activates the new key and removes the armed state.
+PT35 persists its key to `~/.config/pt35/print_pet.key` (0600). Existing
+pairings are rotated when a new pairing completes. The Print Pet key is in
+`print_station/.private/nfc_pairing.key` (0600), and is ignored by Git.
 
-The host reads `print_station/.private/nfc_pairing.key` (mode 0600; owned by
-the account running the Print Station HTTP API). PT35 reads
-`~/.config/pt35/print_pet.key` (0600). The hex-encoded key is 64 characters.
-`*.key` is gitignored. Do **not** post the secret into chat or GitHub.
+Install dependencies on **both** devices (the Print Pet also needs Pillow
+for e-paper and PNG printing):
 
-Initial setup on the Print Pet as the normal `jenna` user:
+```bash
+sudo apt update
+sudo apt install -y python3-cryptography python3-smbus2 python3-pil python3-pil.imagetk python3-tk
+```
+
+On **Print Pet** as the normal owner (no sudo), prepare the owner-readable
+private directory and start the updated API and NFC mailbox host:
+
+```bash
+cd ~/pt35
+git pull --ff-only
+install -d -m 700 ~/pt35/print_station/.private
+sudo systemctl restart fmi-print-station fmi-print-display
+cd ~/pt35/print_station
+sudo /usr/bin/python3 mailbox_host.py --bus 0
+```
+
+If another mailbox host is already running, stop it first rather than
+starting two processes. Keep the host running in a separate terminal.
+On Print Pet **over SSH**, arm a single pairing window:
 
 ```bash
 cd ~/pt35/print_station
-install -d -m 700 .private
-python3 - <<'PY'
-from pathlib import Path
-import secrets
-p=Path('.private/nfc_pairing.key')
-with p.open('x') as f:
-    f.write(secrets.token_hex(32)+'\n')
-p.chmod(0o600)
-print('Paired NFC key created (contents hidden)')
-PY
+/usr/bin/python3 nfc_pairing.py arm --seconds 90
 ```
 
-Copy this key privately (USB or SSH/SCP) to the PT35 path
-`~/.config/pt35/print_pet.key`; set `chmod 600`. Do not use an
-unprotected NFC RF transfer to send the secret.
+On **PT35**, after fetching the updated GUI, NFC client, protocol and
+authentication module, select `R > Print Pet > Status > Pair owner key`.
+Hold the devices' NFC antennas aligned until confirmation finishes.
+The key transfer uses encrypted RF frames. Pairing is then automatically
+disarmed; no one can pair another device without rearming via SSH.
+An uncompleted session expires after the SSH-configured timeout.
+Check `python3 nfc_pairing.py status` on Print Pet.
 
-Restart `fmi-print-station` (updated `app.py` handles the privileged
-loopback-only owner request header) and restart `mailbox_host.py`. Then run
-the PT35 GUI or:
+After pairing, **owner NFC text/picture prints** send a short time-windowed
+HMAC. The HTTP application accepts the owner request only from loopback
+with the exact owner key, bypassing the six-digit **web** challenge, guest
+hourly quota and guest cooldown; the finite printer queue and input
+validation remain enforced. Owner print request replay responses are cached
+persistently for five minutes in the private directory. Keep PT35 and
+Print Pet clocks synchronized. Status reads remain public.
+
+The NFC pairing exchange encrypts the owner key against passive radio
+observation. It is not a fully authenticated MITM-proof PAKE: an active
+adversary present during the short SSH-armed window could interfere with
+pairing, and key extraction from an unlocked PT35 is not prevented. Do not
+leave pairing armed unattended. Printing over NFC and large picture transfers
+still need end-to-end hardware verification.
+
+### Monochrome Print Pet e-paper screen
+
+`display_epaper.py` now draws a landscape **250x122 monochrome** layout,
+preserving the real wolf mood bitmap on the left, queue/printer/NFC pairing
+state in the center, and the guest QR on the right with **WEB CODE**
+directly beneath it. The header also shows READY/PRINTING/OFFLINE and
+Q/P counts. When the web visitor challenge is disabled, the reserved code
+region shows OFF. To enable six-digit visitor codes (while NFC owner prints
+remain code-free), in `print_station/config.json` set:
+
+```json
+"challenge_enabled": true
+```
+
+Restart the printer API and e-paper service, and preview without writing
+to the physical display using:
 
 ```bash
-python3 nfc/print_pet_mailbox.py print --uid E00226003269825F --name PT35 \
-  --message "AWOO" --confirm
-```
-
-NFC print MACs use minute-window HMAC and do not send the key. Keep device
-clocks approximately synchronized. They reduce casual spoofing but do not
-replace persistent replay protection, and lost acknowledgements must never
-trigger an automatic repeat of a physical print command.
-
-Picture NFC transfer is still experimental and awaits hardware tests.
-
-### Paired owner NFC printing (no display code)
-
-The Print Pet's e-paper does **not** need a six-digit code. The browser
-visitor challenge remains separate; PT35 owner printing uses a 32-byte
-pre-shared key and short time-windowed HMAC over each new print request.
-The key is provisioned over a trusted local terminal/SSH connection,
-**never broadcast via ISO15693**.
-
-On **Print Pet** (the same system user runs the print HTTP app):
-
-```sh
 cd ~/pt35/print_station
-mkdir -p .private
-chmod 700 .private
-umask 077
-python3 -c 'import secrets; from pathlib import Path; Path(".private/nfc_pairing.key").write_text(secrets.token_hex(32))'
-chmod 600 .private/nfc_pairing.key
+/usr/bin/python3 display_epaper.py --preview
 ```
 
-Transfer the key to PT35 using a trusted local connection (for example,
-from PT35: `scp printpet:~/pt35/print_station/.private/nfc_pairing.key /tmp/print_pet_pairing.key`)
-and install it as the PT35 user:
-
-```sh
-install -d -m 700 ~/.config/pt35
-install -m 600 /tmp/print_pet_pairing.key ~/.config/pt35/print_pet.key
-rm -f /tmp/print_pet_pairing.key
-```
-
-Adjust the SSH host alias to your actual Print Pet address. If root runs
-the NFC host, it may read the owner key at the same path; the HTTP app
-must be able to read that key for the **loopback-only** exception. Restart
-both the HTTP app and `mailbox_host.py` after updating the code. Never
-paste the key into a chat or commit it. Rotate the key if copied to an
-untrusted device.
-
-Only NFC **printing** requires pairing. Reading `status` remains
-available without a key. PT35 and Print Pet system clocks should be
-synchronized: HMAC uses a one-minute time slot with an adjacent-slot
-tolerance. It isn't encryption; other readers can still observe traffic,
-and captures can be replayed briefly. Request ID caching limits repeated
-printing in the active host process; persistent anti-replay state is not
-implemented. This is appropriate for trusted personal use, not a
-public unattended payment-style authentication system.
+The preview is saved at `/tmp/fmi-print-display.png`. The actual
+monochrome screen updates with `sudo systemctl restart fmi-print-display`
+and normal service refreshes. QR density can constrain scanability on
+the very small 68-pixel square; use a short guest URL.
