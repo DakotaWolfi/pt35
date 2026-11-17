@@ -642,7 +642,19 @@ class Handler(BaseHTTPRequestHandler):
                     img.thumbnail((1200, 700))
                     img.save(logo, "PNG", optimize=True)
                 return self.reply(200, {"message": "Header image saved"})
-            if self.conf.get("challenge_enabled"):
+            # Internal NFC mailbox bridge: only localhost callers presenting
+            # the exact provisioned secret bypass the visitor challenge.
+            # This header is NEVER accepted over the public HTTP interface.
+            nfc_owner=False
+            if self.client_address[0] in ("127.0.0.1","::1") and not self.headers.get("X-Forwarded-For"):
+                try:
+                    from mailbox_auth import HOST_KEY, read_key
+                    provided=self.headers.get("X-FMI-NFC-Internal","")
+                    nfc_owner=(len(provided)==64 and
+                               hmac.compare_digest(provided,read_key(HOST_KEY).hex()))
+                except (OSError,ValueError):
+                    pass
+            if self.conf.get("challenge_enabled") and not nfc_owner:
                 try:
                     secret=challenge.get_key()
                 except (OSError, ValueError):
