@@ -79,7 +79,19 @@ window.addEventListener('hashchange',navigate);navigate();
 $('#goto-fines').onclick=()=>location.hash='fines';$('#goto-custom').onclick=()=>location.hash='custom';
 async function api(path,method='GET',body,overrideToken){const headers=body?{'Content-Type':'application/json'}:{};const token=overrideToken===undefined?$('#token').value:overrideToken;if(token)headers['X-FMI-Admin']=token;const response=await fetch(path,{method,headers,body:body?JSON.stringify(body):undefined});const data=await response.json();if(!response.ok)throw Error(data.error||'Request failed');return data}
 function fineData(){return Object.fromEntries(new FormData($('#fine')))}
-function drawFine(){const f=fineData();$('#fine-preview').textContent=settings.station_name+'\n'+settings.subtitle+'\n--------------------------------\nAWOO FINE\n--------------------------------\nOffender: '+(f.name||'')+'\nIssued by: '+(f.issuer||'')+'\nLocation: '+(f.location||'')+'\nOffence: '+(f.offence||'')+'\nAmount: '+(f.currency||'')+' '+(f.amount||'')+'\n'+(f.message||'')+'\n--------------------------------\n'+settings.footer}
+function drawFine(){
+ const f=fineData(),line='--------------------------------';
+ const lines=[settings.station_name,settings.subtitle,line,'AWOO FINE',
+  'Ticket (assigned when printed)','Issued: (at print time)',
+  'Offender: '+(f.name||'')];
+ if(f.issuer)lines.push('Issued by: '+f.issuer);
+ if(f.location)lines.push('Location: '+f.location);
+ if(f.offence)lines.push('Offence: '+f.offence);
+ if(f.message)lines.push(f.message);
+ lines.push(line,'','FINE: '+(f.currency||'CHF')+' '+(f.amount||''),'Status: UNPAID','',
+  line,settings.footer,'NO LEGAL FORCE - JUST FURRY NONSENSE');
+ $('#fine-preview').textContent=lines.join('\n');
+}
 $('#fine').addEventListener('input',drawFine);$('#fine').addEventListener('change',drawFine);$('#fine').addEventListener('reset',()=>setTimeout(drawFine,0));
 $('#fine').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const result=await api('/api/print','POST',fineData());notice('Queued receipt #'+result.id+'; check history for the outcome');refresh()}catch(err){notice(err.message,true)}finally{b.disabled=false}};
 
