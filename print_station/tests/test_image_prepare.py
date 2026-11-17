@@ -12,7 +12,7 @@ class PrepareReceiptImageTests(unittest.TestCase):
         im.save(data,format="JPEG",quality=92)
         result=prepare_receipt_image(data.getvalue())
         self.assertLessEqual(result["width"],384)
-        self.assertLessEqual(result["height"],240)
+        self.assertLessEqual(result["height"],1024)
         self.assertLessEqual(result["bytes"],32*1024)
         import base64
         with Image.open(io.BytesIO(base64.b64decode(result["image"]))) as printed:
@@ -39,6 +39,22 @@ class PrepareReceiptImageTests(unittest.TestCase):
         result=prepare_receipt_image(output.getvalue(),width=576)
         self.assertEqual(result["width"],576)
         self.assertLessEqual(result["height"],240)
+
+    def test_3_to_2_photo_reaches_configured_width(self):
+        picture=Image.new("RGB",(1500,1000),(110,120,130))
+        output=io.BytesIO()
+        picture.save(output,"PNG")
+        result=prepare_receipt_image(output.getvalue(),width=512)
+        self.assertEqual(result["width"],512)
+        self.assertEqual(result["height"],341)
+
+    def test_portrait_photo_can_be_taller_than_240_dots(self):
+        picture=Image.new("RGB",(800,1200),(110,120,130))
+        output=io.BytesIO()
+        picture.save(output,"PNG")
+        result=prepare_receipt_image(output.getvalue(),width=512)
+        self.assertEqual(result["width"],512)
+        self.assertEqual(result["height"],768)
 
     def test_invalid_width_rejected(self):
         with self.assertRaises(ValueError):
