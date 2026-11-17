@@ -728,10 +728,11 @@ class Handler(BaseHTTPRequestHandler):
                     history[ip].append(now)
                     last_job_at = now
                 statistics["queued"] += 1
-            try:
-                dns_jobs.put_nowait((job_id, ip))
-            except queue.Full:
-                pass  # Printing must not be delayed by DNS.
+            if not nfc_owner:
+                try:
+                    dns_jobs.put_nowait((job_id, ip))
+                except queue.Full:
+                    pass  # Printing must not be delayed by DNS.
             return self.reply(202, {"message": "Receipt queued!", "id": job_id, "queue": jobs.qsize()})
         except Exception as exc:
             LOG.warning("Request rejected: %s", exc)
