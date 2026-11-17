@@ -4,7 +4,7 @@ set -euo pipefail
 IFACE=enx9cebe8ec46e1
 if [[ "${1:-}" != "--apply" ]]; then
   echo "Preview: install dnsmasq, bind DHCP ONLY to $IFACE, add 10.88.77.1/24."
-  echo "Pool: 10.88.77.20-40. No Wi-Fi, default route, DNS or NAT."
+  echo "Pool: 10.88.77.20-40; Epson reserved 10.88.77.30. No Wi-Fi, DNS or NAT."
   echo "Run: sudo bash setup_printer_dhcp.sh --apply"
   exit 0
 fi
@@ -19,6 +19,7 @@ port=0
 interface=$IFACE
 bind-dynamic
 dhcp-range=10.88.77.20,10.88.77.40,255.255.255.0,12h
+dhcp-host=f8:25:51:79:eb:5f,10.88.77.30,infinite
 dhcp-authoritative
 dhcp-option=option:router
 dhcp-option=option:dns-server
@@ -55,5 +56,5 @@ dnsmasq --test
 systemctl daemon-reload
 systemctl enable --now fmi-printer-lan.service
 systemctl enable --now dnsmasq.service
-echo "Done. Restart printer to request DHCP. No forwarding or NAT configured."
+echo "Done. Epson MAC f8:25:51:79:eb:5f reserved 10.88.77.30. Restart printer for DHCP."
 echo "Check: sudo journalctl -u dnsmasq -n 60 --no-pager"
