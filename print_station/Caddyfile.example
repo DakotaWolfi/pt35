@@ -1,8 +1,12 @@
-# Example for an INTERNET-REACHABLE hostname with valid public TLS certificate.
-# Replace print.example.com with a DNS name you control and resolve to Caddy.
-# Caddy must be reachable on TCP/80 and TCP/443, directly or through a compatible tunnel.
-# Never expose :8767 publicly. Keep the printer isolated on its Ethernet subnet.
-
+# FMI Print Station HYBRID example
+# Configure an actual DNS name and a publicly trusted TLS certificate.
+# Guests may print via HTTP on the Pi's port 8767 if HTTPS is unavailable.
+# Admin APIs NEVER run on 8767. This HTTPS site proxies to 127.0.0.1:8768.
+# Ensure Caddy's connection to the backend stays on this same device.
+#
+# When externally accessible, consider restricting who can reach admin APIs
+# beyond the admin token (e.g. VPN / separate admin hostname / IP allowlist).
+# Browser-facing receipts are best submitted via HTTPS; HTTP is a fallback only.
 print.example.com {
     encode zstd gzip
     header {
@@ -10,8 +14,7 @@ print.example.com {
         Referrer-Policy no-referrer
         Strict-Transport-Security "max-age=31536000"
     }
-    reverse_proxy 127.0.0.1:8767 {
-        # No trusted_proxies configured: Caddy replaces untrusted incoming XFF.
+    reverse_proxy 127.0.0.1:8768 {
         header_up X-Forwarded-Proto https
     }
 }
