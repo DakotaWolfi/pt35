@@ -24,7 +24,7 @@ class DiscoveryTests(unittest.TestCase):
 
     @patch("app.printer_dhcp_address",return_value="10.88.77.39")
     def test_dhcp_lease_overrides_stale_config_and_mdns(self, resolver):
-        conf=dict(app.DEFAULT,printer_host="169.254.235.95",
+        conf=dict(app.DEFAULT,printer_mac=app.EPSON_MAC,printer_host="169.254.235.95",
                   printer_mdns_name="Printer-79EB5F.local",
                   printer_interface="enx9cebe8ec46e1")
         self.assertEqual(app.printer_destination(conf),("10.88.77.39",9100))
@@ -40,9 +40,9 @@ class DiscoveryTests(unittest.TestCase):
     def test_automatic_uses_available_printer_not_stale_lease(self, connect):
         with TemporaryDirectory() as temp:
             lease=Path(temp)/"dnsmasq.leases"
-            lease.write_text("0 f8:25:51:79:eb:5f 10.88.77.30 TM-T88VI-79EB5F *\\n"
-                             "1799999999 64:eb:8c:f9:68:0a 10.88.77.36 Printer-7B0000 *\\n"
-                             "0 aa:bb:cc:dd:ee:ff 10.88.77.50 Laptop *\\n")
+            lease.write_text("0 f8:25:51:79:eb:5f 10.88.77.30 TM-T88VI-79EB5F *\n"
+                             "1799999999 64:eb:8c:f9:68:0a 10.88.77.36 Printer-7B0000 *\n"
+                             "0 aa:bb:cc:dd:ee:ff 10.88.77.50 Laptop *\n")
             self.assertEqual(app.automatic_printer_dhcp_address(9100,(lease,)),"10.88.77.36")
             connect.assert_called_once_with(("10.88.77.36",9100),timeout=0.5)
 
@@ -58,14 +58,14 @@ class DiscoveryTests(unittest.TestCase):
     @patch("app.subprocess.run")
     def test_managed_dhcp_ip_preferred_when_two_are_advertised(self, run, lease):
         run.return_value=Mock(stdout=RESULT + "=;enx9cebe8ec46e1;IPv4;EPSON;_printer._tcp;local;Printer-79EB5F.local;10.88.77.20;515;\n",returncode=0)
-        conf=dict(app.DEFAULT,printer_mdns_name="Printer-79EB5F.local",printer_interface="enx9cebe8ec46e1")
+        conf=dict(app.DEFAULT,printer_mac=app.EPSON_MAC,printer_mdns_name="Printer-79EB5F.local",printer_interface="enx9cebe8ec46e1")
         self.assertEqual(app.printer_destination(conf),("10.88.77.20",9100))
 
     @patch("app.printer_dhcp_address",return_value=None)
     @patch("app.subprocess.run")
     def test_no_fallback_to_stale_ip(self, run, lease):
         run.return_value=Mock(stdout="",returncode=0)
-        conf=dict(app.DEFAULT, printer_host="169.254.235.95",printer_mdns_name="Printer-79EB5F.local",printer_interface="enx9cebe8ec46e1")
+        conf=dict(app.DEFAULT, printer_mac=app.EPSON_MAC, printer_host="169.254.235.95",printer_mdns_name="Printer-79EB5F.local",printer_interface="enx9cebe8ec46e1")
         with self.assertRaises(RuntimeError):
             app.printer_destination(conf)
     @patch("app.printer_dhcp_address",return_value=None)
