@@ -28,7 +28,7 @@ img#logo{max-width:250px;max-height:130px;background:white}
 </style></head><body><main>
 <header><span style="font-size:39px" aria-hidden="true">🐺</span><div><h1>FMI Print Station</h1><p>Department of Unlicensed Howling</p></div><span class="pill" id="mode">Checking…</span></header>
 <nav aria-label="Print station pages">
-<a href="#home" data-page="home">Overview</a><a href="#fines" data-page="fines">AWOO Fines</a><a href="#custom" data-page="custom">Custom Receipt</a><a href="#history" data-page="history">Print History</a><a href="#settings" data-page="settings">Settings</a>
+<a href="#home" data-page="home">Overview</a><a href="#fines" data-page="fines">AWOO Fines</a><a href="#custom" data-page="custom">Custom Receipt</a><a href="#history" data-page="history" data-admin-nav>Print History</a><a href="#settings" data-page="settings" data-admin-nav>Settings</a>
 </nav><div id="flash" role="status"></div>
 <section class="panel" id="page-home">
 <div class="card"><h2>Welcome to the AWOO Fine Office</h2><p>Issue silly fines, build custom thermal receipts, and review print history. The direct Ethernet printer is not accessible to browsers.</p><div class="controls"><button id="goto-fines">Issue AWOO fine</button><button class="secondary" id="goto-custom">Create custom receipt</button></div></div>
@@ -69,10 +69,12 @@ img#logo{max-width:250px;max-height:130px;background:white}
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
 let settings={station_name:'FMI PRINT STATION',subtitle:'Department of Unlicensed Howling',footer:'AWOO responsibly!'};
+const secureAdmin = location.protocol === "https:";
+document.querySelectorAll("[data-admin-nav]").forEach(el=>{el.hidden=!secureAdmin});
 let historyUnlocked=false;
 let historyJobs=[];
 function notice(msg,bad=false){$('#flash').className=bad?'error':'ok';$('#flash').textContent=msg}
-function navigate(){let page=location.hash.slice(1)||'home';if(!['home','fines','custom','history','settings'].includes(page))page='home';document.querySelectorAll('.panel').forEach(n=>n.hidden=n.id!=='page-'+page);document.querySelectorAll('nav a').forEach(n=>n.classList.toggle('active',n.dataset.page===page));if(page==='home')refresh();if(page==='history'&&!historyUnlocked)$('#history-token').value=''}
+function navigate(){let page=location.hash.slice(1)||'home';if(!['home','fines','custom','history','settings'].includes(page)||(page==='history'||page==='settings')&&!secureAdmin)page='home';document.querySelectorAll('.panel').forEach(n=>n.hidden=n.id!=='page-'+page);document.querySelectorAll('nav a').forEach(n=>n.classList.toggle('active',n.dataset.page===page));if(page==='home')refresh();if(page==='history'&&!historyUnlocked)$('#history-token').value=''}
 window.addEventListener('hashchange',navigate);navigate();
 $('#goto-fines').onclick=()=>location.hash='fines';$('#goto-custom').onclick=()=>location.hash='custom';
 async function api(path,method='GET',body,overrideToken){const headers=body?{'Content-Type':'application/json'}:{};const token=overrideToken===undefined?$('#token').value:overrideToken;if(token)headers['X-FMI-Admin']=token;const response=await fetch(path,{method,headers,body:body?JSON.stringify(body):undefined});const data=await response.json();if(!response.ok)throw Error(data.error||'Request failed');return data}
@@ -99,7 +101,7 @@ $('#reset-custom').click();
 async function refresh(){try{const data=await api('/api/status');$('#health').textContent='Queued: '+data.queue+' · Printed: '+data.stats.printed+' · Failed: '+data.stats.failed;$('#mode').textContent=data.dry_run?'DRY RUN':'LIVE PRINT'}catch(err){$('#health').textContent=err.message}}
 function lockHistory(){historyUnlocked=false;historyJobs=[];$('#history-list').replaceChildren();$('#history-detail').hidden=true;$('#history-text').textContent='';$('#history-meta').textContent='';$('#history-lock').hidden=false;$('#history-private').hidden=true;$('#history-token').value='';$('#token').value='';$('#settings-form').hidden=true}
 $('#history-lock-button').onclick=()=>{lockHistory();notice('History locked')};
-$('#history-unlock').onclick=async()=>{const key=$('#history-token').value;if(!key)return notice('Enter administrator token',true);try{
+$('#history-unlock').onclick=async()=>{if(!secureAdmin)return notice('HTTPS required for admin history',true);const key=$('#history-token').value;if(!key)return notice('Enter administrator token',true);try{
   const data=await api('/api/history','GET',undefined,key);
   $('#token').value=key;
   $('#history-token').value='';
@@ -112,7 +114,7 @@ function renderHistory(jobs){historyJobs=jobs;const list=$('#history-list');list
 $('#load-history').onclick=async()=>{if(!historyUnlocked)return notice('Unlock history first',true);try{const data=await api('/api/history');renderHistory(data.jobs);notice('History loaded')}catch(err){notice(err.message,true)}};
 function showPrint(job){$('#history-detail').hidden=false;$('#history-meta').textContent='Job #'+job.id+' · '+new Date(job.created*1000).toLocaleString()+' · '+job.state+' · Source IP: '+(job.source_ip||'not recorded')+' · Device name: '+(job.receipt.device_name||'not supplied')+' · User agent: '+(job.user_agent||'not recorded');$('#history-text').textContent=job.receipt.rendered_text||'(Exact print text unavailable for this old record)';}
 function loadJob(job){const data=job.receipt;if(job.kind==='custom'){const f=$('#custom');f.elements.title.value=data.title;f.elements.subtitle.value=data.subtitle;f.elements.footer.value=data.footer;f.elements.device_name.value=data.device_name||'';$('#lines').replaceChildren();for(const item of data.lines)makeRow(item.type,item.text,item.label);drawCustom();location.hash='custom'}else{const f=$('#fine');for(const k of ['name','issuer','location','offence','amount','currency','message','device_name'])if(f.elements[k])f.elements[k].value=data[k]||'';drawFine();location.hash='fines'}notice('Loaded job #'+job.id+' into editor; printing creates a new history entry')}
-$('#load-settings').onclick=async()=>{try{settings=await api('/api/settings');let form=$('#settings-form');for(const [k,v]of Object.entries(settings))if(form.elements[k]){if(form.elements[k].type==='checkbox')form.elements[k].checked=!!v;else form.elements[k].value=v}form.hidden=false;drawFine();notice('Settings unlocked')}catch(err){notice(err.message,true)}};
+$('#load-settings').onclick=async()=>{if(!secureAdmin)return notice('HTTPS required for admin settings',true);try{settings=await api('/api/settings');let form=$('#settings-form');for(const [k,v]of Object.entries(settings))if(form.elements[k]){if(form.elements[k].type==='checkbox')form.elements[k].checked=!!v;else form.elements[k].value=v}form.hidden=false;drawFine();notice('Settings unlocked')}catch(err){notice(err.message,true)}};
 $('#settings-form').onsubmit=async e=>{e.preventDefault();const form=e.target,data={};for(const k of ['printer_host','printer_port','station_name','subtitle','footer','feed_mm','logo_width'])data[k]=form.elements[k].value;for(const k of ['logo_enabled','cut','dry_run'])data[k]=form.elements[k].checked;try{settings=await api('/api/settings','POST',data);notice('Settings saved');drawFine();refresh()}catch(err){notice(err.message,true)}};
 $('#probe').onclick=async()=>{try{notice((await api('/api/probe','POST',{})).message)}catch(err){notice(err.message,true)}};
 $('#upload').onchange=async()=>{const file=$('#upload').files[0];if(!file)return;if(file.size>1500000)return notice('Max file size is 1.5MB',true);const encoded=await new Promise((res,rej)=>{const reader=new FileReader();reader.onload=()=>res(reader.result.split(',')[1]);reader.onerror=rej;reader.readAsDataURL(file)});try{await api('/api/logo','POST',{data:encoded});$('#logo').hidden=false;$('#logo').src='/api/logo?v='+Date.now();notice('Logo uploaded')}catch(err){notice(err.message,true)}};
