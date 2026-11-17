@@ -41,6 +41,19 @@ class TestAdminTransport(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             return exc.code
 
+    def test_browser_image_sources_allowed(self):
+        import http.client
+        conn=http.client.HTTPConnection("127.0.0.1",self.http.server_port,timeout=2)
+        try:
+            conn.request("GET","/")
+            response=conn.getresponse()
+            self.assertEqual(response.status,200)
+            policy=response.getheader("Content-Security-Policy")
+            self.assertIn("img-src 'self' blob: data:",policy)
+            response.read()
+        finally:
+            conn.close()
+
     def test_http_does_not_expose_admin_even_with_spoofed_headers(self):
         for path in ("api/settings","api/history","api/history/1"):
             self.assertEqual(self.request(self.http,path,forwarded="https"),403)
