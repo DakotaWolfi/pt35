@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import time
 
-HOST_KEY=Path("/etc/fmi-print-station/nfc_pairing.key")
+HOST_KEY=Path(__file__).resolve().parent/".private/nfc_pairing.key"
 PT35_KEY=Path.home()/".config/pt35/print_pet.key"
 
 def read_key(path):
