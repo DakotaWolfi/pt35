@@ -29,7 +29,7 @@ img#logo{max-width:250px;max-height:130px;background:white}
 <header><span style="font-size:39px" aria-hidden="true">🐺</span><div><h1>FMI Print Station</h1><p>Department of Unlicensed Howling</p></div><span class="pill" id="mode">Checking…</span></header>
 <nav aria-label="Print station pages">
 <a href="#home" data-page="home">Overview</a><a href="#fines" data-page="fines">AWOO Fines</a><a href="#custom-fine" data-page="custom-fine">Custom Fine</a><a href="#custom" data-page="custom">Custom Receipt</a><a href="#history" data-page="history" data-admin-nav>Print History</a><a href="#settings" data-page="settings" data-admin-nav>Settings</a>
-</nav><div id="flash" role="status"></div>
+</nav><div id="flash" role="status"></div><div class="card" id="challenge-panel" hidden><h3>Physical Print Challenge</h3><p>Look at the Print Pet e-paper display and enter its six-digit code. This helps prevent remote printing abuse.</p><label>Code on printer display<input id="challenge-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" placeholder="000000"></label><label>Or owner-issued print pass<input id="print-pass" maxlength="10" autocomplete="off" placeholder="Optional temporary pass"></label></div>
 <section class="panel" id="page-home">
 <div class="card"><h2>Welcome to the AWOO Fine Office</h2><p>Issue silly fines, build custom thermal receipts, and review print history. The direct Ethernet printer is not accessible to browsers.</p><div class="controls"><button id="goto-fines">Issue AWOO fine</button><button class="secondary" id="goto-custom-fine">Custom fine</button><button class="secondary" id="goto-custom">Create custom receipt</button></div></div>
 <div class="card"><h2>Station activity</h2><p id="health">Checking station…</p><p class="small">Requests are rate-limited. Queued does not mean printed. Print history is visible only to administrators.</p></div>
@@ -74,7 +74,7 @@ img#logo{max-width:250px;max-height:130px;background:white}
 <div class="two"><label>Feed before cut (mm)<input name="feed_mm" type="number" min="0" max="200"></label><label>Logo width (dots)<select name="logo_width"><option>256</option><option>384</option><option>512</option><option>576</option></select></label></div>
 <label class="check"><input name="logo_enabled" type="checkbox">Print logo</label><label class="check"><input name="cut" type="checkbox">Cut paper</label><label class="check"><input name="dry_run" type="checkbox">Dry run</label>
 <div class="controls"><button type="submit">Save settings</button></div></form></div>
-<div class="card"><h2>Header image</h2><img id="logo" src="/api/logo" alt="Header image" onerror="this.hidden=true">
+<div class="card"><h2>Owner print pass</h2><p class="small">HTTPS administrator only. Generate a temporary code to bypass the display challenge. Share only with trusted people; normal print rate limits still apply.</p><button id="get-print-pass" class="secondary" type="button">Get temporary print pass</button><p id="owner-pass" class="big"></p><img id="owner-pass-qr" alt="Owner print pass QR code" hidden style="max-width:180px;background:white"><p class="small">The pass expires automatically and is separate from the administrator token.</p></div><div class="card"><h2>Header image</h2><img id="logo" src="/api/logo" alt="Header image" onerror="this.hidden=true">
 <label>Upload logo (administrator)<input type="file" id="upload" accept="image/png,image/jpeg,image/webp"></label>
 <button class="secondary" id="remove-logo">Remove logo</button>
 <p class="small">Keep this station on a trusted local network. The administrator token is sent only to the station.</p></div></div></section>
@@ -91,7 +91,8 @@ function navigate(){let page=location.hash.slice(1)||'home';if(!['home','fines',
 window.addEventListener('hashchange',navigate);navigate();
 $('#goto-fines').onclick=()=>location.hash='fines';$('#goto-custom-fine').onclick=()=>location.hash='custom-fine';$('#goto-custom').onclick=()=>location.hash='custom';
 async function api(path,method='GET',body,overrideToken){const headers=body?{'Content-Type':'application/json'}:{};const token=overrideToken===undefined?$('#token').value:overrideToken;if(token)headers['X-FMI-Admin']=token;const response=await fetch(path,{method,headers,body:body?JSON.stringify(body):undefined});const data=await response.json();if(!response.ok)throw Error(data.error||'Request failed');return data}
-function fineData(){return Object.fromEntries(new FormData($('#fine')))}
+function printCredentials(){return {challenge_code:$('#challenge-code').value.trim(),print_pass:$('#print-pass').value.trim().toUpperCase()}}
+function fineData(){return {...Object.fromEntries(new FormData($('#fine'))),...printCredentials()}}
 function drawFine(){
  const f=fineData(),line='--------------------------------';
  const lines=[settings.station_name,settings.subtitle,line,'AWOO FINE',
@@ -109,7 +110,7 @@ $('#fine').addEventListener('input',drawFine);$('#fine').addEventListener('chang
 $('#fine').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const result=await api('/api/print','POST',fineData());notice('Queued receipt #'+result.id+'; check history for the outcome');refresh()}catch(err){notice(err.message,true)}finally{b.disabled=false}};
 
 function customFineData(){
- return {...Object.fromEntries(new FormData($('#custom-fine'))),custom_fine:true};
+ return {...Object.fromEntries(new FormData($('#custom-fine'))),...printCredentials(),custom_fine:true};
 }
 function drawCustomFine(){
  const f=customFineData(),line='--------------------------------';
@@ -179,7 +180,7 @@ function makeRow(type='text',text='',label='',image=''){
   refreshRow();
 }
 function customData(){
- const d=Object.fromEntries(new FormData($('#custom')));
+ const d={...Object.fromEntries(new FormData($('#custom'))),...printCredentials()};
  d.lines=[...document.querySelectorAll('.line-editor')].map(n=>({type:n.querySelector('.type').value,text:n.querySelector('.item-text').value,label:n.querySelector('.item-label').value,...(n.querySelector('.type').value==='image'?{image:n._image||''}:{})}));
  return d;
 }
@@ -278,7 +279,7 @@ $('#import-template').onchange=async()=>{
 };
 refreshTemplates();
 $('#reset-custom').click();
-async function refresh(){try{const data=await api('/api/status');$('#health').textContent='Queued: '+data.queue+' · Printed: '+data.stats.printed+' · Failed: '+data.stats.failed;$('#mode').textContent=data.dry_run?'DRY RUN':'LIVE PRINT'}catch(err){$('#health').textContent=err.message}}
+async function refresh(){try{const data=await api('/api/status');$('#challenge-panel').hidden=!data.challenge_enabled;$('#health').textContent='Queued: '+data.queue+' · Printed: '+data.stats.printed+' · Failed: '+data.stats.failed;$('#mode').textContent=data.dry_run?'DRY RUN':'LIVE PRINT'}catch(err){$('#health').textContent=err.message}}
 function lockHistory(){historyUnlocked=false;historyJobs=[];$('#history-list').replaceChildren();$('#history-detail').hidden=true;$('#history-text').textContent='';$('#history-meta').textContent='';$('#history-lock').hidden=false;$('#history-private').hidden=true;$('#history-token').value='';$('#token').value='';$('#settings-form').hidden=true}
 $('#history-lock-button').onclick=()=>{lockHistory();notice('History locked')};
 $('#history-unlock').onclick=async()=>{if(!secureAdmin)return notice('HTTPS required for admin history',true);const key=$('#history-token').value;if(!key)return notice('Enter administrator token',true);try{
@@ -296,6 +297,7 @@ function showPrint(job){$('#history-detail').hidden=false;$('#history-meta').tex
 function loadJob(job){const data=job.receipt;if(job.kind==='custom'){const f=$('#custom');f.elements.title.value=data.title;f.elements.subtitle.value=data.subtitle;f.elements.footer.value=data.footer;$('#lines').replaceChildren();for(const item of data.lines)makeRow(item.type,item.text,item.label,item.image||'');drawCustom();location.hash='custom'}else if(data.custom_fine){const f=$('#custom-fine');for(const k of ['fine_title','fine_status','name','issuer','location','offence','amount','currency','message'])if(f.elements[k])f.elements[k].value=data[k]??'';drawCustomFine();location.hash='custom-fine'}else{const f=$('#fine');for(const k of ['name','issuer','location','offence','amount','currency','message'])if(f.elements[k])f.elements[k].value=data[k]??'';drawFine();location.hash='fines'}notice('Loaded job #'+job.id+' into editor; printing creates a new history entry')}
 $('#load-settings').onclick=async()=>{if(!secureAdmin)return notice('HTTPS required for admin settings',true);try{settings=await api('/api/settings');let form=$('#settings-form');for(const [k,v]of Object.entries(settings))if(form.elements[k]){if(form.elements[k].type==='checkbox')form.elements[k].checked=!!v;else form.elements[k].value=v}form.hidden=false;drawFine();drawCustomFine();notice('Settings unlocked')}catch(err){notice(err.message,true)}};
 $('#settings-form').onsubmit=async e=>{e.preventDefault();const form=e.target,data={};for(const k of ['printer_host','printer_port','printer_mdns_name','printer_interface','station_name','subtitle','footer','feed_mm','logo_width'])data[k]=form.elements[k].value;for(const k of ['logo_enabled','cut','dry_run'])data[k]=form.elements[k].checked;try{settings=await api('/api/settings','POST',data);notice('Settings saved');drawFine();drawCustomFine();refresh()}catch(err){notice(err.message,true)}};
+$('#get-print-pass').onclick=async()=>{try{const data=await api('/api/bypass');$('#owner-pass').textContent=data.token;$('#owner-pass-qr').src='data:image/png;base64,'+data.qr_png_base64;$('#owner-pass-qr').hidden=false;notice('Temporary print pass issued; expires within 10 minutes')}catch(err){notice(err.message,true)}};
 $('#probe').onclick=async()=>{try{notice((await api('/api/probe','POST',{})).message)}catch(err){notice(err.message,true)}};
 $('#upload').onchange=async()=>{const file=$('#upload').files[0];if(!file)return;if(file.size>1500000)return notice('Max file size is 1.5MB',true);const encoded=await new Promise((res,rej)=>{const reader=new FileReader();reader.onload=()=>res(reader.result.split(',')[1]);reader.onerror=rej;reader.readAsDataURL(file)});try{await api('/api/logo','POST',{data:encoded});$('#logo').hidden=false;$('#logo').src='/api/logo?v='+Date.now();notice('Logo uploaded')}catch(err){notice(err.message,true)}};
 $('#remove-logo').onclick=async()=>{try{await api('/api/logo/remove','POST',{});$('#logo').hidden=true;notice('Logo removed')}catch(err){notice(err.message,true)}};
