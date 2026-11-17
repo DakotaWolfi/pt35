@@ -19,7 +19,7 @@ from smbus2 import SMBus, i2c_msg
 from mailbox_protocol import pack, unpack
 from mailbox_image import ImageReceiver
 from mailbox_auth import read_key, verify, HOST_KEY
-from nfc_pairing import handle_pair, issue_completed, handle_done
+from nfc_pairing import handle_pair, handle_pair_key, issue_completed, handle_done
 
 LOG=logging.getLogger("fmi.mailbox")
 TAG=0x53
@@ -161,6 +161,8 @@ def main():
                         elif request["t"]=="pair":
                             fields,pairing_update=handle_pair(request)
                             response=pack("reply",uid,**fields)
+                        elif request["t"]=="pair-key":
+                            response=pack("reply",uid,**handle_pair_key(request))
                         elif request["t"]=="pair-done":
                             response=pack("reply",uid,**handle_done(request))
                             # Reload the durable owner key after confirmation.
@@ -171,7 +173,7 @@ def main():
                             response=(image_receiver.process(request,args.api)
                                       if request["t"] in ("img0","img1","img2")
                                       else process(msg,args.api,key))
-                        if response is not None:
+                        if response is not None and request["t"]!="pair":
                             seen[uid]=(now,response)
                     except (ValueError,UnicodeError,KeyError,TypeError) as exc:
                         LOG.warning("Bad RF request: %s",exc)
@@ -180,6 +182,8 @@ def main():
                         delivered=respond(bus,response)
                         if delivered:
                             issue_completed(pairing_update)
+                            if pairing_update is not None:
+                                seen[uid]=(now,response)
                         else:
                             LOG.warning("PT35 did not clear mailbox; reply not sent")
                     if args.once: return
