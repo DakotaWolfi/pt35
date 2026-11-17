@@ -12,7 +12,10 @@ MAX_PIXELS=32_000_000
 TARGET=(384,240)
 MAX_PNG=32*1024
 
-def prepare_receipt_image(raw):
+def prepare_receipt_image(raw, brightness=25):
+    """Brightness 0..70; 25 is a deliberately lighter thermal-photo default."""
+    if type(brightness) is not int or not 0 <= brightness <= 70:
+        raise ValueError("Brightness must be between 0 and 70")
     if not isinstance(raw,(bytes,bytearray)) or not 0<len(raw)<=MAX_UPLOAD:
         raise ValueError("Source image exceeds 12 MiB upload limit")
     try:
@@ -30,7 +33,12 @@ def prepare_receipt_image(raw):
             rgba=source.convert("RGBA")
             background=Image.new("RGBA",rgba.size,"white")
             background.alpha_composite(rgba)
-            gray=ImageOps.autocontrast(ImageOps.grayscale(background.convert("RGB")))
+            gray=ImageOps.autocontrast(ImageOps.grayscale(background.convert("RGB")),cutoff=1)
+            # Raise midtones for thermal paper; otherwise Floyd-Steinberg
+            # places too many black dots in faces and shaded photos.
+            gamma=1.0-(brightness/100.0)
+            lut=[min(255,round(255*((v/255)**gamma))) for v in range(256)]
+            gray=gray.point(lut)
             # Error-diffusion dithering preserves gradients, text, and
             # photographic details without needing a large PNG payload.
             bw=gray.convert("1",dither=Image.Dither.FLOYDSTEINBERG)
