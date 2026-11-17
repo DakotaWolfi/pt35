@@ -287,3 +287,45 @@ After a successful manual write and phone tap test, set
 `fmi-print-display.service`. The display service will only reprogram when
 the URL differs, minimizing EEPROM wear. The QR and tag then share the same
 guest HTTP address, even as wlan0 changes IP.
+
+## Print Pet and physical-presence challenge (optional)
+
+The e-paper layout shows an original tiny wolf/pet face, happy/sad/printing
+mood, basic printer/queue state, a QR for the current guest HTTP page, and
+(if enabled) a six-digit print code. It is a lightweight display concept,
+**not** a port of the full Collar Pet runtime or its animated face assets.
+The e-paper refresh interval is usually 90 seconds, so transient printing
+can be too brief to catch visually. LEDs would need their own controller.
+
+Enable the challenge locally (config.json is private and not tracked):
+
+```bash
+cd ~/pt35/print_station
+python3 - <<\'PY\'
+import json
+from pathlib import Path
+p=Path("config.json")
+data=json.loads(p.read_text())
+data["challenge_enabled"]=True
+p.write_text(json.dumps(data,indent=2)+"\\n")
+PY
+sudo systemctl restart fmi-print-station fmi-print-display
+```
+
+On first startup the service creates a random, owner-only key in
+`/home/jenna/.local/state/fmi-print-station/challenge.key` (mode 0600).
+Do not copy it into Git. The six-digit code changes every 10 minutes, and
+the prior code is accepted for e-paper refresh lag. The server validates
+the code on **all** guest printing endpoints (`/api/print`, `/api/custom`).
+If key access fails, guest printing fails closed. Turning the challenge
+off requires an explicit private config change and service restart.
+
+For a short-lived owner pass, open the admin HTTPS Settings page, enter the
+admin token and press **Get temporary print pass**. The resulting 10-character
+pass and QR can be shared with a trusted visitor. It is a **printing-only**
+bypass, NOT an admin token, and works for at most 10 minutes. It does not
+bypass rate or queue limits. The pass is issued only via an authenticated
+HTTPS admin endpoint; unauthenticated guests cannot request it.
+
+This challenge mitigates casual remote abuse; it is not strong user
+authentication. A visitor can photograph or share a visible code.
