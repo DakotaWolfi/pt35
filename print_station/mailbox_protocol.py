@@ -8,8 +8,8 @@ import json
 import re
 
 MAGIC="FMP1"
-MAX_BYTES=192
-MAX_TEXT=96
+MAX_BYTES=112
+MAX_TEXT=40
 ID=re.compile(r"^[0-9a-f]{8}$")
 
 def pack(kind, ident, **fields):
