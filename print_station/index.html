@@ -180,7 +180,7 @@ function makeRow(type='text',text='',label='',image=''){
   refreshRow();
 }
 function customData(){
- const d={...Object.fromEntries(new FormData($('#custom'))),...printCredentials()};
+ const d=Object.fromEntries(new FormData($('#custom')));
  d.lines=[...document.querySelectorAll('.line-editor')].map(n=>({type:n.querySelector('.type').value,text:n.querySelector('.item-text').value,label:n.querySelector('.item-label').value,...(n.querySelector('.type').value==='image'?{image:n._image||''}:{})}));
  return d;
 }
@@ -226,7 +226,7 @@ $('#custom').onsubmit=async e=>{
  if(data.lines.some(x=>x.type==='image'&&!x.image))return notice('Choose an image or remove the empty image block',true);
  if(data.lines.filter(x=>x.type==='image').length>2)return notice('Maximum two images',true);
  b.disabled=true;
- try{const result=await api('/api/custom','POST',data);notice('Custom receipt #'+result.id+' queued; check history for outcome');refresh()}
+ try{const result=await api('/api/custom','POST',{...data,...printCredentials()});notice('Custom receipt #'+result.id+' queued; check history for outcome');refresh()}
  catch(err){notice(err.message,true)}
  finally{b.disabled=false}
 };
