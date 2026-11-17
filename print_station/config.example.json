@@ -36,5 +36,7 @@
     "refresh_interval_seconds": 90
   },
   "admin_port": 8768,
-  "require_https_proxy": false
+  "require_https_proxy": false,
+  "printer_mdns_name": "",
+  "printer_interface": ""
 }
