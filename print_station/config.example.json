@@ -40,5 +40,6 @@
   "printer_mdns_name": "",
   "printer_interface": "",
   "nfc_i2c_bus": null,
-  "nfc_auto_update": false
+  "nfc_auto_update": false,
+  "challenge_enabled": false
 }
