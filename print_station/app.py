@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parent
 CONFIG_FILE = Path(os.environ.get("FMI_PRINT_CONFIG", ROOT / "config.json"))
 DEFAULT = {
-    "listen": "127.0.0.1", "port": 8767,
+    "listen": "127.0.0.1", "port": 8767, "admin_port": 8768,
     "access_mode": "local",  # local | public | both
     "local_networks": ["127.0.0.0/8", "::1/128", "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"],
     "public_base_url": "", "nfc_url": "",
@@ -54,6 +54,8 @@ def load_config(path=CONFIG_FILE):
         conf.update(user)
     if conf["access_mode"] not in ("local", "public", "both"):
         raise ValueError("access_mode must be local, public or both")
+    if not 1 <= int(conf["admin_port"]) <= 65535 or int(conf["admin_port"]) == int(conf["port"]):
+        raise ValueError("admin_port must be a distinct valid port")
     if not 1 <= int(conf["port"]) <= 65535:
         raise ValueError("Invalid port")
     if not 1 <= int(conf["max_message_chars"]) <= 500:
@@ -256,6 +258,14 @@ finally{b.disabled=false;}}</script></html>"""
 
 class Handler(BaseHTTPRequestHandler):
     conf = DEFAULT
+    admin_listener = False
+    def admin_transport(self):
+        return (self.admin_listener and self.client_address[0] in ("127.0.0.1", "::1")
+                and self.headers.get("X-Forwarded-Proto","").lower() == "https")
+    def require_secure_admin(self):
+        if self.admin_transport(): return True
+        self.reply(403, {"error": "Administrator functions require HTTPS; use the secured admin URL"})
+        return False
     def reply(self, code, body, mime="application/json"):
         payload = json.dumps(body).encode() if mime == "application/json" else body.encode("utf-8")
         self.send_response(code)
@@ -296,11 +306,13 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(content)
         elif path == "/api/history":
+            if not self.require_secure_admin(): return
             if not admin_allowed(self):
                 LOG.warning("Unauthorized history access from %s", request_identity(self))
                 return self.reply(403, {"error": "Admin token required"})
             self.reply(200, {"jobs": receipt_store.list_jobs(60)})
         elif path.startswith("/api/history/"):
+            if not self.require_secure_admin(): return
             if not admin_allowed(self):
                 LOG.warning("Unauthorized receipt access from %s", request_identity(self))
                 return self.reply(403, {"error": "Admin token required"})
@@ -310,6 +322,7 @@ class Handler(BaseHTTPRequestHandler):
             if item is None: return self.reply(404, {"error": "Job not found"})
             self.reply(200, item)
         elif path == "/api/settings":
+            if not self.require_secure_admin(): return
             if not admin_allowed(self):
                 return self.reply(403, {"error": "Admin token required"})
             self.reply(200, public_config(self.conf))
@@ -344,6 +357,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(400, {"error": "JSON object required"})
             path = urlsplit(self.path).path
             if path in ("/api/settings", "/api/logo", "/api/logo/remove", "/api/probe"):
+                if not self.require_secure_admin(): return
                 if not admin_allowed(self):
                     return self.reply(403, {"error": "Admin token required"})
                 if path == "/api/probe":
@@ -448,9 +462,15 @@ def main():
     jobs.maxsize = conf["max_queue"]
     Handler.conf = conf
     threading.Thread(target=worker, args=(conf,), daemon=True).start()
+    # Two independent listening sockets: the publicly reachable HTTP port NEVER
+    # serves administrator APIs. An HTTPS reverse proxy talks only to localhost.
+    class AdminHandler(Handler):
+        admin_listener = True
+    AdminHandler.conf = conf
+    admin_server = ThreadingHTTPServer(("127.0.0.1", int(conf["admin_port"])), AdminHandler)
+    threading.Thread(target=admin_server.serve_forever, daemon=True).start()
     server = ThreadingHTTPServer((conf["listen"], int(conf["port"])), Handler)
-    LOG.info("Print station on http://%s:%s (mode=%s dry_run=%s)",
-             conf["listen"], conf["port"], conf["access_mode"], conf["dry_run"])
+    LOG.info("Guest HTTP on %s:%s; HTTPS admin proxy upstream 127.0.0.1:%s", conf["listen"],conf["port"],conf["admin_port"])
     server.serve_forever()
 
 if __name__ == "__main__":
