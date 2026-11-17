@@ -18,12 +18,18 @@ import secrets
 import time
 
 from mailbox_auth import HOST_KEY, verify
-from cryptography.hazmat.primitives.asymmetric import x25519
-from cryptography.hazmat.primitives.serialization import Encoding,PublicFormat,PrivateFormat,NoEncryption
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes
 import hashlib
+
+def crypto():
+    try:
+        from cryptography.hazmat.primitives.asymmetric import x25519
+        from cryptography.hazmat.primitives.serialization import Encoding,PublicFormat,PrivateFormat,NoEncryption
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+        from cryptography.hazmat.primitives import hashes
+    except ImportError as exc:
+        raise RuntimeError("Install python3-cryptography for NFC pairing") from exc
+    return x25519,Encoding,PublicFormat,PrivateFormat,NoEncryption,AESGCM,HKDF,hashes
 
 PRIVATE=HOST_KEY.parent
 ARM=PRIVATE/"nfc_pairing_arm.json"
@@ -80,12 +86,14 @@ def handle_pair(request):
         return {"ok":False,"error":"Pairing not armed"},None
     if active["state"]!="armed":
         return {"ok":False,"error":"Pairing already used"},None
+    x25519,Encoding,PublicFormat,PrivateFormat,NoEncryption,_,_,_=crypto()
     try:
         peer=base64.b64decode(request["p"],validate=True)
         if len(peer)!=32:raise ValueError("Invalid public key length")
         x25519.X25519PublicKey.from_public_bytes(peer)
     except (ValueError,KeyError,TypeError):
         return {"ok":False,"error":"Invalid PT35 public key"},None
+    x25519,Encoding,PublicFormat,PrivateFormat,NoEncryption,_,_,_=crypto()
     private=x25519.X25519PrivateKey.generate()
     active.update(state="issued",session=request["id"],peer=peer.hex(),
                   private=private.private_bytes(Encoding.Raw,PrivateFormat.Raw,NoEncryption()).hex())
@@ -98,6 +106,7 @@ def handle_pair_key(request):
         return {"ok":False,"error":"No pending pairing"}
     if active.get("session")!=request.get("s"):
         return {"ok":False,"error":"Pairing session mismatch"}
+    x25519,_,_,_,_,AESGCM,HKDF,hashes=crypto()
     try:
         private=x25519.X25519PrivateKey.from_private_bytes(bytes.fromhex(active["private"]))
         peer=x25519.X25519PublicKey.from_public_bytes(bytes.fromhex(active["peer"]))
