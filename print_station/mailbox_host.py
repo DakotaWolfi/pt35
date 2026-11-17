@@ -108,7 +108,7 @@ def process(message,api,key=None):
     if msg["t"]=="print":
         if key is None or not verify(msg,key):
             return pack("reply",uid,ok=False,error="NFC not paired")
-        # NFC is not authenticated by proximity; require same code as web.
+        # NFC proximity alone is not authentication; verify paired HMAC above.
         result=http_json(api+"/api/print",{"name":msg["name"],
                                           "message":msg["message"],
                                           },internal_key=key)
