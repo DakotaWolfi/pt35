@@ -29,6 +29,10 @@ def atomic_write(path,data):
     temporary=path.with_name(path.name+"."+secrets.token_hex(5)+".tmp")
     fd=os.open(str(temporary),os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
     try:
+        # Host may run as root; let the printer service owner read this key.
+        if os.geteuid()==0:
+            owner=path.parent.stat()
+            os.fchown(fd,owner.st_uid,owner.st_gid)
         with os.fdopen(fd,"w",encoding="ascii") as out:
             out.write(data)
             out.flush()
