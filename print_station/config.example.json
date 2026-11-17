@@ -38,5 +38,7 @@
   "admin_port": 8768,
   "require_https_proxy": false,
   "printer_mdns_name": "",
-  "printer_interface": ""
+  "printer_interface": "",
+  "nfc_i2c_bus": null,
+  "nfc_auto_update": false
 }
