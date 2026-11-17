@@ -278,10 +278,10 @@ def validate_custom(payload, conf):
             if image_count>int(conf["max_images_per_receipt"]):
                 raise ValueError("Too many images per receipt")
             png=str(entry.get("image",""))
-            if len(png)>44000:
-                raise ValueError("Image exceeds 32 KiB")
+            if len(png)>131072:
+                raise ValueError("Image exceeds 96 KiB")
             total_binary+=len(png)
-            if total_binary>int(conf["max_images_per_receipt"])*44000:
+            if total_binary>int(conf["max_images_per_receipt"])*131072:
                 raise ValueError("Receipt images too large")
             # Decode and validate before placing job in queue or history.
             raster_image_block(png,int(conf["image_width_dots"]))
@@ -660,7 +660,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(500,{"error":"Image converter unavailable"})
         try:
             size = int(self.headers.get("Content-Length", "0"))
-            if size < 1 or size > (2500000 if urlsplit(self.path).path == "/api/logo" else (190000 if urlsplit(self.path).path == "/api/custom" else 4096)):
+            if size < 1 or size > (2500000 if urlsplit(self.path).path == "/api/logo" else (550000 if urlsplit(self.path).path == "/api/custom" else 4096)):
                 return self.reply(413, {"error": "Invalid request size"})
             if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
                 return self.reply(415, {"error": "JSON required"})
