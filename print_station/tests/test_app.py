@@ -24,6 +24,19 @@ class TestPrintStation(unittest.TestCase):
         self.assertFalse(app.allowed("8.8.8.8",c))
         c["access_mode"]="both"
         self.assertTrue(app.allowed("8.8.8.8",c))
+    def test_detailed_fine_layout(self):
+        result=app.make_ticket("Philipp", "Being suspiciously fluffy", app.DEFAULT,
+            {"issuer":"Jenna","location":"FMI Labs","offence":"Being suspiciously fluffy",
+             "amount":"CHF 350.00"},
+            ticket_id=3, issued_at="2026-11-17T09:00:00+01:00").decode("ascii")
+        self.assertIn("AWOO FINE",result)
+        self.assertIn("Ticket 00003",result)
+        self.assertIn("Issued: 2026-11-17T09:00:00+01:00",result)
+        self.assertIn("Offender: Philipp",result)
+        self.assertIn("FINE: CHF 350.00",result)
+        self.assertIn("Status: UNPAID",result)
+        self.assertIn("NO LEGAL FORCE",result)
+
     def test_esc_pos_safety(self):
         b=app.make_ticket("Wolf\x1b", "AWOO!",app.DEFAULT)
         self.assertNotIn(bytes([27]),b)
