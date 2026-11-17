@@ -50,7 +50,7 @@ def receive(bus):
     if not flags&0x04:  # RF_PUT_MSG
         return None
     n=read(bus,TAG,LENGTH)[0]+1
-    if not 1<=n<=192:
+    if not 1<=n<=112:
         # Still consume invalid RF input to free mailbox.
         read(bus,TAG,RAM,n)
         raise ValueError(f"RF mailbox message invalid length {n}")
@@ -91,22 +91,21 @@ def process(message,api):
                     ready=bool(status.get("printer_dhcp_ip")),
                     printing=bool(status.get("printing")),
                     queue=int(status.get("queue",0)) if isinstance(status.get("queue"),int) else 0,
-                    printed=int(status.get("stats",{}).get("printed",0)),
-                    error=str(status.get("error",""))[:30])
+                    printed=int(status.get("stats",{}).get("printed",0)))
     if msg["t"]=="print":
         # NFC is not authenticated by proximity; require same code as web.
         code=msg.get("code","")
         if not isinstance(code,str) or not (len(code)==6 and code.isdecimal()):
-            return pack("reply",uid,ok=False,error="Six-digit print code required")
+            return pack("reply",uid,ok=False,error="Print code required")
         status=http_json(api+"/api/status")
         if not status.get("challenge_enabled"):
-            return pack("reply",uid,ok=False,error="Enable physical print challenge first")
+            return pack("reply",uid,ok=False,error="Print challenge disabled")
         result=http_json(api+"/api/print",{"name":msg["name"],
                                           "message":msg["message"],
                                           "challenge_code":code})
         return pack("reply",uid,ok="error" not in result,
-                    error=str(result.get("error",""))[:50],
-                    message=str(result.get("message",""))[:40])
+                    error=str(result.get("error",""))[:25],
+                    message=str(result.get("message",""))[:20])
     return pack("reply",uid,ok=False,error="Unsupported request")
 
 def main():
