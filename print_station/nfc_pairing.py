@@ -93,7 +93,6 @@ def handle_pair(request):
         x25519.X25519PublicKey.from_public_bytes(peer)
     except (ValueError,KeyError,TypeError):
         return {"ok":False,"error":"Invalid PT35 public key"},None
-    x25519,Encoding,PublicFormat,PrivateFormat,NoEncryption,_,_,_=crypto()
     private=x25519.X25519PrivateKey.generate()
     active.update(state="issued",session=request["id"],peer=peer.hex(),
                   private=private.private_bytes(Encoding.Raw,PrivateFormat.Raw,NoEncryption()).hex())
