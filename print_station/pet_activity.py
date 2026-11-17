@@ -10,8 +10,10 @@ import time
 
 ROOT=Path(__file__).resolve().parent/".private"
 ALLOWED={"web","web_print","nfc","nfc_print","pair","printing","printed","error"}
-DURATION={"web":24,"web_print":45,"nfc":20,"nfc_print":50,
-          "pair":35,"printing":30,"printed":35,"error":60}
+# Every visible event outlives the default minimum 25s e-paper refresh
+# (plus a 5s poll), so brief taps can still be displayed.
+DURATION={"web":40,"web_print":50,"nfc":40,"nfc_print":50,
+          "pair":45,"printing":40,"printed":45,"error":60}
 
 def report(kind):
     if kind not in ALLOWED:raise ValueError("Unknown activity")
