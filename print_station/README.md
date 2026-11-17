@@ -212,3 +212,27 @@ might yield `jenna-laptop.lan`, but event Wi-Fi, NAT, proxies or a
 misconfigured resolver may yield only a shared gateway/provider hostname, a
 spoofable PTR record, or no result. Hostnames and IPs should not be treated as
 proof of identity. The guest-facing form does not request a device name.
+
+## Epson TM-T88VI: dynamic link-local address (Avahi DNS-SD)
+
+The directly connected Epson advertises `_printer._tcp` on Ethernet with a stable
+mDNS hostname, even when its 169.254.x.x address changes. The print station
+can resolve that name for each job and for the admin printer probe.
+
+Example local `config.json` values (keep `printer_port: 9100`):
+
+    "printer_mdns_name": "Printer-79EB5F.local",
+    "printer_interface": "enx9cebe8ec46e1"
+
+With these fields set, the old `printer_host` field is *not* used for printing.
+The discovery implementation uses `avahi-browse -rtpk _printer._tcp`, checks
+the exact advertised hostname, IPv4 link-local address, and specified wired
+interface. It deliberately never falls back to the old printer IP on discovery
+failure or picks a same-named printer on visitor Wi-Fi. Port 515 in the DNS-SD
+advertisement is LPR; the app still uses ESC/POS TCP/9100, so test that port
+with `nc -vz 169.254.235.98 9100` first.
+
+Requirements: `sudo apt install avahi-utils avahi-daemon`. These are already
+installed on the current Orange Pi. The HTTPS admin settings page also exposes
+printer discovery hostname and wired interface. After updating the local
+ignored config, restart the web service. Do not assign a static IP to the Epson.
