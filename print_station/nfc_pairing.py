@@ -18,6 +18,12 @@ import secrets
 import time
 
 from mailbox_auth import HOST_KEY, verify
+from cryptography.hazmat.primitives.asymmetric import x25519
+from cryptography.hazmat.primitives.serialization import Encoding,PublicFormat,PrivateFormat,NoEncryption
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes
+import hashlib
 
 PRIVATE=HOST_KEY.parent
 ARM=PRIVATE/"nfc_pairing_arm.json"
@@ -68,18 +74,43 @@ def paired():
         return False
 
 def handle_pair(request):
-    """Return (fields, state_update). Caller writes reply before marking issued."""
-    if request.get("t")!="pair":return None
+    """Issue an ephemeral X25519 public key, never the owner secret in clear."""
     active=state()
     if active is None:
         return {"ok":False,"error":"Pairing not armed"},None
     if active["state"]!="armed":
         return {"ok":False,"error":"Pairing already used"},None
-    active["state"]="issued"
-    active["session"]=secrets.token_hex(4)
-    fields={"k":base64.b64encode(bytes.fromhex(active["key"])).decode("ascii"),
-            "s":active["session"]}
-    return fields,active
+    try:
+        peer=base64.b64decode(request["p"],validate=True)
+        if len(peer)!=32:raise ValueError("Invalid public key length")
+        x25519.X25519PublicKey.from_public_bytes(peer)
+    except (ValueError,KeyError,TypeError):
+        return {"ok":False,"error":"Invalid PT35 public key"},None
+    private=x25519.X25519PrivateKey.generate()
+    active.update(state="issued",session=request["id"],peer=peer.hex(),
+                  private=private.private_bytes(Encoding.Raw,PrivateFormat.Raw,NoEncryption()).hex())
+    pub=private.public_key().public_bytes(Encoding.Raw,PublicFormat.Raw)
+    return {"p":base64.b64encode(pub).decode("ascii")},active
+
+def handle_pair_key(request):
+    active=state()
+    if active is None or active["state"]!="issued":
+        return {"ok":False,"error":"No pending pairing"}
+    if active.get("session")!=request.get("s"):
+        return {"ok":False,"error":"Pairing session mismatch"}
+    try:
+        private=x25519.X25519PrivateKey.from_private_bytes(bytes.fromhex(active["private"]))
+        peer=x25519.X25519PublicKey.from_public_bytes(bytes.fromhex(active["peer"]))
+        shared=private.exchange(peer)
+        session=bytes.fromhex(active["session"])
+        wrapping_key=HKDF(algorithm=hashes.SHA256(),length=32,salt=session,
+                          info=b"FMI Print Pet NFC pairing v2").derive(shared)
+        nonce=hashlib.sha256(b"FMI-NFC-pair"+session).digest()[:12]
+        ciphertext=AESGCM(wrapping_key).encrypt(nonce,bytes.fromhex(active["key"]),session)
+        # 48 bytes ciphertext => 64 base64 chars, exactly fits 112-byte reply.
+        return {"c":base64.b64encode(ciphertext).decode("ascii")}
+    except (ValueError,KeyError,TypeError):
+        return {"ok":False,"error":"Pairing key exchange failed"}
 
 def issue_completed(update):
     """Called only after the NFC mailbox reply was successfully written."""
