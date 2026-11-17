@@ -598,3 +598,48 @@ response; the final print-commit chunk is never automatically resent.
 If full pictures are still unreliable, prefer NFC for authenticated
 handshake/short commands and an independently authenticated Bluetooth or
 Wi-Fi link for large binary transfers.
+
+### Print Pet reactive e-paper and matching dark PT35 touch UI
+
+The 250x122 **monochrome** display shows **READY/OFFLINE/PRINT** and
+queue/printed counters **only once in the header**. The left side is the
+wolf expression/mood, and the center is a context-sensitive pet message
+plus NFC state. The redundant second READY, second Q/P and PRINTER OK
+labels were removed. The right side remains guest QR + WEB CODE (or OFF
+when the guest challenge is disabled).
+
+The pet reacts to actual local events recorded by the two services;
+`pet_activity.py` writes only timestamps, no tag UID, visitor names,
+message contents, or secrets:
+
+- NFC read/status or alignment test -> curious wolf / NFC HELLO!
+- SSH-armed owner pairing -> listening wolf / PAIRING
+- Web page request -> social wolf / WEB VISITOR
+- Web/NFC receipt queued -> startled wolf / corresponding receipt message
+- Printer starts work -> startled wolf / PRINTING!
+- Printed successfully -> smug wolf / GOOD JOB!
+- Print failure -> annoyed wolf / PRINT ERROR
+- No recent activity -> happy wolf / AWOO :3
+
+The real wolf PNGs come from `fetch_collarpet_assets.sh`; re-run it if
+`wolf_smug.png`, `wolf_social.png` or `wolf_listening.png` is absent.
+Events expire and automatically return to idle. The display checks for
+changes every 5 seconds but limits full-panel refreshes to **at most one
+per 25 seconds** (configurable via `display.activity_min_refresh_seconds`;
+minimum 20 seconds). Existing periodic refresh stays at >=60 seconds.
+This is deliberate for e-paper: fast animated expressions are not possible.
+
+The PT35 Print Pet Tk interface now follows the installed PT35
+`nfc_touch` dark colors: navy backgrounds, mint accent buttons,
+larger touch targets, and a live NFC quality bar. PgUp/PgDn and Ctrl+Tab
+switch between Status, Text, and Picture. To update PT35 client scripts,
+fetch `feature/fmi-print-station` and restore
+`nfc/print_pet_gui.py`, `nfc/print_pet_mailbox.py`, and matching
+`print_station/mailbox_protocol.py`. Printer service and display Python
+sources must instead be updated on the **Print Pet Orange Pi**.
+
+On Print Pet, ensure `~/pt35/print_station/.private` is accessible
+to the `jenna` HTTP service user (typically mode 0700, owner jenna).
+Restart `fmi-print-station`, `fmi-print-display`, and (if installed)
+`fmi-print-nfc` after updating. To preview the actual renderer:
+`/usr/bin/python3 display_epaper.py --preview`.
