@@ -643,3 +643,30 @@ to the `jenna` HTTP service user (typically mode 0700, owner jenna).
 Restart `fmi-print-station`, `fmi-print-display`, and (if installed)
 `fmi-print-nfc` after updating. To preview the actual renderer:
 `/usr/bin/python3 display_epaper.py --preview`.
+
+### Large source photos in the web custom receipt form
+
+The Custom Receipt image upload now sends the **original** selected image
+to `POST /api/image/prepare` as a bounded binary upload. Print Pet uses
+Pillow to apply EXIF orientation, respect transparency, downsample to fit
+**384x240**, grayscale/autocontrast and monochrome Floyd-Steinberg dither,
+then returns an optimized **1-bit PNG**. The browser previews this compact
+PNG and submits only that result in the existing custom receipt. The original
+photo is **not saved in print history**.
+
+Inputs supported: JPEG, PNG, WebP, GIF, BMP, TIFF. Limits: **12 MiB
+compressed source and 32 megapixels decoded**, at most two images per
+receipt. Source images above those limits are rejected with a clear message;
+image conversion is capped at two concurrent jobs and eight per
+source IP per minute. This web-only conversion depends on Pillow installed
+in the Print Station server environment. It does not relax the NFC
+112-byte mailbox payload limit.
+
+PT35 NFC Picture now adaptively shrinks a large source image, targeting
+**850 bytes** of 1-bit PNG data to reduce the number of RF exchanges.
+Print Pet then uses Pillow to enlarge the received thumbnail (aspect
+ratio retained; maximum 384x240) for the Epson raster command. This is
+a practical compromise for the currently unreliable NFC RF channel;
+very fine photographic detail may be lost, especially for complex photos.
+For the best image quality use the web upload or a future Bluetooth/Wi-Fi
+bulk transport.
