@@ -6,7 +6,7 @@ REPO="$HOME/pt35"
 [[ -f "$REPO/nfc/print_pet_gui.py" && -f "$REPO/nfc/print_pet_mailbox.py" ]] || {
   echo "Fetch the Print Pet GUI and mailbox scripts first"; exit 1;
 }
-python3 -c 'from PIL import Image, ImageTk; import tkinter; import smbus2' || {
+/usr/bin/python3 -c 'from PIL import Image, ImageTk; import tkinter; import smbus2' || {
   echo "Missing dependencies: python3-pil python3-pil.imagetk python3-tk python3-smbus2"; exit 1;
 }
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
