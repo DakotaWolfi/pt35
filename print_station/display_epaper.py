@@ -115,6 +115,12 @@ def main():
             try:
                 epd.init()
                 state=snapshot(conf)
+                if conf.get("nfc_auto_update") and conf.get("nfc_url") and conf.get("nfc_i2c_bus") is not None:
+                    try:
+                        from nfc_tag import sync
+                        sync(int(conf["nfc_i2c_bus"]), conf["nfc_url"], allow_write=True)
+                    except Exception:
+                        LOG.exception("Could not synchronize ST25DV16K guest URL")
                 epd.display(render(state,rotation))
                 epd.sleep()
                 LOG.info("Displayed: %s",state)
