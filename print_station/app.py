@@ -38,6 +38,7 @@ DEFAULT = {
     "pet_draft_reactions": True,
     "printer_host": "192.168.50.2", "printer_port": 9100,
     "printer_mdns_name": "", "printer_interface": "",
+    "printer_mac": "f8:25:51:79:eb:5f",
     "dry_run": True, "cut": True, "feed_lines": 3, "feed_mm": 50,
     "max_message_chars": 160, "max_jobs_per_hour_per_ip": 6,
     "global_min_interval_seconds": 10, "max_queue": 8,
@@ -109,6 +110,8 @@ def load_config(path=CONFIG_FILE):
         raise ValueError("max_queue must be 1..50")
     if int(conf["logo_width"]) not in (256, 384, 512, 576):
         raise ValueError("logo_width must be 256, 384, 512 or 576")
+    if not isinstance(conf["printer_mac"],str) or not __import__("re").fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}",conf["printer_mac"]):
+        raise ValueError("printer_mac must be a six-byte colon-separated MAC address")
     if conf.get("printer_mdns_name") and not conf.get("printer_interface"):
         raise ValueError("printer_interface required for printer_mdns_name")
     if not 0 <= int(conf["feed_mm"]) <= 200:
@@ -349,7 +352,7 @@ def printer_destination(conf):
     """Find exact DNS-SD hostname on isolated printer cable; no stale-IP fallback."""
     # The Pi serves Epson's DHCP: use the MAC-bound current lease, not a stale
     # IP stored in config.json or an Avahi cache entry.
-    lease_ip = printer_dhcp_address()
+    lease_ip = printer_dhcp_address(expected_mac=conf.get("printer_mac",EPSON_MAC))
     if lease_ip:
         return lease_ip, int(conf["printer_port"])
     name = conf.get("printer_mdns_name", "")
@@ -430,7 +433,7 @@ def admin_allowed(handler):
 
 def public_config(conf):
     keys = ("station_name", "subtitle", "footer", "printer_host", "printer_port",
-            "printer_mdns_name", "printer_interface",
+            "printer_mdns_name", "printer_interface", "printer_mac",
             "dry_run", "cut", "feed_mm", "logo_enabled", "logo_width",
             "default_amount", "currency", "challenge_enabled", "pet_draft_reactions",
             "max_jobs_per_hour_per_ip", "global_min_interval_seconds",
@@ -582,7 +585,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/status":
             with lock:
                 snapshot = dict(statistics)
-            lease_ip = printer_dhcp_address()
+            lease_ip = printer_dhcp_address(expected_mac=self.conf.get("printer_mac",EPSON_MAC))
             self.reply(200, {"station": self.conf["station_name"], "queue": jobs.qsize(),
                              "printer_dhcp_ip": lease_ip,
                              "dry_run": self.conf["dry_run"], "stats": snapshot,
@@ -710,6 +713,11 @@ class Handler(BaseHTTPRequestHandler):
                     for name_key in ("station_name", "subtitle", "footer"):
                         if name_key in changed:
                             changed[name_key] = str(changed[name_key])[:160]
+                    if "printer_mac" in changed:
+                        mac = str(changed["printer_mac"]).strip().lower()
+                        if not __import__("re").fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}",mac):
+                            return self.reply(400, {"error":"Invalid printer MAC address"})
+                        changed["printer_mac"] = mac
                     for discovery_key in ("printer_mdns_name", "printer_interface"):
                         if discovery_key in changed:
                             value = str(changed[discovery_key]).strip()
