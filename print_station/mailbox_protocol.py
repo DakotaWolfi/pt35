@@ -35,10 +35,12 @@ def unpack(raw):
     if msg.get("t") not in ("status","print","reply"):
         raise ValueError("Unknown command")
     if msg["t"]=="print":
-        if set(msg) - {"v","t","id","name","message"}:
+        if set(msg) - {"v","t","id","name","message","code"}:
             raise ValueError("Unsupported fields in print command")
         for key,limit in (("name",40),("message",MAX_TEXT)):
             val=msg.get(key,"")
             if not isinstance(val,str) or not 1<=len(val)<=limit or any(ord(c)<32 or ord(c)>126 for c in val):
                 raise ValueError("Print fields must be short printable ASCII")
+    if msg["t"]=="print" and not (isinstance(msg.get("code"),str) and len(msg["code"])==6 and msg["code"].isascii() and msg["code"].isdecimal()):
+        raise ValueError("Print requires six-digit code")
     return msg
