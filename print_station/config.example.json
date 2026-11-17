@@ -13,7 +13,7 @@
   "nfc_url": "",
   "printer_host": "192.168.50.2",
   "printer_port": 9100,
-  "printer_mac": "f8:25:51:79:eb:5f",
+  "printer_mac": "",
   "dry_run": true,
   "cut": true,
   "feed_lines": 3,
