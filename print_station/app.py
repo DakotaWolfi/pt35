@@ -629,7 +629,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not IMAGE_PREPARE_SLOTS.acquire(blocking=False):
                     return self.reply(429,{"error":"Image converter busy; retry shortly"})
                 try:
-                    image=prepare_receipt_image(self.rfile.read(size))
+                    try:
+                        brightness=int(self.headers.get("X-FMI-Image-Brightness","25"))
+                    except ValueError:
+                        return self.reply(400,{"error":"Invalid brightness setting"})
+                    image=prepare_receipt_image(self.rfile.read(size),brightness=brightness)
                 finally:
                     IMAGE_PREPARE_SLOTS.release()
                 return self.reply(200,image)
