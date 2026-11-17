@@ -68,11 +68,11 @@ def render(state,rotation=180):
         "nfc_print":("startled","EXCITED","NFC RECEIPT"),
         "web":("social","SOCIAL","WEB VISITOR"),
         "web_print":("startled","EXCITED","WEB RECEIPT"),
-        "idle":("happy","HAPPY","AWOO :3"),
+        "idle":("happy","HAPPY","HELLO!"),
     }
     face,mood,event=modes.get(activity,modes["idle"])
     if draft and activity not in ("error","printing","printed","nfc_print","web_print"):
-        face,mood,event="curious","CURIOUS","I SAW THAT!"
+        face,mood,event="curious","CURIOUS",str(draft.get("comment","THOUGHTS..."))[:15]
     if not online:face,mood,event="annoyed","SAD","PRINTER OFF"
     elif printing:face,mood,event="startled","EXCITED","PRINTING!"
     d.rectangle((0,0,249,19),fill=0)
@@ -106,11 +106,10 @@ def render(state,rotation=180):
     d.line((76,48,168,48),fill=0,width=1)
     if draft and activity not in ("error","printing","printed","nfc_print","web_print"):
         field=str(draft.get("field",""))[:15]
-        value=str(draft.get("value","")).replace("\n"," ")[:16]
-        comment=str(draft.get("comment",""))[:16]
+        value=str(draft.get("value","")).replace("\n"," ")[:32]
         d.text((75,55),field+":",font=font(8,True),fill=0)
-        d.text((75,74),value,font=font(8),fill=0)
-        d.text((75,94),comment,font=font(8,True),fill=0)
+        d.text((75,74),value[:16],font=font(8),fill=0)
+        d.text((75,91),value[16:32],font=font(8),fill=0)
     else:
         if state.get("pair_armed"):
             lines=("PAIR ARMED","TAP PT35")
