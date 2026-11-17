@@ -429,3 +429,14 @@ are not credentials. No raw ESC/POS bytes or secrets may be sent.
 **Not yet hardware validated end-to-end.** RF command framing, mailbox
 half-duplex handoff and ST25R3916 large response decoding must be checked
 with both physical devices before calling the feature working.
+
+### One-time MB_MODE activation
+
+For an owned ST25DV16K whose MB_MODE is 0, `sudo python3 mailbox_enable.py --bus 0`
+previews the change, while `sudo python3 mailbox_enable.py --bus 0 --apply`
+presents the ST-documented eight-zero-byte **factory** I2C password (without
+changing that password), checks I2C_SSO_Dyn, sets **only** bit 0 of static
+MB_MODE at system I2C address 0x57 / offset 0x000D, and verifies readback.
+It preserves the existing GPO configuration and NDEF URL. It refuses to
+write MB_MODE if the factory password fails. This is a one-time persistent
+configuration change, not a recurring service operation. See ST AN4910.
