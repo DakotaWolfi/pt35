@@ -63,7 +63,11 @@ class PrintPetApp(tk.Tk):
         ttk.Button(status,text="Read NFC status",command=lambda:self._run("status")).grid(row=2,column=0,columnspan=2,sticky="ew",pady=6)
         ttk.Button(status,text="Pair owner key (arm via SSH first)",
                    command=lambda:self._run("pair")).grid(row=3,column=0,columnspan=2,sticky="ew",pady=6)
-        ttk.Label(status,text="No Wi-Fi required. Hold the NFC antennas aligned until the reply arrives.").grid(row=4,column=0,columnspan=2,sticky="w",pady=10)
+        ttk.Button(status,text="NFC link quality / positioning test (40 samples)",
+                   command=lambda:self._run("linktest")).grid(
+                       row=4,column=0,columnspan=2,sticky="ew",pady=6)
+        ttk.Label(status,text="Move PT35 slowly; higher quality is better. 100% = 10/10 recent replies.",
+                  wraplength=740).grid(row=5,column=0,columnspan=2,sticky="w",pady=5)
 
         ttk.Label(tickets,text="Recipient / name").grid(row=0,column=0,sticky="w",pady=5)
         ttk.Entry(tickets,textvariable=self.name).grid(row=0,column=1,sticky="ew",pady=5)
@@ -179,6 +183,10 @@ class PrintPetApp(tk.Tk):
                         self._append(line)
                     if line.startswith("Image NFC "):
                         self.state.set(line.strip())
+                    if line.startswith("LINK "):
+                        self.state.set(line.strip()[:145])
+                    if line.startswith("SUMMARY "):
+                        self.state.set(line.strip()[:145])
                     if line.startswith("Print Pet:"):
                         try:
                             import ast
