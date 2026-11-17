@@ -27,13 +27,18 @@ def connection():
         state TEXT NOT NULL CHECK (state IN ('queued','printed','failed')),
         error TEXT DEFAULT ''
     )""")
+    existing = {row[1] for row in db.execute("PRAGMA table_info(receipts)")}
+    if "source_ip" not in existing:
+        db.execute("ALTER TABLE receipts ADD COLUMN source_ip TEXT NOT NULL DEFAULT ''")
+    if "user_agent" not in existing:
+        db.execute("ALTER TABLE receipts ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''")
     return db
 
-def record(kind, payload):
+def record(kind, payload, source_ip="", user_agent=""):
     raw = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode()
     with _guard, connection() as db:
-        cursor = db.execute("INSERT INTO receipts(created,kind,payload,state) VALUES(?,?,?,?)",
-                            (int(time.time()), kind, zlib.compress(raw, level=9), "queued"))
+        cursor = db.execute("INSERT INTO receipts(created,kind,payload,state,source_ip,user_agent) VALUES(?,?,?,?,?,?)",
+                            (int(time.time()), kind, zlib.compress(raw, level=9), "queued", str(source_ip)[:64], str(user_agent)[:180]))
         db.commit()
         return cursor.lastrowid
 
@@ -49,10 +54,11 @@ def unpack(value):
 def list_jobs(limit=50):
     with _guard, connection() as db:
         db.row_factory = sqlite3.Row
-        rows = db.execute("SELECT id,created,finished,kind,state,error,payload FROM receipts ORDER BY id DESC LIMIT ?",
+        rows = db.execute("SELECT id,created,finished,kind,state,error,payload,source_ip,user_agent FROM receipts ORDER BY id DESC LIMIT ?",
                           (max(1,min(int(limit),100)),)).fetchall()
     return [{"id":row["id"],"created":row["created"],"finished":row["finished"],
              "kind":row["kind"],"state":row["state"],"error":row["error"],
+             "source_ip":row["source_ip"],"user_agent":row["user_agent"],
              "receipt":unpack(row["payload"])} for row in rows]
 
 def get_job(job_id):
