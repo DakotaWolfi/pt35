@@ -4,7 +4,7 @@ set -euo pipefail
 test "$(id -u)" = 0 || { echo "Run: sudo bash install_orangepi.sh"; exit 1; }
 APP=/home/jenna/pt35/print_station
 test -f "$APP/app.py" || { echo "App missing at $APP"; exit 1; }
-apt-get install -y python3-pil python3-libgpiod python3-spidev git
+apt-get install -y python3-pil python3-qrcode python3-libgpiod python3-spidev git
 mkdir -p /home/jenna/.local/state/fmi-print-station
 chown -R jenna:jenna /home/jenna/.local/state/fmi-print-station
 cat > /etc/systemd/system/fmi-print-station.service <<'EOF'
