@@ -43,6 +43,26 @@ lock = threading.Lock()
 history = {}
 last_job_at = 0.0
 statistics = {"queued": 0, "printed": 0, "failed": 0}
+dns_jobs = queue.Queue(maxsize=64)
+
+def reverse_dns_worker():
+    """Optional PTR lookups run outside the request and printing threads."""
+    while True:
+        job_id, address = dns_jobs.get()
+        try:
+            try:
+                ipaddress.ip_address(address)
+                hostname = socket.gethostbyaddr(address)[0].rstrip(".")
+                # This is DNS-provided data, not a verified device identity.
+                hostname = "".join(c for c in hostname if 32 <= ord(c) <= 126)[:253]
+            except (OSError, ValueError):
+                hostname = ""
+            receipt_store.set_reverse_dns(job_id, hostname)
+        except Exception:
+            LOG.exception("Reverse DNS audit enrichment failed for job %s", job_id)
+        finally:
+            dns_jobs.task_done()
+
 
 def load_config(path=CONFIG_FILE):
     conf = copy.deepcopy(DEFAULT)
@@ -474,7 +494,6 @@ class Handler(BaseHTTPRequestHandler):
                 receipt = {"name": name, "message": message, **details,
                            "amount": amount, "currency": currency}
                 raw = make_ticket(name, message, self.conf, details)
-            receipt["device_name"] = str(payload.get("device_name","")).strip()[:64]
             receipt["rendered_text"] = raw.decode("ascii",errors="replace") if kind=="fine" else custom_receipt_text(receipt)
             receipt["print_options"] = {"feed_mm": self.conf["feed_mm"], "cut": self.conf["cut"],
                                         "dry_run": self.conf["dry_run"],
@@ -496,6 +515,10 @@ class Handler(BaseHTTPRequestHandler):
                 history[ip].append(now)
                 last_job_at = now
                 statistics["queued"] += 1
+            try:
+                dns_jobs.put_nowait((job_id, ip))
+            except queue.Full:
+                pass  # Printing must not be delayed by DNS.
             return self.reply(202, {"message": "Receipt queued!", "id": job_id, "queue": jobs.qsize()})
         except Exception as exc:
             LOG.warning("Request rejected: %s", exc)
@@ -512,6 +535,8 @@ def main():
     jobs.maxsize = conf["max_queue"]
     Handler.conf = conf
     threading.Thread(target=worker, args=(conf,), daemon=True).start()
+    for _ in range(2):
+        threading.Thread(target=reverse_dns_worker, daemon=True).start()
     # Two independent listening sockets: the publicly reachable HTTP port NEVER
     # serves administrator APIs. An HTTPS reverse proxy talks only to localhost.
     class AdminHandler(Handler):
