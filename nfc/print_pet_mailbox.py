@@ -7,6 +7,7 @@ Explicit --confirm is needed for print actions. Never writes EEPROM.
 Do not run at the same time as PT35 NFC scanner/GUI (shared reader).
 """
 import argparse
+import os
 import base64
 import hashlib
 import io
@@ -97,7 +98,7 @@ def transact(reader,uid,packet,timeout=5):
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("action",choices=("status","print","image"))
+    ap.add_argument("action",choices=("status","print","image","pair"))
     ap.add_argument("--uid",required=True,help="EXTERNAL Print Pet ST25DV ISO15693 UID (16 hex chars)")
     ap.add_argument("--bus",type=int,default=1)
     ap.add_argument("--name",default="PT35")
@@ -111,6 +112,8 @@ def main():
         ap.error("--uid must contain exactly 16 hexadecimal digits")
     if args.action in ("print","image") and not args.confirm:
         ap.error("Printing requires explicit --confirm")
+    if args.action=="pair" and not args.confirm:
+        ap.error("Pairing requires explicit --confirm; first arm via SSH on Print Pet")
     if args.action=="image" and not args.image:
         ap.error("--image PATH is required for image printing")
     key=None
@@ -128,7 +131,37 @@ def main():
         try:
             reader.initialize()
             print("Hold PT35's NFC reader at the Print Pet tag throughout exchange.",flush=True)
-            if args.action=="image":
+            if args.action=="pair":
+                result=transact(reader,uid,pack("pair",secrets.token_hex(4)))
+                if not result.get("ok"):
+                    raise RuntimeError("Print Pet pairing rejected: "+str(result))
+                import base64
+                keydata=base64.b64decode(result["k"],validate=True)
+                if len(keydata)!=32:
+                    raise ValueError("Incorrect pairing key length")
+                session=result["s"]
+                if len(session)!=8:
+                    raise ValueError("Invalid pairing session")
+                target=args.key_file.expanduser()
+                target.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+                os.chmod(target.parent,0o700)
+                temporary=target.with_name(target.name+".pending")
+                fd=os.open(str(temporary),os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+                with os.fdopen(fd,"w",encoding="ascii") as stream:
+                    stream.write(keydata.hex()+"\\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                confirmid=secrets.token_hex(4)
+                fields={"v":"FMP1","t":"pair-done","id":confirmid,"s":session}
+                signed=sign(fields,keydata)
+                proof=pack("pair-done",confirmid,s=session,a=signed["a"])
+                acknowledged=transact(reader,uid,proof,timeout=10)
+                if not acknowledged.get("ok"):
+                    raise RuntimeError("Pair confirmation rejected; key not activated")
+                os.replace(temporary,target)
+                print("PT35 successfully paired; secret stored locally",flush=True)
+                reply=acknowledged
+            elif args.action=="image":
                 from PIL import Image, ImageOps
                 with Image.open(args.image.expanduser()) as im:
                     im=ImageOps.exif_transpose(im)
