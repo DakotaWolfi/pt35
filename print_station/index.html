@@ -179,7 +179,7 @@ for(const id of ['fine','custom-fine']){
   });
 }
 
-async function prepareImage(file){
+async function prepareImage(file,brightness=25){
   if(!file)throw Error('Select an image first');
   if(file.size>12*1024*1024)throw Error('Source file exceeds the 12 MiB image upload limit');
   // Keep original image local to this request; the printer converts it
@@ -188,7 +188,7 @@ async function prepareImage(file){
   const resp=await fetch('/api/image/prepare',{
     method:'POST',
     credentials:'same-origin',
-    headers:{'Content-Type':'application/octet-stream'},
+    headers:{'Content-Type':'application/octet-stream','X-FMI-Image-Brightness':String(brightness)},
     body:file
   });
   let data;
@@ -201,29 +201,47 @@ async function prepareImage(file){
 }
 function makeRow(type='text',text='',label='',image=''){
   const div=document.createElement('div');div.className='line-editor';
-  div.innerHTML='<div class="two"><label>Element type<select class="type"><option value="text">Text</option><option value="heading">Heading</option><option value="pair">Label / value</option><option value="rule">Divider line</option><option value="blank">Blank line</option><option value="image">Image</option></select></label><label class="label-field">Label<input class="item-label" maxlength="40"></label></div><label class="text-field">Content<input class="item-text" maxlength="160"></label><div class="image-field"><label>PNG, JPG, WebP, GIF or BMP (up to 12 MiB)<input type="file" class="item-upload" accept="image/png,image/jpeg,image/webp"></label><img class="item-preview" style="max-width:100%;max-height:160px;background:white" alt="Receipt image preview"></div><div class="controls"><button class="secondary remove" type="button">Remove</button><button class="secondary up" type="button">↑</button><button class="secondary down" type="button">↓</button></div>';
+  div.innerHTML='<div class="two"><label>Element type<select class="type"><option value="text">Text</option><option value="heading">Heading</option><option value="pair">Label / value</option><option value="rule">Divider line</option><option value="blank">Blank line</option><option value="image">Image</option></select></label><label class="label-field">Label<input class="item-label" maxlength="40"></label></div><label class="text-field">Content<input class="item-text" maxlength="160"></label><div class="image-field"><label>PNG, JPG, WebP, GIF or BMP (up to 12 MiB)<input type="file" class="item-upload" accept="image/png,image/jpeg,image/webp,image/bmp,image/gif,image/tiff"></label><label>Lighten photo <input type="range" class="item-brightness" min="0" max="70" step="5" value="25"></label><div class="controls"><button type="button" class="secondary item-reprocess">Reconvert brightness</button><span class="item-brightness-label small">+25 midtone</span></div><img class="item-preview" style="max-width:100%;max-height:160px;background:white" alt="Receipt image preview"></div><div class="controls"><button class="secondary remove" type="button">Remove</button><button class="secondary up" type="button">↑</button><button class="secondary down" type="button">↓</button></div>';
   $('#lines').appendChild(div);
   div.querySelector('.type').value=type;div.querySelector('.item-label').value=label;div.querySelector('.item-text').value=text;
   div._image=image;
   const refreshRow=()=>{const t=div.querySelector('.type').value;div.querySelector('.label-field').hidden=t!=='pair';div.querySelector('.text-field').hidden=t==='rule'||t==='blank'||t==='image';div.querySelector('.image-field').hidden=t!=='image';div.querySelector('.item-preview').hidden=!div._image;if(div._image)div.querySelector('.item-preview').src='data:image/png;base64,'+div._image;drawCustom()};
   div.querySelector('.type').addEventListener('change',refreshRow);
   div.querySelectorAll('.item-label,.item-text').forEach(n=>n.addEventListener('input',drawCustom));
-  div.querySelector('.item-upload').onchange=async()=>{
+  div._source=null;
+  const adjust=div.querySelector('.item-brightness');
+  const adjustLabel=div.querySelector('.item-brightness-label');
+  const reconvert=div.querySelector('.item-reprocess');
+  adjust.addEventListener('input',()=>{
+    adjustLabel.textContent='+'+adjust.value+' midtone';
+  });
+  async function convertPhoto(file){
     const picker=div.querySelector('.item-upload');
-    const f=picker.files[0];if(!f)return;
     picker.disabled=true;
+    reconvert.disabled=true;
     const previous=div._image;
-    notice('Converting photo with Print Pet Pillow…');
     try{
-      div._image=await prepareImage(f);
+      notice('Converting photo for lighter thermal printing…');
+      const result=await prepareImage(file,Number(adjust.value));
+      div._image=result;
+      div._source=file;
       refreshRow();
     }catch(e){
       div._image=previous;
       notice(e.message,true);
     }finally{
       picker.disabled=false;
+      reconvert.disabled=false;
       picker.value='';
     }
+  }
+  div.querySelector('.item-upload').onchange=async()=>{
+    const file=div.querySelector('.item-upload').files[0];
+    if(file)await convertPhoto(file);
+  };
+  reconvert.onclick=async()=>{
+    if(!div._source)return notice('Choose an image first',true);
+    await convertPhoto(div._source);
   };
   div.querySelector('.remove').onclick=()=>{div.remove();drawCustom()};
   div.querySelector('.up').onclick=()=>{if(div.previousElementSibling)div.parentNode.insertBefore(div,div.previousElementSibling);drawCustom()};
