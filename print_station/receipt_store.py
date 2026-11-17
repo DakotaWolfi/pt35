@@ -34,6 +34,8 @@ def connection():
         db.execute("ALTER TABLE receipts ADD COLUMN source_ip TEXT NOT NULL DEFAULT ''")
     if "user_agent" not in existing:
         db.execute("ALTER TABLE receipts ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''")
+    if "reverse_dns" not in existing:
+        db.execute("ALTER TABLE receipts ADD COLUMN reverse_dns TEXT NOT NULL DEFAULT ''")
     return db
 
 def record(kind, payload, source_ip="", user_agent=""):
@@ -50,17 +52,25 @@ def complete(job_id, success, error=""):
                    (int(time.time()), "printed" if success else "failed", str(error)[:160], job_id))
         db.commit()
 
+def set_reverse_dns(job_id, hostname):
+    """Attach best-effort PTR result to an already recorded print job."""
+    with _guard, connection() as db:
+        db.execute("UPDATE receipts SET reverse_dns=? WHERE id=?",
+                   (str(hostname)[:253], int(job_id)))
+        db.commit()
+
 def unpack(value):
     return json.loads(zlib.decompress(value).decode())
 
 def list_jobs(limit=50):
     with _guard, connection() as db:
         db.row_factory = sqlite3.Row
-        rows = db.execute("SELECT id,created,finished,kind,state,error,payload,source_ip,user_agent FROM receipts ORDER BY id DESC LIMIT ?",
+        rows = db.execute("SELECT id,created,finished,kind,state,error,payload,source_ip,user_agent,reverse_dns FROM receipts ORDER BY id DESC LIMIT ?",
                           (max(1,min(int(limit),100)),)).fetchall()
     return [{"id":row["id"],"created":row["created"],"finished":row["finished"],
              "kind":row["kind"],"state":row["state"],"error":row["error"],
              "source_ip":row["source_ip"],"user_agent":row["user_agent"],
+             "reverse_dns":row["reverse_dns"],
              "receipt":unpack(row["payload"])} for row in rows]
 
 def get_job(job_id):
