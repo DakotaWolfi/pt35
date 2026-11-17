@@ -513,3 +513,48 @@ replace persistent replay protection, and lost acknowledgements must never
 trigger an automatic repeat of a physical print command.
 
 Picture NFC transfer is still experimental and awaits hardware tests.
+
+### Paired owner NFC printing (no display code)
+
+The Print Pet's e-paper does **not** need a six-digit code. The browser
+visitor challenge remains separate; PT35 owner printing uses a 32-byte
+pre-shared key and short time-windowed HMAC over each new print request.
+The key is provisioned over a trusted local terminal/SSH connection,
+**never broadcast via ISO15693**.
+
+On **Print Pet** (the same system user runs the print HTTP app):
+
+```sh
+cd ~/pt35/print_station
+mkdir -p .private
+chmod 700 .private
+umask 077
+python3 -c 'import secrets; from pathlib import Path; Path(".private/nfc_pairing.key").write_text(secrets.token_hex(32)+"\\n")'
+chmod 600 .private/nfc_pairing.key
+```
+
+Transfer the key to PT35 using a trusted local connection (for example,
+from PT35: `scp printpet:~/pt35/print_station/.private/nfc_pairing.key /tmp/print_pet_pairing.key`)
+and install it as the PT35 user:
+
+```sh
+install -d -m 700 ~/.config/pt35
+install -m 600 /tmp/print_pet_pairing.key ~/.config/pt35/print_pet.key
+rm -f /tmp/print_pet_pairing.key
+```
+
+Adjust the SSH host alias to your actual Print Pet address. If root runs
+the NFC host, it may read the owner key at the same path; the HTTP app
+must be able to read that key for the **loopback-only** exception. Restart
+both the HTTP app and `mailbox_host.py` after updating the code. Never
+paste the key into a chat or commit it. Rotate the key if copied to an
+untrusted device.
+
+Only NFC **printing** requires pairing. Reading `status` remains
+available without a key. PT35 and Print Pet system clocks should be
+synchronized: HMAC uses a one-minute time slot with an adjacent-slot
+tolerance. It isn't encryption; other readers can still observe traffic,
+and captures can be replayed briefly. Request ID caching limits repeated
+printing in the active host process; persistent anti-replay state is not
+implemented. This is appropriate for trusted personal use, not a
+public unattended payment-style authentication system.
