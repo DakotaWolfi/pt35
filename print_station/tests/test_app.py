@@ -37,6 +37,19 @@ class TestPrintStation(unittest.TestCase):
         self.assertIn("Status: UNPAID",result)
         self.assertIn("NO LEGAL FORCE",result)
 
+    def test_custom_fine_layout(self):
+        result=app.make_ticket(
+            "Wolf", "Excessive cuddling", app.DEFAULT,
+            {"custom_fine":True, "fine_title":"FLUFF VIOLATION",
+             "fine_status":"PENDING CUDDLES", "offence":"Excessive cuddling",
+             "amount":"CHF 35.00"},
+            ticket_id=12, issued_at="2026-11-17T11:00:00+01:00").decode("ascii")
+        self.assertIn("FLUFF VIOLATION",result)
+        self.assertIn("Status: PENDING CUDDLES",result)
+        self.assertIn("Ticket 00012",result)
+        self.assertIn("NO LEGAL FORCE",result)
+        self.assertNotIn("AWOO FINE\\n",result)
+
     def test_esc_pos_safety(self):
         b=app.make_ticket("Wolf\x1b", "AWOO!",app.DEFAULT)
         self.assertNotIn(bytes([27]),b)
