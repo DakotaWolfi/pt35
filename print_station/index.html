@@ -194,7 +194,7 @@ async function prepareImage(file,brightness=25){
   let data;
   try{data=await resp.json()}catch{throw Error('Print Pet image conversion unavailable')}
   if(!resp.ok)throw Error(data.error||'Image conversion failed');
-  if(!data.image||data.image.length>44000)throw Error('Printer returned an invalid image');
+  if(!data.image||data.image.length>131072)throw Error('Printer returned an invalid image');
   notice('Pillow resized '+data.source_width+'×'+data.source_height+
     ' to '+data.width+'×'+data.height+' monochrome ('+data.bytes+' bytes)');
   return data.image;
