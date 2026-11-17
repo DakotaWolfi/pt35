@@ -190,13 +190,14 @@ class PrintPetApp(tk.Tk):
                                                     +" | Queue: "+str(status.get("queue","—"))
                                                     +" | Printed: "+str(status.get("printed","—")))
                                 elif status.get("ok"):
-                                    self.state.set(str(status.get("message","Accepted by Print Pet")))
+                                    message=str(status.get("message","Accepted by Print Pet"))
+                                    self.state.set("Paired — owner NFC ready" if "paired" in message.lower() else message)
                         except (ValueError,SyntaxError):pass
                 elif event[0]=="exit":
                     self.busy=False
                     if event[1]:
                         self.state.set("NFC error — see log")
-                    elif not self.state.get().startswith("Image queued"):
+                    elif not (self.state.get().startswith("Image queued") or self.state.get().startswith("Paired")):
                         self.state.set("Completed")
         except queue.Empty:
             pass
