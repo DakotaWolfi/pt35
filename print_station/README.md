@@ -670,3 +670,41 @@ a practical compromise for the currently unreliable NFC RF channel;
 very fine photographic detail may be lost, especially for complex photos.
 For the best image quality use the web upload or a future Bluetooth/Wi-Fi
 bulk transport.
+
+### Pet's fine-drafting commentary (offline, no LLM required)
+
+When a guest edits **AWOO Fines** or **Custom Fine**, the web browser sends
+only a **completed** field on focus-out, not every keypress or the whole form.
+Most completed fields are eligible, but the browser and server throttle
+reactions (~24-second client cooldown, ~22-second server cooldown). The
+pet picks a stable, field-specific teasing comment, saves the one
+field/short comment in `print_station/.private/draft_reaction.json`
+temporarily (65 seconds), and displays an excerpt in the center of the
+250x122 monochrome e-paper. The name, offense, amount and other fields
+can therefore be publicly visible to someone beside the printer while
+the reaction is active. Draft messages are not saved to print history,
+and are not sent to a cloud LLM.
+
+After authenticating in the HTTPS **Settings** admin page, you can toggle
+**Pet reacts to completed fine fields** and **Require six-digit web print
+code (shown on e-paper)**. The API saves `pet_draft_reactions` and
+`challenge_enabled` to the existing private `config.json`.
+Enabling the challenge initializes the secret before activating it. The
+display reloads its configuration every polling cycle, so new settings
+affect it without a separate manual restart. The NFC paired-owner
+printing protocol does not use the public web code.
+
+The Orange Pi Zero 3W's A733 has a nominal 3 TOPS NPU. This release
+**does not claim to execute an NPU language model**: arbitrary LLM
+inference requires model conversion, a working board-specific VIPLite
+userspace stack, token generation and benchmarking. The deterministic,
+offline rule-based reaction engine is a reliable first step; a local
+model backend can replace it after actual hardware bring-up.
+
+Test on the Orange Pi:
+
+```bash
+cd ~/pt35/print_station
+/usr/bin/python3 -m unittest discover -s tests -v
+sudo systemctl restart fmi-print-station fmi-print-display
+```
