@@ -216,6 +216,7 @@ def main():
         last_frame=None
         last_refresh=0.0
         last_periodic=0.0
+        last_challenge_code=None
         while True:
             try:
                 # Admin settings use atomic writes. Reload the web-code and
@@ -230,8 +231,11 @@ def main():
                 frame_bytes=frame.tobytes()
                 now=time.monotonic()
                 changed=(frame_bytes!=last_frame)
+                code_changed=(last_challenge_code is not None and
+                              state.get("challenge_code")!=last_challenge_code)
+                # A used one-time print code must be replaced promptly on e-paper.
                 due=(last_frame is None or now-last_periodic>=delay or
-                     (changed and now-last_refresh>=min_refresh))
+                     code_changed or (changed and now-last_refresh>=min_refresh))
                 if due:
                     if conf.get("nfc_auto_update") and state.get("guest_url") and conf.get("nfc_i2c_bus") is not None:
                         try:
@@ -245,6 +249,7 @@ def main():
                     last_frame=frame_bytes
                     last_refresh=now
                     last_periodic=now
+                    last_challenge_code=state.get("challenge_code")
                     LOG.info("Displayed: %s",state)
             except Exception:
                 LOG.exception("Display update failed")
