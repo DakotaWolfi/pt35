@@ -571,3 +571,30 @@ sudo systemctl status fmi-print-nfc --no-pager
 ```
 
 Do not run two mailbox host processes on the same I2C bus.
+
+### Diagnose PT35 to Print Pet NFC antenna alignment
+
+The PT35 Print Pet Status tab now has **NFC link quality / positioning test**.
+It sends 40 read-only status mailbox requests, shows per-transaction RTT,
+last-10 success percentage, total success rate and effective application
+payload bytes per second. A perfect 10/10 moving window is 100%.
+These numbers measure end-to-end mailbox reliability, **not calibrated RF
+SNR or ST25R3916 RSSI**, and should be interpreted accordingly.
+
+CLI alternative on PT35:
+
+```bash
+cd ~/pt35
+/usr/bin/python3 nfc/print_pet_mailbox.py linktest --uid E00226003269825F --samples 40
+```
+
+Position the two NFC antennas differently between runs and compare total
+success rate and RTT. Do not run the test at the same time as printing or
+scanning from another PT35 program. Link testing **does not print**.
+
+Image printing retries *data and start* chunks up to three times with the
+same request ID, and attempts to recover a previously written mailbox
+response; the final print-commit chunk is never automatically resent.
+If full pictures are still unreliable, prefer NFC for authenticated
+handshake/short commands and an independently authenticated Bluetooth or
+Wi-Fi link for large binary transfers.
