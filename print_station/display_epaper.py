@@ -32,9 +32,37 @@ def paste_paw(img, x=218, y=2):
         mask = original.convert("L")
     img.paste(1, (x, y), mask)
 
+
+def render_access_qr(url):
+    import qrcode
+    from qrcode.constants import ERROR_CORRECT_M
+    qr = qrcode.QRCode(error_correction=ERROR_CORRECT_M, box_size=1, border=4)
+    qr.add_data(url)
+    qr.make(fit=True)
+    raw = qr.make_image(fill_color="black", back_color="white").convert("1")
+    scale = 90 // raw.width
+    if scale < 1:
+        raise ValueError("Guest URL too long for e-paper QR")
+    return raw.resize((raw.width * scale, raw.height * scale), Image.Resampling.NEAREST)
+
 def render(state,rotation=180):
     img=Image.new("1",(W,H),1)
     d=ImageDraw.Draw(img)
+    guest_url=state.get("guest_url","")
+    if guest_url:
+        d.rectangle((0,0,W-1,23),fill=0)
+        d.text((6,3),"FMI PRINT STATION",font=font(13,True),fill=1)
+        try:
+            qr=render_access_qr(guest_url)
+            img.paste(qr,(6+(96-qr.width)//2,25+(96-qr.height)//2))
+            d.text((109,30),"SCAN OR TAP",font=font(12,True),fill=0)
+            d.text((109,51),"TO PRINT",font=font(12,True),fill=0)
+            d.line((109,75,242,75),fill=0)
+            d.text((109,82),"AWOO FINE",font=font(11,True),fill=0)
+            d.text((109,100),"QUEUE {}".format(state.get("queue","?")),font=font(10),fill=0)
+            return img.rotate(rotation) if rotation else img
+        except (ImportError, ValueError) as exc:
+            LOG.warning("QR display unavailable: %s",exc)
     d.rectangle((0,0,W-1,28),fill=0)
     d.text((7,5),"FMI PRINT STATION",font=font(14,True),fill=1)
     paste_paw(img)
@@ -55,7 +83,7 @@ def render(state,rotation=180):
 
 def snapshot(conf):
     try:
-        with socket.create_connection((conf["printer_host"],int(conf["printer_port"])),timeout=2):
+        with socket.create_connection(__import__("app").printer_destination(conf),timeout=2):
             online=True
     except OSError: online=False
     try:
@@ -63,7 +91,8 @@ def snapshot(conf):
             status=json.load(r)
     except Exception: status={}
     stats=status.get("stats",{})
-    return {"printer_ok":online,"queue":status.get("queue","?"),
+    return {"guest_url":str(conf.get("nfc_url") or ""),
+            "printer_ok":online,"queue":status.get("queue","?"),
             "printed":stats.get("printed","?"),"dry_run":status.get("dry_run",conf.get("dry_run",True))}
 
 def main():
