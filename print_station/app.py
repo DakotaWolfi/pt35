@@ -16,6 +16,7 @@ import subprocess
 import threading
 import time
 import receipt_store
+import challenge
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -27,6 +28,7 @@ DEFAULT = {
     "local_networks": ["127.0.0.0/8", "::1/128", "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"],
     "public_base_url": "", "nfc_url": "",
     "nfc_i2c_bus": None, "nfc_auto_update": False,
+    "challenge_enabled": False,
     "printer_host": "192.168.50.2", "printer_port": 9100,
     "printer_mdns_name": "", "printer_interface": "",
     "dry_run": True, "cut": True, "feed_lines": 3, "feed_mm": 50,
@@ -478,12 +480,33 @@ class Handler(BaseHTTPRequestHandler):
             if not admin_allowed(self):
                 return self.reply(403, {"error": "Admin token required"})
             self.reply(200, public_config(self.conf))
+        elif path == "/api/bypass":
+            if not self.require_secure_admin(): return
+            if not admin_allowed(self):
+                return self.reply(403, {"error":"Admin token required"})
+            if not self.conf.get("challenge_enabled"):
+                return self.reply(409, {"error":"Print challenge is disabled"})
+            try:
+                secret=challenge.get_key()
+                token=challenge.pass_token(secret)
+                import qrcode
+                import io as _io
+                image=qrcode.make(token)
+                buf=_io.BytesIO()
+                image.save(buf,format="PNG")
+                qr=base64.b64encode(buf.getvalue()).decode("ascii")
+            except Exception:
+                LOG.exception("Cannot generate owner print pass")
+                return self.reply(503, {"error":"Print pass unavailable"})
+            self.reply(200, {"token":token,"qr_png_base64":qr,
+                             "valid_for_at_most_seconds":challenge.PASS_PERIOD*2})
         elif path == "/api/status":
             with lock:
                 snapshot = dict(statistics)
             self.reply(200, {"station": self.conf["station_name"], "queue": jobs.qsize(),
                              "dry_run": self.conf["dry_run"], "stats": snapshot,
-                             "nfc_url": self.conf["nfc_url"] or self.conf["public_base_url"]})
+                             "nfc_url": self.conf["nfc_url"] or self.conf["public_base_url"],
+                             "challenge_enabled": bool(self.conf.get("challenge_enabled"))})
         else: self.reply(404, {"error": "Not found"})
     def do_POST(self):
         if not self.permitted(): return
@@ -562,6 +585,16 @@ class Handler(BaseHTTPRequestHandler):
                     img.thumbnail((1200, 700))
                     img.save(logo, "PNG", optimize=True)
                 return self.reply(200, {"message": "Header image saved"})
+            if self.conf.get("challenge_enabled"):
+                try:
+                    secret=challenge.get_key()
+                except (OSError, ValueError):
+                    LOG.exception("Challenge key unavailable; deny guest printing")
+                    return self.reply(503, {"error":"Print challenge unavailable"})
+                entered=payload.get("challenge_code","")
+                owner=payload.get("print_pass","")
+                if not (challenge.check_code(secret,entered) or challenge.check_pass(secret,owner)):
+                    return self.reply(403, {"error":"Enter the six-digit code shown on the Print Station"})
             kind = "custom" if path == "/api/custom" else "fine"
             if kind == "custom":
                 try: receipt = validate_custom(payload, self.conf)
@@ -640,6 +673,8 @@ def main():
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     conf = load_config(Path(args.config))
+    if conf.get("challenge_enabled"):
+        challenge.get_key(create=True)
     with receipt_store.connection() as db: pass
     jobs.maxsize = conf["max_queue"]
     Handler.conf = conf
