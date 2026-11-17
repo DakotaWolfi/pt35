@@ -26,6 +26,7 @@ DEFAULT = {
     "access_mode": "local",  # local | public | both
     "local_networks": ["127.0.0.0/8", "::1/128", "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"],
     "public_base_url": "", "nfc_url": "",
+    "nfc_i2c_bus": None, "nfc_auto_update": False,
     "printer_host": "192.168.50.2", "printer_port": 9100,
     "printer_mdns_name": "", "printer_interface": "",
     "dry_run": True, "cut": True, "feed_lines": 3, "feed_mm": 50,
