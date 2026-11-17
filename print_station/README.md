@@ -529,7 +529,7 @@ cd ~/pt35/print_station
 mkdir -p .private
 chmod 700 .private
 umask 077
-python3 -c 'import secrets; from pathlib import Path; Path(".private/nfc_pairing.key").write_text(secrets.token_hex(32)+"\\n")'
+python3 -c 'import secrets; from pathlib import Path; Path(".private/nfc_pairing.key").write_text(secrets.token_hex(32))'
 chmod 600 .private/nfc_pairing.key
 ```
 
