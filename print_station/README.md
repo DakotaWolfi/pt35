@@ -458,12 +458,13 @@ This pathway is **experimental and not yet hardware tested**. Moving the
 antennas mid-transfer can fail the operation; a lost final acknowledgement
 means the sender must not auto-retry printing.
 
-The current PT35 R-button service invokes
-`~/.local/bin/pt35-nfc-menu`, but that installed launcher is not present
-in the connected repository. The installer deliberately does **not**
-overwrite it. Before migrating menu slots, inspect the live file and
-preserve its old LRA / LED test entrypoint commands; the requested layout is
-LRA slot -> Diagnostics (contains LRA and LED), LED slot -> Print Pet.
+The PT35 R button runs `~/.local/bin/pt35-nfc-menu` -> `pt35-launcher`,
+which starts `~/pt35-nfc-bench/tools/pt35_launcher.py`. Its canonical
+source is the `work/pt35-nfc` branch, and the updated launcher is also
+present in `feature/fmi-print-station`. The six tiles now replace LED Test
+with Print Pet, replace LRA Test with Diagnostics, and retain the original
+LED and LRA test pages underneath Diagnostics. The standalone GUI installer
+intentionally does not touch the launcher wrappers.
 
 ### One-shot PT35 owner pairing (SSH arm + encrypted NFC transfer)
 
@@ -557,3 +558,16 @@ The preview is saved at `/tmp/fmi-print-display.png`. The actual
 monochrome screen updates with `sudo systemctl restart fmi-print-display`
 and normal service refreshes. QR density can constrain scanability on
 the very small 68-pixel square; use a short guest URL.
+
+To install the optional **boot-start NFC mailbox service** (stop any
+manually launched mailbox_host.py instance first):
+
+```bash
+cd ~/pt35
+sudo install -m 0644 print_station/fmi-print-nfc.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now fmi-print-nfc
+sudo systemctl status fmi-print-nfc --no-pager
+```
+
+Do not run two mailbox host processes on the same I2C bus.
