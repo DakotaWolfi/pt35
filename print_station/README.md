@@ -334,3 +334,16 @@ HTTPS admin endpoint; unauthenticated guests cannot request it.
 
 This challenge mitigates casual remote abuse; it is not strong user
 authentication. A visitor can photograph or share a visible code.
+
+## I2C/NFC bus discovery
+
+Run `sudo python3 scan_i2c_buses.py` to enumerate all I2C controllers and
+probe the ST25DV16K user/system addresses (`0x53` and `0x57`) separately
+with three-second subprocess timeouts. It displays each bus's controller path
+and skips HDMI/DDC controllers by default. `--full` probes the broader
+0x08-0x77 address range and is **not** recommended on unstable buses; this
+can trigger bus errors and interfere with existing peripherals. The scanner
+performs SMBus read-byte probes, not EEPROM writes. An acknowledgement at
+0x53/0x57 does not prove the chip is an ST25DV16K. On this Orange Pi,
+bus 9 corresponds to `0x2519000.twi` and previously logged SCL timeouts;
+bus 20 is HDMI/DDC.
