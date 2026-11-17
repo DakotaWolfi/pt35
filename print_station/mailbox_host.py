@@ -9,6 +9,7 @@ the same physical six-digit challenge as browser print requests.
 import argparse
 import json
 import errno
+import random
 import logging
 import time
 from urllib.request import Request, urlopen
@@ -26,10 +27,19 @@ LENGTH=0x2007
 RAM=0x2008
 
 def read(bus, slave, address, count=1):
-    w=i2c_msg.write(slave, [address>>8,address&255])
-    r=i2c_msg.read(slave,count)
-    bus.i2c_rdwr(w,r)
-    return bytes(r)
+    # ST25DV RF/I2C arbitration: RF busy makes the I2C device-select NACK.
+    # All reads below are idempotent at the transport level; retry only a
+    # bounded number of times, leaving RF a chance to finish each command.
+    for attempt in range(5):
+        try:
+            w=i2c_msg.write(slave,[address>>8,address&255])
+            r=i2c_msg.read(slave,count)
+            bus.i2c_rdwr(w,r)
+            return bytes(r)
+        except OSError as exc:
+            if exc.errno not in (errno.EINVAL,errno.EREMOTEIO,errno.ENXIO) or attempt==4:
+                raise
+            time.sleep(random.uniform(.005,.015)*(attempt+1))
 
 def write(bus, slave, address, data):
     bus.i2c_rdwr(i2c_msg.write(slave,[address>>8,address&255,*data]))
@@ -114,7 +124,11 @@ def main():
     parser.add_argument("--bus",type=int,default=0)
     parser.add_argument("--api",default="http://127.0.0.1:8767")
     parser.add_argument("--once",action="store_true")
+    parser.add_argument("--poll-interval",type=float,default=0.20,
+                        help="I2C mailbox polling period; avoid starving NFC RF commands")
     args=parser.parse_args()
+    if not 0.10 <= args.poll_interval <= 5.0:
+        parser.error("--poll-interval must be 0.10..5 seconds")
     logging.basicConfig(level=logging.INFO)
     seen={}
     bus=None
@@ -145,7 +159,7 @@ def main():
                     if response and not respond(bus,response):
                         LOG.warning("PT35 did not clear mailbox; reply not sent")
                     if args.once: return
-                time.sleep(.07)
+                time.sleep(args.poll_interval)
             except (OSError,RuntimeError) as exc:
                 failures+=1
                 if failures==1 or failures%30==0:
