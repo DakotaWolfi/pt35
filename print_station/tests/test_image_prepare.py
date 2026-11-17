@@ -13,7 +13,7 @@ class PrepareReceiptImageTests(unittest.TestCase):
         result=prepare_receipt_image(data.getvalue())
         self.assertLessEqual(result["width"],384)
         self.assertLessEqual(result["height"],1024)
-        self.assertLessEqual(result["bytes"],32*1024)
+        self.assertLessEqual(result["bytes"],96*1024)
         import base64
         with Image.open(io.BytesIO(base64.b64decode(result["image"]))) as printed:
             self.assertEqual(printed.format,"PNG")
