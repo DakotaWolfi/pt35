@@ -64,8 +64,11 @@ def current(now=None):
     now=time.time() if now is None else now
     try:
         item=json.loads(FILE.read_text(encoding="utf-8"))
-        if 0<=now-float(item["at"])<TTL:
+        age=now-float(item["at"])
+        if 0<=age<TTL:
             return item
+        if age>=TTL:
+            FILE.unlink(missing_ok=True)
     except (OSError,ValueError,KeyError,TypeError):
         pass
     return None
