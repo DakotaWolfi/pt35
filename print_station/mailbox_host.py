@@ -18,6 +18,7 @@ from urllib.error import HTTPError, URLError
 from smbus2 import SMBus, i2c_msg
 from mailbox_protocol import pack, unpack
 from mailbox_image import ImageReceiver
+from mailbox_auth import read_key, verify, HOST_KEY
 
 LOG=logging.getLogger("fmi.mailbox")
 TAG=0x53
@@ -78,10 +79,10 @@ def respond(bus,data,timeout=1.8):
         time.sleep(.03)
     return False
 
-def http_json(url, payload=None):
+def http_json(url, payload=None, internal_key=None):
     req=Request(url,method="GET" if payload is None else "POST",
                 data=None if payload is None else json.dumps(payload).encode("utf-8"),
-                headers={} if payload is None else {"Content-Type":"application/json"})
+                headers={} if payload is None else dict({"Content-Type":"application/json"}, **({"X-FMI-NFC-Internal":internal_key.hex()} if internal_key is not None else {})))
     try:
         with urlopen(req,timeout=3) as response:
             return json.load(response)
@@ -94,7 +95,7 @@ def http_json(url, payload=None):
     except (URLError,TimeoutError,OSError) as exc:
         return {"error":"Local print API unavailable"}
 
-def process(message,api):
+def process(message,api,key=None):
     msg=unpack(message)
     uid=msg["id"]
     if msg["t"]=="status":
@@ -105,16 +106,15 @@ def process(message,api):
                     queue=int(status.get("queue",0)) if isinstance(status.get("queue"),int) else 0,
                     printed=int(status.get("stats",{}).get("printed",0)))
     if msg["t"]=="print":
+        if key is None or not verify(msg,key):
+            return pack("reply",uid,ok=False,error="NFC not paired")
         # NFC is not authenticated by proximity; require same code as web.
         code=msg.get("code","")
         if not isinstance(code,str) or not (len(code)==6 and code.isdecimal()):
             return pack("reply",uid,ok=False,error="Print code required")
-        status=http_json(api+"/api/status")
-        if not status.get("challenge_enabled"):
-            return pack("reply",uid,ok=False,error="Print challenge disabled")
         result=http_json(api+"/api/print",{"name":msg["name"],
                                           "message":msg["message"],
-                                          "challenge_code":code})
+                                          },internal_key=key)
         return pack("reply",uid,ok="error" not in result,
                     error=str(result.get("error",""))[:25],
                     message=str(result.get("message",""))[:20])
@@ -125,14 +125,21 @@ def main():
     parser.add_argument("--bus",type=int,default=0)
     parser.add_argument("--api",default="http://127.0.0.1:8767")
     parser.add_argument("--once",action="store_true")
+    parser.add_argument("--pair-key",default=str(HOST_KEY),help="Locally provisioned shared-key file")
     parser.add_argument("--poll-interval",type=float,default=0.20,
                         help="I2C mailbox polling period; avoid starving NFC RF commands")
     args=parser.parse_args()
     if not 0.10 <= args.poll_interval <= 5.0:
         parser.error("--poll-interval must be 0.10..5 seconds")
     logging.basicConfig(level=logging.INFO)
+    try:
+        key=read_key(args.pair_key)
+        LOG.info("NFC paired-owner printing enabled")
+    except (OSError,ValueError) as exc:
+        key=None
+        LOG.warning("NFC printing disabled: no pairing key: %s",exc)
     seen={}
-    image_receiver=ImageReceiver(http_json)
+    image_receiver=ImageReceiver(http_json,key)
     bus=None
     failures=0
     try:
@@ -155,7 +162,7 @@ def main():
                         else:
                             response=(image_receiver.process(request,args.api)
                                       if request["t"] in ("img0","img1","img2")
-                                      else process(msg,args.api))
+                                      else process(msg,args.api,key))
                             seen[uid]=(now,response)
                     except (ValueError,UnicodeError,KeyError,TypeError) as exc:
                         LOG.warning("Bad RF request: %s",exc)
