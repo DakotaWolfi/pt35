@@ -424,12 +424,15 @@ def worker(conf):
         global printing_now
         with lock:
             printing_now = True
+        pet_report("printing")
         try:
             send_printer(raw, conf)
+            pet_report("printed")
             receipt_store.complete(job_id, True)
             with lock:
                 statistics["printed"] += 1
         except Exception as exc:
+            pet_report("error")
             LOG.exception("Print failed")
             try: receipt_store.complete(job_id, False, str(exc))
             except Exception: LOG.exception("Could not record failed job")
