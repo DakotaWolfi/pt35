@@ -244,3 +244,46 @@ The AWOO Fine page uses the longer receipt format: AWOO FINE title, a five-digit
 ## Custom Fine
 
 A separate **Custom Fine** page keeps the detailed numbered fine receipt layout while allowing a visitor to customize the ticket heading, status, offence, offender, issuer, notes, amount, currency and location. It submits to the existing protected/rate-limited `/api/print` endpoint as a normal `fine` audit entry with `custom_fine=true`. The SQLite job ID supplies its ticket number; the parody legal disclaimer remains fixed. The in-browser preview approximates the printout before the number/time are assigned. Private History → Edit / Reprint opens custom fine entries in the Custom Fine editor, not the normal AWOO form. The custom free-form receipt designer remains separate.
+
+## Isolated printer DHCP (optional)
+
+An **opt-in** script `setup_printer_dhcp.sh` configures the Orange Pi as a
+DHCP server **only** on USB Ethernet interface `enx9cebe8ec46e1`, not a
+router. It adds Pi address `10.88.77.1/24` and offers Epson DHCP leases in
+`10.88.77.20-10.88.77.40` using dnsmasq, with no gateway or DNS option,
+no IP forwarding, bridging or NAT. It leaves `wlan0` unchanged. Running
+without `--apply` is a dry-run description; activation requires root and
+`--apply`. The printer must be in DHCP/Auto IP mode and restarted to request
+a lease. On this printer, dynamic Epson discovery on Ethernet prefers any
+new `10.88.77.x` address over stale `169.254.x.x` link-local addresses.
+Check `ip -br addr`, `sudo journalctl -u dnsmasq -n 60` and
+`avahi-browse -rtp _printer._tcp` after enabling. This script is written
+for **this** Pi's interface name; review before use on a different host.
+
+## e-paper QR and ST25DV16K tap-to-open (opt-in tag writing)
+
+Install `sudo apt install python3-qrcode python3-smbus2 i2c-tools`.
+The e-paper status service obtains the current `wlan0` IPv4 address and
+displays its **guest HTTP** link as a QR code; `nfc_url` in `config.json`
+overrides the automatically detected URL if set. A public HTTPS admin URL
+must never be stored in a guest-facing tag. If QR generation is unavailable,
+the display falls back to its original printer status screen.
+
+Tag writing is disabled by default. To identify the ST25DV16K I2C bus:
+`ls /dev/i2c-*` then inspect the bus using `sudo i2cdetect -y BUS`.
+The ST25DV16K's user-memory interface is normally at address `0x53`,
+system memory at `0x57`; other I2C devices can be present, so verify the
+bus and tag before writing. The conservative `nfc_tag.py` program refuses
+unformatted/non-NDEF tags and unknown TLV layouts, reads the existing data,
+and shows a dry-run unless `--write` is supplied. On write, it saves an
+owner-only backup of the original memory to `/tmp` and verifies readback.
+Example after selecting the correct BUS:
+
+    sudo python3 nfc_tag.py --bus BUS --url http://192.168.200.7:8767/
+    sudo python3 nfc_tag.py --bus BUS --url http://192.168.200.7:8767/ --write
+
+After a successful manual write and phone tap test, set
+`"nfc_i2c_bus": BUS, "nfc_auto_update": true` in config.json and restart
+`fmi-print-display.service`. The display service will only reprogram when
+the URL differs, minimizing EEPROM wear. The QR and tag then share the same
+guest HTTP address, even as wlan0 changes IP.
