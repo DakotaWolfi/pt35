@@ -17,6 +17,7 @@ import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"print_station"))
 from mailbox_protocol import pack,unpack
+from mailbox_auth import read_key,sign,PT35_KEY
 
 from smbus2 import SMBus
 from nfcv_dump import Reader, decode_response
@@ -101,7 +102,7 @@ def main():
     ap.add_argument("--bus",type=int,default=1)
     ap.add_argument("--name",default="PT35")
     ap.add_argument("--message",default="AWOO from PT35")
-    ap.add_argument("--code",default="",help="Six-digit physical code shown on Print Pet")
+    ap.add_argument("--key-file",type=Path,default=PT35_KEY,help="Paired NFC owner key file")
     ap.add_argument("--confirm",action="store_true",help="Required for physical printing")
     ap.add_argument("--image",type=Path,help="Image file for NFC transfer (PNG/JPEG)")
     args=ap.parse_args()
@@ -110,14 +111,18 @@ def main():
         ap.error("--uid must contain exactly 16 hexadecimal digits")
     if args.action in ("print","image") and not args.confirm:
         ap.error("Printing requires explicit --confirm")
-    if args.action in ("print","image") and not (len(args.code)==6 and args.code.isascii() and args.code.isdecimal()):
-        ap.error("Printing requires --code from the Print Pet e-paper")
     if args.action=="image" and not args.image:
         ap.error("--image PATH is required for image printing")
+    key=None
+    if args.action in ("print","image"):
+        try:key=read_key(args.key_file)
+        except (OSError,ValueError) as exc:ap.error("NFC owner pairing unavailable: "+str(exc))
     ident=secrets.token_hex(4)
-    payload=(pack(args.action,ident,**(
-        {"name":args.name,"message":args.message,"code":args.code}
-        if args.action=="print" else {})) if args.action!="image" else None)
+    if args.action=="print":
+        signed=sign({"v":"FMP1","t":"print","id":ident,"name":args.name,"message":args.message},key)
+        payload=pack("print",ident,name=args.name,message=args.message,a=signed["a"])
+    else:
+        payload=pack("status",ident) if args.action=="status" else None
     with SMBus(args.bus) as bus:
         reader=MailboxReader(bus)
         try:
@@ -136,12 +141,17 @@ def main():
                     raise ValueError("Compressed image exceeds 7.5 KiB NFC limit; crop or simplify it")
                 sid=secrets.token_hex(4)
                 def ask(kind,**values):
-                    req=pack(kind,secrets.token_hex(4),s=sid,**values)
+                    reqid=secrets.token_hex(4)
+                    fields=dict(s=sid,**values)
+                    if kind=="img0":
+                        unsigned={"v":"FMP1","t":kind,"id":reqid,**fields}
+                        fields["a"]=sign(unsigned,key)["a"]
+                    req=pack(kind,reqid,**fields)
                     result=transact(reader,uid,req,timeout=8)
                     if not result.get("ok"):
                         raise RuntimeError("Print Pet rejected transfer: "+str(result))
                     return result
-                reply=ask("img0",n=len(png),h=hashlib.sha256(png).hexdigest()[:16],c=args.code)
+                reply=ask("img0",n=len(png),h=hashlib.sha256(png).hexdigest()[:16])
                 step=30
                 for idx,start in enumerate(range(0,len(png),step)):
                     segment=base64.b64encode(png[start:start+step]).decode("ascii")
