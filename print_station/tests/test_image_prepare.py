@@ -6,11 +6,8 @@ from image_prepare import prepare_receipt_image,MAX_UPLOAD
 
 class PrepareReceiptImageTests(unittest.TestCase):
     def test_large_color_source_is_dithered_small_png(self):
-        im=Image.new("RGB",(2048,1536))
-        pix=im.load()
-        for y in range(0,1536):
-            for x in range(0,2048):
-                pix[x,y]=((x*255)//2048,(y*255)//1536,90)
+        gray=Image.linear_gradient("L").resize((2048,1536))
+        im=Image.merge("RGB",(gray,gray,gray))
         data=io.BytesIO()
         im.save(data,format="JPEG",quality=92)
         result=prepare_receipt_image(data.getvalue())
