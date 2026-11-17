@@ -10,6 +10,7 @@ import time
 import urllib.request
 from PIL import Image, ImageDraw, ImageFont
 from epaper_test import Epaper
+import challenge
 
 ROOT = Path(__file__).resolve().parent
 LOG = logging.getLogger("fmi.display")
@@ -103,13 +104,18 @@ def snapshot(conf):
     try:
         with socket.create_connection(__import__("app").printer_destination(conf),timeout=2):
             online=True
-    except OSError: online=False
+    except (OSError, RuntimeError, ValueError): online=False
     try:
         with urllib.request.urlopen("http://127.0.0.1:{}/api/status".format(int(conf.get("port",8767))),timeout=2) as r:
             status=json.load(r)
     except Exception: status={}
     stats=status.get("stats",{})
-    return {"guest_url":guest_print_url(conf),
+    try:
+        code=challenge.current_code(challenge.get_key()) if conf.get("challenge_enabled") else ""
+    except (OSError, ValueError):
+        code="------"
+    return {"guest_url":guest_print_url(conf),"challenge_code":code,
+            "printing":bool(status.get("printing",False)),
             "printer_ok":online,"queue":status.get("queue","?"),
             "printed":stats.get("printed","?"),"dry_run":status.get("dry_run",conf.get("dry_run",True))}
 
