@@ -294,8 +294,45 @@ def printer_mdns_candidates(output, hostname, interface):
     return sorted(set(found))
 
 
+EPSON_MAC = "f8:25:51:79:eb:5f"
+PRINTER_NET = ipaddress.ip_network("10.88.77.0/24")
+LEASE_FILES = (Path("/var/lib/misc/dnsmasq.leases"), Path("/var/lib/dnsmasq/dnsmasq.leases"))
+
+def printer_dhcp_address(lease_files=LEASE_FILES, expected_mac=EPSON_MAC):
+    """Read dnsmasq's own lease for the Epson MAC on our isolated LAN.
+
+    Only a lease from the dedicated subnet can be used. A missing/unreadable
+    lease never silently falls back to an old numerical printer_host.
+    """
+    for filename in lease_files:
+        try:
+            lines = filename.read_text(encoding="ascii").splitlines()
+        except OSError:
+            continue
+        for line in reversed(lines):
+            fields=line.split()
+            if len(fields) < 3 or fields[1].lower()!=expected_mac.lower():
+                continue
+            try:
+                ip=ipaddress.ip_address(fields[2])
+                if ip not in PRINTER_NET:
+                    continue
+                # Expiry timestamp 0 means infinite lease.
+                if int(fields[0]) != 0 and int(fields[0]) <= time.time():
+                    continue
+            except (ValueError, TypeError):
+                continue
+            return str(ip)
+    return None
+
+
 def printer_destination(conf):
     """Find exact DNS-SD hostname on isolated printer cable; no stale-IP fallback."""
+    # The Pi serves Epson's DHCP: use the MAC-bound current lease, not a stale
+    # IP stored in config.json or an Avahi cache entry.
+    lease_ip = printer_dhcp_address()
+    if lease_ip:
+        return lease_ip, int(conf["printer_port"])
     name = conf.get("printer_mdns_name", "")
     if not name:
         return conf["printer_host"], int(conf["printer_port"])
@@ -520,7 +557,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/status":
             with lock:
                 snapshot = dict(statistics)
+            lease_ip = printer_dhcp_address()
             self.reply(200, {"station": self.conf["station_name"], "queue": jobs.qsize(),
+                             "printer_dhcp_ip": lease_ip,
                              "dry_run": self.conf["dry_run"], "stats": snapshot,
                              "printing": printing_now,
                              "nfc_url": self.conf["nfc_url"] or self.conf["public_base_url"],
