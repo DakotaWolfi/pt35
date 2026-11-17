@@ -138,7 +138,7 @@ def raster_image_block(png_b64):
             for x in range(w):
                 if px[x,y] == 0:
                     dots[y*stride+x//8] |= 0x80 >> (x%8)
-        return bytes([27,97,1,29,118,48,0,stride&255,stride>>8,h&255,h>>8])+dots+b"\n"
+        return bytes([27,97,1,29,118,48,0,stride&255,stride>>8,h&255,h>>8])+dots+b"\n"+bytes([27,97,0])
     except (OSError, ValueError, UnidentifiedImageError) as exc:
         raise ValueError("Invalid custom receipt PNG") from exc
 
