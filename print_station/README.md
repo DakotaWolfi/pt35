@@ -290,10 +290,15 @@ guest HTTP address, even as wlan0 changes IP.
 
 ## Print Pet and physical-presence challenge (optional)
 
-The e-paper layout shows an original tiny wolf/pet face, happy/sad/printing
+The e-paper layout shows actual Collar Pet wolf expression PNGs, happy/sad/printing
 mood, basic printer/queue state, a QR for the current guest HTTP page, and
 (if enabled) a six-digit print code. It is a lightweight display concept,
-**not** a port of the full Collar Pet runtime or its animated face assets.
+**not** a port of the full Collar Pet runtime. Install the artwork once with
+`bash fetch_collarpet_assets.sh`; it pulls only `pi/assets/wolves` from
+`DakotaWolfi/collar-pet` using a shallow sparse Git checkout and copies the
+`wolf_*.png` assets to the local `print_station/assets/wolves` directory.
+The display maps READY to `wolf_happy.png`, PRINTING to `wolf_startled.png`,
+and OFFLINE to `wolf_annoyed.png`, with `wolf_idle.png` as fallback.
 The e-paper refresh interval is usually 90 seconds, so transient printing
 can be too brief to catch visually. LEDs would need their own controller.
 
