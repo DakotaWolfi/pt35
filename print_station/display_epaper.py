@@ -11,6 +11,7 @@ import urllib.request
 from PIL import Image, ImageDraw, ImageFont
 from epaper_test import Epaper
 import challenge
+from pet_activity import current as pet_activity
 
 ROOT = Path(__file__).resolve().parent
 LOG = logging.getLogger("fmi.display")
@@ -54,17 +55,35 @@ def render(state,rotation=180):
     d=ImageDraw.Draw(img)
     printing=bool(state.get("printing"))
     online=bool(state.get("printer_ok"))
-    status="PRINTING" if printing else ("READY" if online else "OFFLINE")
-    mood="EXCITED" if printing else ("HAPPY" if online else "SAD")
+    activity=state.get("activity","idle")
+    # One operational status only; Q/P appear once in the header.
+    if not online:status="OFFLINE"
+    elif printing:status="PRINTING"
+    elif activity in ("nfc","pair"):status="NFC ACTIVE"
+    elif activity=="web":status="WEB VISIT"
+    elif activity in ("nfc_print","web_print"):status="QUEUED"
+    else:status="READY"
+    modes={
+        "error":("annoyed","GRUMPY","TRY AGAIN"),
+        "nfc":("curious","CURIOUS","NFC HELLO!"),
+        "pair":("curious_2","CURIOUS","PAIRING"),
+        "nfc_print":("startled","EXCITED","NFC RECEIPT"),
+        "web":("curious","CURIOUS","WEB VISITOR"),
+        "web_print":("startled","EXCITED","WEB RECEIPT"),
+        "idle":("happy","HAPPY","AWOO :3"),
+    }
+    face,mood,event=modes.get(activity,modes["idle"])
+    if not online:face,mood,event="annoyed","SAD","PRINTER OFF"
+    elif printing:face,mood,event="startled","EXCITED","PRINTING!"
     d.rectangle((0,0,249,19),fill=0)
     d.text((4,3),"FMI PRINT PET",font=font(11,True),fill=1)
-    d.text((136,4),status,font=font(9,True),fill=1)
-    d.text((190,4),"Q:{} P:{}".format(state.get("queue",0),state.get("printed",0)),
+    short_status=("PRINT" if printing else ("OFF" if not online else "READY"))
+    d.text((139,4),short_status,font=font(9,True),fill=1)
+    d.text((188,4),"Q:{} P:{}".format(state.get("queue",0),state.get("printed",0)),
            font=font(8,True),fill=1)
     d.line((70,21,70,121),fill=0,width=1)
     sprites=ROOT/"assets"/"wolves"
-    expression="startled" if printing else ("happy" if online else "annoyed")
-    sprite=sprites/("wolf_"+expression+".png")
+    sprite=sprites/("wolf_"+face+".png")
     if not sprite.exists():sprite=sprites/"wolf_idle.png"
     if sprite.exists():
         from PIL import ImageOps
@@ -82,16 +101,22 @@ def render(state,rotation=180):
         LOG.warning("Wolf sprite missing: fetch_collarpet_assets.sh")
     d.text((5,105),mood,font=font(9,True),fill=0)
     d.line((174,21,174,121),fill=0,width=1)
-    d.text((75,26),status,font=font(12,True),fill=0)
-    d.line((76,44,167,44),fill=0,width=1)
-    d.text((75,49),"PRINTER "+("OK" if online else "OFF"),font=font(10,True),fill=0)
-    d.text((75,65),"Q:{} P:{}".format(state.get("queue",0),state.get("printed",0)),
-           font=font(10),fill=0)
-    nfc=("PAIR ARMED" if state.get("pair_armed") else
-         ("NFC PAIRED" if state.get("nfc_paired") else "NFC UNPAIRED"))
-    d.text((75,86),nfc,font=font(9,True),fill=0)
+    # Middle: dynamic pet message, never another copy of READY / Q / P.
+    d.text((75,30),event[:14],font=font(11,True),fill=0)
+    d.line((76,48,168,48),fill=0,width=1)
     if state.get("pair_armed"):
-        d.text((75,103),"TAP TO PAIR",font=font(8),fill=0)
+        lines=("PAIR ARMED","TAP PT35")
+    elif activity in ("nfc","pair"):
+        lines=("NFC MAILBOX","LINK ACTIVE")
+    elif activity in ("web","web_print"):
+        lines=("GUEST PAGE","WEB ACTIVITY")
+    else:
+        lines=("NFC PAIRED" if state.get("nfc_paired") else "NFC READY",
+               "SCAN QR ->")
+    d.text((75,59),lines[0],font=font(9,True),fill=0)
+    d.text((75,78),lines[1],font=font(9),fill=0)
+    if state.get("dry_run"):
+        d.text((75,103),"DRY RUN",font=font(8,True),fill=0)
     url=state.get("guest_url","")
     if url:
         try:
@@ -157,6 +182,7 @@ def snapshot(conf):
         pair_armed=False
     return {"guest_url":guest_print_url(conf),"challenge_code":code,
             "nfc_paired":nfc_paired,"pair_armed":pair_armed,
+            "activity":pet_activity(),
             "printing":bool(status.get("printing",False)),
             "printer_ok":online,"queue":status.get("queue","?"),
             "printed":stats.get("printed","?"),"dry_run":status.get("dry_run",conf.get("dry_run",True))}
@@ -171,28 +197,44 @@ def main():
     setting=conf.get("display",{})
     rotation=int(setting.get("rotation",180))
     delay=max(60,int(setting.get("refresh_interval_seconds",90)))
+    # Event changes are sampled quickly, but physical full-screen refreshes
+    # are capped to avoid constant e-paper flashing and excess wear.
+    min_refresh=max(20,int(setting.get("activity_min_refresh_seconds",25)))
     logging.basicConfig(level=logging.INFO)
     if args.preview:
         render(snapshot(conf),rotation).save("/tmp/fmi-print-display.png")
         print("Saved /tmp/fmi-print-display.png")
         return
     with Epaper() as epd:
+        last_frame=None
+        last_refresh=0.0
+        last_periodic=0.0
         while True:
             try:
-                epd.init()
                 state=snapshot(conf)
-                if conf.get("nfc_auto_update") and state.get("guest_url") and conf.get("nfc_i2c_bus") is not None:
-                    try:
-                        from nfc_tag import sync
-                        sync(int(conf["nfc_i2c_bus"]), state["guest_url"], allow_write=True)
-                    except Exception:
-                        LOG.exception("Could not synchronize ST25DV16K guest URL")
-                epd.display(render(state,rotation))
-                epd.sleep()
-                LOG.info("Displayed: %s",state)
+                frame=render(state,rotation)
+                frame_bytes=frame.tobytes()
+                now=time.monotonic()
+                changed=(frame_bytes!=last_frame)
+                due=(last_frame is None or now-last_periodic>=delay or
+                     (changed and now-last_refresh>=min_refresh))
+                if due:
+                    if conf.get("nfc_auto_update") and state.get("guest_url") and conf.get("nfc_i2c_bus") is not None:
+                        try:
+                            from nfc_tag import sync
+                            sync(int(conf["nfc_i2c_bus"]),state["guest_url"],allow_write=True)
+                        except Exception:
+                            LOG.exception("Could not synchronize ST25DV16K guest URL")
+                    epd.init()
+                    epd.display(frame)
+                    epd.sleep()
+                    last_frame=frame_bytes
+                    last_refresh=now
+                    last_periodic=now
+                    LOG.info("Displayed: %s",state)
             except Exception:
                 LOG.exception("Display update failed")
-            if args.once: break
-            time.sleep(delay)
+            if args.once:break
+            time.sleep(5)
 
 if __name__=="__main__": main()
