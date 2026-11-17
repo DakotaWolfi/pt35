@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Print Pet ST25DV16K FTM host: opt-in I2C bridge to existing HTTP print API.
+
+Never touches tag EEPROM, passwords, security session or GPO configuration.
+Fails closed unless MB_MODE (static) was already enabled. No arbitrary raw
+ESC/POS; NFC submits only short application-layer ticket fields and requires
+the same physical six-digit challenge as browser print requests.
+"""
+import argparse
+import json
+import logging
+import secrets
+import time
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+
+from smbus2 import SMBus, i2c_msg
+from mailbox_protocol import pack, unpack
+
+LOG=logging.getLogger("fmi.mailbox")
+TAG=0x53
+SYSTEM=0x57
+MB_MODE=0x000D
+CTRL=0x2006
+LENGTH=0x2007
+RAM=0x2008
+
+def read(bus, slave, address, count=1):
+    w=i2c_msg.write(slave, [address>>8,address&255])
+    r=i2c_msg.read(slave,count)
+    bus.i2c_rdwr(w,r)
+    return bytes(r)
+
+def write(bus, slave, address, data):
+    bus.i2c_rdwr(i2c_msg.write(slave,[address>>8,address&255,*data]))
+
+def setup(bus):
+    mode=read(bus,SYSTEM,MB_MODE)[0]
+    if not mode&1:
+        raise RuntimeError("FTM MB_MODE is disabled in static settings. Not enabling a password-protected register automatically.")
+    flags=read(bus,TAG,CTRL)[0]
+    if not flags&1:
+        write(bus,TAG,CTRL,[1])
+    flags=read(bus,TAG,CTRL)[0]
+    if not flags&1:
+        raise RuntimeError("ST25DV mailbox could not be enabled")
+    return flags
+
+def receive(bus):
+    flags=read(bus,TAG,CTRL)[0]
+    if not flags&0x04:  # RF_PUT_MSG
+        return None
+    n=read(bus,TAG,LENGTH)[0]+1
+    if not 1<=n<=192:
+        # Still consume invalid RF input to free mailbox.
+        read(bus,TAG,RAM,n)
+        raise ValueError(f"RF mailbox message invalid length {n}")
+    return read(bus,TAG,RAM,n)
+
+def respond(bus,data,timeout=1.8):
+    deadline=time.monotonic()+timeout
+    while time.monotonic()<deadline:
+        flags=read(bus,TAG,CTRL)[0]
+        if not flags & 0x06:  # neither HOST nor RF owns mailbox
+            write(bus,TAG,RAM,data)
+            return True
+        time.sleep(.03)
+    return False
+
+def http_json(url, payload=None):
+    req=Request(url,method="GET" if payload is None else "POST",
+                data=None if payload is None else json.dumps(payload).encode("utf-8"),
+                headers={} if payload is None else {"Content-Type":"application/json"})
+    try:
+        with urlopen(req,timeout=3) as response:
+            return json.load(response)
+    except HTTPError as exc:
+        try:
+            detail=json.load(exc)
+            return {"error":str(detail.get("error","Rejected"))[:70]}
+        except (ValueError,OSError):
+            return {"error":"Print API rejected request"}
+    except (URLError,TimeoutError,OSError) as exc:
+        return {"error":"Local print API unavailable"}
+
+def process(message,api):
+    msg=unpack(message)
+    uid=msg["id"]
+    if msg["t"]=="status":
+        status=http_json(api+"/api/status")
+        return pack("reply",uid,ok="error" not in status,
+                    ready=bool(status.get("printer_dhcp_ip")),
+                    printing=bool(status.get("printing")),
+                    queue=int(status.get("queue",0)) if isinstance(status.get("queue"),int) else 0,
+                    printed=int(status.get("stats",{}).get("printed",0)),
+                    error=str(status.get("error",""))[:30])
+    if msg["t"]=="print":
+        # NFC is not authenticated by proximity; require same code as web.
+        code=msg.get("code","")
+        if not isinstance(code,str) or not (len(code)==6 and code.isdecimal()):
+            return pack("reply",uid,ok=False,error="Six-digit print code required")
+        result=http_json(api+"/api/print",{"name":msg["name"],
+                                          "message":msg["message"],
+                                          "challenge_code":code})
+        return pack("reply",uid,ok="error" not in result,
+                    error=str(result.get("error",""))[:50],
+                    message=str(result.get("message",""))[:40])
+    return pack("reply",uid,ok=False,error="Unsupported request")
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--bus",type=int,default=0)
+    parser.add_argument("--api",default="http://127.0.0.1:8767")
+    parser.add_argument("--once",action="store_true")
+    args=parser.parse_args()
+    logging.basicConfig(level=logging.INFO)
+    with SMBus(args.bus) as bus:
+        setup(bus)
+        print("FTM enabled. Waiting for a PT35 NFC mailbox request.",flush=True)
+        seen={}
+        while True:
+            try:
+                msg=receive(bus)
+                if msg is not None:
+                    try:
+                        request=unpack(msg)
+                        uid=request["id"]
+                        now=time.monotonic()
+                        seen={key:val for key,val in seen.items() if now-val[0]<90}
+                        if uid in seen:
+                            response=seen[uid][1] # retry must not reprint
+                        else:
+                            response=process(msg,args.api)
+                            seen[uid]=(now,response)
+                    except (ValueError,UnicodeError,KeyError,TypeError) as exc:
+                        LOG.warning("Bad RF request: %s",exc)
+                        response=None
+                    if response and not respond(bus,response):
+                        LOG.warning("PT35 did not clear mailbox in time; reply not sent")
+                    if args.once: return
+                time.sleep(.07)
+            except (OSError,RuntimeError) as exc:
+                LOG.exception("FTM transport error")
+                if args.once: raise
+                time.sleep(1)
+
+if __name__=="__main__":
+    main()
