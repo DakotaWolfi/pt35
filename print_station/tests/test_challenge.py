@@ -1,5 +1,6 @@
 import unittest
 import time
+import tempfile
 from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -18,6 +19,20 @@ class ChallengeTests(unittest.TestCase):
         self.assertFalse(challenge.check_code(self.key,"00000",now))
         self.assertFalse(challenge.check_code(self.key,"12345a",now))
         self.assertFalse(challenge.check_code(self.key,code,now+1200))
+
+    def test_guest_code_rotates_and_persists(self):
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/"guest-code.json"
+            challenge.init_print_code(path)
+            first=challenge.display_code(self.key,path)
+            self.assertTrue(challenge.check_display_code(self.key,first,path))
+            second=challenge.rotate_display_code(self.key,path)
+            self.assertNotEqual(first,second)
+            self.assertFalse(challenge.check_display_code(self.key,first,path))
+            self.assertTrue(challenge.check_display_code(self.key,second,path))
+            self.assertEqual(challenge.display_code(self.key,path),second)
+            challenge.init_print_code(path)
+            self.assertEqual(challenge.display_code(self.key,path),second)
 
     def test_owner_pass_is_distinct_and_expires(self):
         now=1800000022
