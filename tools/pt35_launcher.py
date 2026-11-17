@@ -101,9 +101,9 @@ def target_command(name):
         app=next((path for path in candidates if path.is_file()),None)
         if app is None:
             raise FileNotFoundError('Install Print Pet GUI in ~/pt35/nfc first')
-        python=Path.home()/'as7341-env/bin/python3'
-        interpreter=str(python) if python.is_file() else sys.executable
-        return [interpreter,str(app)]
+        # Print Pet installer checks Debian system Python dependencies.
+        # Do not inherit the NFC bench's separate as7341-env virtualenv.
+        return ['/usr/bin/python3',str(app)]
     if name == 'spectrum':
         script = ROOT / 'tools/as7341_gui.py'
         python = Path.home() / 'as7341-env/bin/python'
