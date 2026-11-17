@@ -1,6 +1,6 @@
 """Bounded server-side receipt image conversion using Pillow.
 
-Source photos may be large. Only a small, monochrome 384x240 PNG is
+Source photos may be large. A size-limited monochrome receipt PNG is
 returned to the browser or stored with the receipt.
 """
 import base64
@@ -9,7 +9,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 MAX_UPLOAD=12*1024*1024
 MAX_PIXELS=32_000_000
-TARGET=(384,240)
+MAX_PRINT_HEIGHT=1024
 MAX_PNG=32*1024
 
 def prepare_receipt_image(raw, brightness=25, width=384):
@@ -28,10 +28,10 @@ def prepare_receipt_image(raw, brightness=25, width=384):
                 raise ValueError("Unsupported image type")
             source_width,source_height=im.size
             if im.format=="JPEG":
-                im.draft("RGB",(width,240))
+                im.draft("RGB",(width,MAX_PRINT_HEIGHT))
             im.seek(0)  # first page/frame for GIF and TIFF
             source=ImageOps.exif_transpose(im)
-            source.thumbnail((width,240),Image.Resampling.LANCZOS)
+            source.thumbnail((width,MAX_PRINT_HEIGHT),Image.Resampling.LANCZOS)
             rgba=source.convert("RGBA")
             background=Image.new("RGBA",rgba.size,"white")
             background.alpha_composite(rgba)
@@ -48,8 +48,9 @@ def prepare_receipt_image(raw, brightness=25, width=384):
             bw.save(out,format="PNG",optimize=True)
             png=out.getvalue()
             if len(png)>MAX_PNG:
-                # Should be unusual at <=384x240 1-bit; retry at half-size.
-                bw.thumbnail((max(1,width//2),120),Image.Resampling.NEAREST)
+                # Complex noisy photos may exceed the compressed PNG budget.
+                # Downscale proportionally only when necessary.
+                bw.thumbnail((max(1,bw.width//2),max(1,bw.height//2)),Image.Resampling.NEAREST)
                 out=io.BytesIO()
                 bw.save(out,format="PNG",optimize=True)
                 png=out.getvalue()
