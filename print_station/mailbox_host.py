@@ -109,9 +109,6 @@ def process(message,api,key=None):
         if key is None or not verify(msg,key):
             return pack("reply",uid,ok=False,error="NFC not paired")
         # NFC is not authenticated by proximity; require same code as web.
-        code=msg.get("code","")
-        if not isinstance(code,str) or not (len(code)==6 and code.isdecimal()):
-            return pack("reply",uid,ok=False,error="Print code required")
         result=http_json(api+"/api/print",{"name":msg["name"],
                                           "message":msg["message"],
                                           },internal_key=key)
