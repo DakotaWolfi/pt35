@@ -17,6 +17,7 @@ from urllib.error import HTTPError, URLError
 
 from smbus2 import SMBus, i2c_msg
 from mailbox_protocol import pack, unpack
+from mailbox_image import ImageReceiver
 
 LOG=logging.getLogger("fmi.mailbox")
 TAG=0x53
@@ -131,6 +132,7 @@ def main():
         parser.error("--poll-interval must be 0.10..5 seconds")
     logging.basicConfig(level=logging.INFO)
     seen={}
+    image_receiver=ImageReceiver(http_json)
     bus=None
     failures=0
     try:
@@ -151,7 +153,9 @@ def main():
                         if uid in seen:
                             response=seen[uid][1]
                         else:
-                            response=process(msg,args.api)
+                            response=(image_receiver.process(request,args.api)
+                                      if request["t"] in ("img0","img1","img2")
+                                      else process(msg,args.api))
                             seen[uid]=(now,response)
                     except (ValueError,UnicodeError,KeyError,TypeError) as exc:
                         LOG.warning("Bad RF request: %s",exc)
