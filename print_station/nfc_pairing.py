@@ -7,7 +7,7 @@ Usage on Print Pet:
   python3 nfc_pairing.py cancel
 
 A successful NFC pair + keyed confirmation consumes the arm and persists the
-new key. Do not put .private files in Git. RF pairing is NOT encrypted.
+new key. Do not put .private files in Git. RF owner secret is encrypted with ephemeral X25519 + AES-GCM; the NFC pairing command must still be SSH-armed.
 """
 import argparse
 import base64
