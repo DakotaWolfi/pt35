@@ -285,7 +285,7 @@ def printer_mdns_candidates(output, hostname, interface):
             address = ipaddress.ip_address(parts[7])
         except ValueError:
             continue
-        if address.version == 4 and address.is_link_local:
+        if address.version == 4 and (address.is_link_local or address in ipaddress.ip_network("10.88.77.0/24")):
             found.append(str(address))
     return sorted(set(found))
 
