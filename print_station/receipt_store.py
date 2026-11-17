@@ -16,6 +16,8 @@ _guard = threading.RLock()
 
 def connection():
     db = sqlite3.connect(DB, timeout=10)
+    # Receipts may contain private information. Keep the main DB owner-only.
+    DB.chmod(0o600)
     db.execute("PRAGMA busy_timeout=10000")
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("""CREATE TABLE IF NOT EXISTS receipts(
