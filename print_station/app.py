@@ -38,7 +38,7 @@ DEFAULT = {
     "pet_draft_reactions": True,
     "printer_host": "192.168.50.2", "printer_port": 9100,
     "printer_mdns_name": "", "printer_interface": "",
-    "printer_mac": "f8:25:51:79:eb:5f",
+    "printer_mac": "",  # empty = automatic printer selection
     "dry_run": True, "cut": True, "feed_lines": 3, "feed_mm": 50,
     "max_message_chars": 160, "max_jobs_per_hour_per_ip": 6,
     "global_min_interval_seconds": 10, "max_queue": 8,
@@ -110,7 +110,7 @@ def load_config(path=CONFIG_FILE):
         raise ValueError("max_queue must be 1..50")
     if int(conf["logo_width"]) not in (256, 384, 512, 576):
         raise ValueError("logo_width must be 256, 384, 512 or 576")
-    if not isinstance(conf["printer_mac"],str) or not __import__("re").fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}",conf["printer_mac"]):
+    if not isinstance(conf["printer_mac"],str) or (conf["printer_mac"] and not __import__("re").fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}",conf["printer_mac"])):
         raise ValueError("printer_mac must be a six-byte colon-separated MAC address")
     if conf.get("printer_mdns_name") and not conf.get("printer_interface"):
         raise ValueError("printer_interface required for printer_mdns_name")
@@ -348,11 +348,57 @@ def printer_dhcp_address(lease_files=LEASE_FILES, expected_mac=EPSON_MAC):
     return None
 
 
+def automatic_printer_dhcp_address(port=9100, lease_files=LEASE_FILES):
+    """Choose a reachable Epson-like receipt printer on our isolated DHCP LAN.
+
+    DHCP does not prove a device is a printer. Limit this to printer-style
+    hostnames, the printer subnet, and an open TCP print port. When multiple
+    printers are online, choose the newest lease (then IP) deterministically.
+    Never use old hardcoded printer IPs in automatic mode.
+    """
+    candidates={}
+    for filename in lease_files:
+        try:
+            lines=filename.read_text(encoding="ascii").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            parts=line.split()
+            if len(parts)<4:
+                continue
+            expiry,mac,ip_text,hostname=parts[:4]
+            name=hostname.lower()
+            if not (name.startswith(("printer-","tm-","epson"))):
+                continue
+            try:
+                ip=ipaddress.ip_address(ip_text)
+                deadline=int(expiry)
+                if ip not in PRINTER_NET or (deadline and deadline <= time.time()):
+                    continue
+            except (ValueError,TypeError):
+                continue
+            candidates[str(ip)]=(deadline,mac.lower())
+    # Do not assume an indefinitely leased, disconnected Epson is online.
+    for address, _ in sorted(candidates.items(),key=lambda pair:(pair[1][0],pair[0]),reverse=True):
+        try:
+            with socket.create_connection((address,int(port)),timeout=0.5):
+                return address
+        except OSError:
+            continue
+    return None
+
+
 def printer_destination(conf):
     """Find exact DNS-SD hostname on isolated printer cable; no stale-IP fallback."""
     # The Pi serves Epson's DHCP: use the MAC-bound current lease, not a stale
     # IP stored in config.json or an Avahi cache entry.
-    lease_ip = printer_dhcp_address(expected_mac=conf.get("printer_mac",EPSON_MAC))
+    selected_mac=conf.get("printer_mac","")
+    if not selected_mac:
+        available=automatic_printer_dhcp_address(conf["printer_port"])
+        if not available:
+            raise RuntimeError("No reachable Epson printer found on the dedicated DHCP network")
+        return available,int(conf["printer_port"])
+    lease_ip = printer_dhcp_address(expected_mac=selected_mac)
     if lease_ip:
         return lease_ip, int(conf["printer_port"])
     name = conf.get("printer_mdns_name", "")
@@ -585,7 +631,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/status":
             with lock:
                 snapshot = dict(statistics)
-            lease_ip = printer_dhcp_address(expected_mac=self.conf.get("printer_mac",EPSON_MAC))
+            try:
+                lease_ip = printer_destination(self.conf)[0]
+            except (OSError,RuntimeError,ValueError):
+                lease_ip = None
             self.reply(200, {"station": self.conf["station_name"], "queue": jobs.qsize(),
                              "printer_dhcp_ip": lease_ip,
                              "dry_run": self.conf["dry_run"], "stats": snapshot,
@@ -715,7 +764,7 @@ class Handler(BaseHTTPRequestHandler):
                             changed[name_key] = str(changed[name_key])[:160]
                     if "printer_mac" in changed:
                         mac = str(changed["printer_mac"]).strip().lower()
-                        if not __import__("re").fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}",mac):
+                        if mac and not __import__("re").fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}",mac):
                             return self.reply(400, {"error":"Invalid printer MAC address"})
                         changed["printer_mac"] = mac
                     for discovery_key in ("printer_mdns_name", "printer_interface"):
