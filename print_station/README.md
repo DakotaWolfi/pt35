@@ -132,3 +132,32 @@ https://caddyserver.com/docs/install. Validate config using
 `sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`
 before reloading, and confirm the browser shows a valid certificate without
 warnings. Set restrictive permissions on the local config and DB.
+
+## Hybrid event network mode: HTTPS administration, HTTP guest printing fallback
+
+The station now supports two separate Python listeners in the same service:
+
+- `0.0.0.0:8767` — **guest HTTP** when `listen=0.0.0.0`: overview, AWOO fines, custom print jobs, status, logo. All administrator API calls return HTTP **403** even if the caller supplies the correct token or spoofs `X-Forwarded-Proto`.
+- `127.0.0.1:8768` — **loopback only** for Caddy to reverse-proxy securely via HTTPS. Administrator APIs (history, receipt details, settings, logo changes, printer probe) require both the admin token AND a request to the dedicated admin listener through the HTTPS frontend. Visitor printing also works here.
+
+The web UI hides History and Settings navigation on HTTP connections. This
+is cosmetic only; the API checks are the actual security boundary.
+Do not enter an admin token on HTTP. The configured HTTPS hostname is for
+private administration and preferred guest printing. A trusted public TLS
+certificate and valid DNS/network route are prerequisites.
+
+Caddy's example in `Caddyfile.example` proxies **port 8768**, NOT 8767.
+Run `bash enable_https_proxy.sh https://YOUR-REAL-HOSTNAME` only when
+HTTPS is available. This changes the local config to keep HTTP guest printing
+active and HTTPS admin available. It does not publish or provision DNS.
+The older HTTPS-only mode (require_https_proxy) remains for backward
+compatibility, but should be left false in this hybrid configuration.
+
+**Security trade-off:** HTTP submissions are not confidential or protected
+against network modification. Visitors should avoid submitting private
+content if they must use HTTP; HTTPS should be preferred whenever possible.
+This fallback is for availability, not secrecy. Keep `8768` bound to
+127.0.0.1 only, block access to the printer's TCP/9100 from guests, and
+continue enforcing job limits. An attacker on the guest network may still
+tamper with HTTP print submissions or imitate IPs in some environments.
+No administrator access should be attempted using HTTP.
