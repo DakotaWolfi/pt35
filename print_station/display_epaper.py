@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 from epaper_test import Epaper
 import challenge
 from pet_activity import current as pet_activity
+from draft_reaction import current as current_draft
 
 ROOT = Path(__file__).resolve().parent
 LOG = logging.getLogger("fmi.display")
@@ -56,6 +57,7 @@ def render(state,rotation=180):
     printing=bool(state.get("printing"))
     online=bool(state.get("printer_ok"))
     activity=state.get("activity","idle")
+    draft=state.get("draft") if online and not printing else None
     # One operational status only; Q/P appear once in the header.
     modes={
         "error":("annoyed","GRUMPY","PRINT ERROR"),
@@ -69,6 +71,8 @@ def render(state,rotation=180):
         "idle":("happy","HAPPY","AWOO :3"),
     }
     face,mood,event=modes.get(activity,modes["idle"])
+    if draft and activity not in ("error","printing","printed","nfc_print","web_print"):
+        face,mood,event="curious","CURIOUS","I SAW THAT!"
     if not online:face,mood,event="annoyed","SAD","PRINTER OFF"
     elif printing:face,mood,event="startled","EXCITED","PRINTING!"
     d.rectangle((0,0,249,19),fill=0)
@@ -100,17 +104,24 @@ def render(state,rotation=180):
     # Middle: dynamic pet message, never another copy of READY / Q / P.
     d.text((75,30),event[:14],font=font(11,True),fill=0)
     d.line((76,48,168,48),fill=0,width=1)
-    if state.get("pair_armed"):
-        lines=("PAIR ARMED","TAP PT35")
-    elif activity in ("nfc","pair"):
-        lines=("NFC MAILBOX","LINK ACTIVE")
-    elif activity in ("web","web_print"):
-        lines=("GUEST PAGE","WEB ACTIVITY")
+    if draft and activity not in ("error","printing","printed","nfc_print","web_print"):
+        field=str(draft.get("field",""))[:15]
+        value=str(draft.get("value","")).replace("\n"," ")[:16]
+        comment=str(draft.get("comment",""))[:16]
+        d.text((75,55),field+":",font=font(8,True),fill=0)
+        d.text((75,74),value,font=font(8),fill=0)
+        d.text((75,94),comment,font=font(8,True),fill=0)
     else:
-        lines=("NFC PAIRED" if state.get("nfc_paired") else "NFC READY",
-               "SCAN QR ->")
-    d.text((75,59),lines[0],font=font(9,True),fill=0)
-    d.text((75,78),lines[1],font=font(9),fill=0)
+        if state.get("pair_armed"):
+            lines=("PAIR ARMED","TAP PT35")
+        elif activity in ("nfc","pair"):
+            lines=("NFC MAILBOX","LINK ACTIVE")
+        elif activity in ("web","web_print"):
+            lines=("GUEST PAGE","WEB ACTIVITY")
+        else:
+            lines=("HI THERE!","SCAN QR ->")
+        d.text((75,59),lines[0],font=font(9,True),fill=0)
+        d.text((75,78),lines[1],font=font(9),fill=0)
     if state.get("dry_run"):
         d.text((75,103),"DRY RUN",font=font(8,True),fill=0)
     url=state.get("guest_url","")
@@ -179,6 +190,7 @@ def snapshot(conf):
     return {"guest_url":guest_print_url(conf),"challenge_code":code,
             "nfc_paired":nfc_paired,"pair_armed":pair_armed,
             "activity":pet_activity(),
+            "draft":current_draft() if conf.get("pet_draft_reactions",True) else None,
             "printing":bool(status.get("printing",False)),
             "printer_ok":online,"queue":status.get("queue","?"),
             "printed":stats.get("printed","?"),"dry_run":status.get("dry_run",conf.get("dry_run",True))}
