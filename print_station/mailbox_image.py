@@ -9,10 +9,12 @@ import io
 import time
 
 from mailbox_protocol import pack
+from mailbox_auth import verify
 
 class ImageReceiver:
-    def __init__(self,http_json):
+    def __init__(self,http_json,key):
         self.http_json=http_json
+        self.key=key
         self.active=None
         self.completed={}
 
@@ -21,13 +23,12 @@ class ImageReceiver:
         now=time.monotonic()
         self.completed={k:v for k,v in self.completed.items() if now-v[0]<180}
         if typ=="img0":
-            status=self.http_json(api+"/api/status")
-            if not status.get("challenge_enabled"):
-                return pack("reply",rid,ok=False,error="Print challenge disabled")
+            if self.key is None or not verify(request,self.key):
+                return pack("reply",rid,ok=False,error="NFC not paired")
             current=self.active
             if current and current["sid"]==sid:
                 return pack("reply",rid,ok=True,seq=current["seq"])
-            self.active={"sid":sid,"title":"PT35 NFC IMAGE","code":request["c"],
+            self.active={"sid":sid,"title":"PT35 NFC IMAGE",
                          "length":request["n"],"sha":request["h"],
                          "data":bytearray(),"seq":0,"updated":now}
             return pack("reply",rid,ok=True,seq=0)
@@ -53,9 +54,6 @@ class ImageReceiver:
             state["data"].extend(chunk)
             state["seq"]+=1
             return pack("reply",rid,ok=True,seq=state["seq"])
-        status=self.http_json(api+"/api/status")
-        if not status.get("challenge_enabled"):
-            return pack("reply",rid,ok=False,error="Print challenge disabled")
         data=bytes(state["data"])
         if len(data)!=state["length"] or hashlib.sha256(data).hexdigest()[:16]!=state["sha"]:
             return pack("reply",rid,ok=False,error="Image hash mismatch")
@@ -71,8 +69,8 @@ class ImageReceiver:
         result=self.http_json(api+"/api/custom",{
             "title":state["title"],
             "lines":[{"type":"image","image":base64.b64encode(data).decode("ascii")}],
-            "challenge_code":state["code"],
-        })
+            
+        },internal_key=self.key)
         if "error" in result:
             return pack("reply",rid,ok=False,error=str(result["error"])[:25])
         self.completed[sid]=(now,result)
