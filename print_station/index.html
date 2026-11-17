@@ -55,7 +55,7 @@ img#logo{max-width:250px;max-height:130px;background:white}
 </form></div><div class="card"><h2>Custom fine preview</h2><div class="receipt" id="custom-fine-preview"></div><p class="small">Ticket number and issue time are added when printing.</p></div>
 </div></section>
 <section class="panel" id="page-custom" hidden><div class="grid"><div class="card"><h2>Build a custom receipt</h2>
-<p>Compose up to 25 elements, including two custom images. Images are converted to compact black-and-white PNGs for the Epson. Templates can be saved privately in this browser.</p>
+<p>Compose up to 25 elements, including two custom images. Upload large photos (up to 12 MiB / 32 MP). The Print Pet uses Pillow to scale and dither them to printable monochrome PNGs. Only the compact result enters the receipt. Templates can be saved privately in this browser.</p>
 <form id="custom"><label>Title<input name="title" maxlength="48" value="FMI CUSTOM RECEIPT" required></label><label>Subtitle<input name="subtitle" maxlength="64" value="Officially unofficial"></label>
 <div class="card" style="padding:12px"><h3>My local templates</h3><p class="small">Stored only in this browser; not shared with other visitors or loaded from print history.</p><label>Saved templates<select id="template-list"><option value="">Choose a template</option></select></label><div class="controls"><button type="button" id="save-template">Save current</button><button type="button" class="secondary" id="load-template">Load</button><button type="button" class="secondary" id="delete-template">Delete</button><button type="button" class="secondary" id="export-template">Export JSON</button><label style="display:inline-flex;align-items:center;gap:5px;margin:0">Import JSON <input type="file" id="import-template" accept="application/json,.json" style="max-width:200px"></label></div></div><h3>Receipt content</h3><div id="lines"></div>
 <div class="controls"><button type="button" class="secondary" id="add-line">+ Add receipt element</button></div>
@@ -75,7 +75,7 @@ img#logo{max-width:250px;max-height:130px;background:white}
 <label class="check"><input name="logo_enabled" type="checkbox">Print logo</label><label class="check"><input name="cut" type="checkbox">Cut paper</label><label class="check"><input name="dry_run" type="checkbox">Dry run</label>
 <div class="controls"><button type="submit">Save settings</button></div></form></div>
 <div class="card"><h2>Owner print pass</h2><p class="small">HTTPS administrator only. Generate a temporary code to bypass the display challenge. Share only with trusted people; normal print rate limits still apply.</p><button id="get-print-pass" class="secondary" type="button">Get temporary print pass</button><p id="owner-pass" class="big"></p><img id="owner-pass-qr" alt="Owner print pass QR code" hidden style="max-width:180px;background:white"><p class="small">The pass expires automatically and is separate from the administrator token.</p></div><div class="card"><h2>Header image</h2><img id="logo" src="/api/logo" alt="Header image" onerror="this.hidden=true">
-<label>Upload logo (administrator)<input type="file" id="upload" accept="image/png,image/jpeg,image/webp"></label>
+<label>Upload logo (administrator)<input type="file" id="upload" accept="image/png,image/jpeg,image/webp,image/bmp,image/gif,image/tiff"></label>
 <button class="secondary" id="remove-logo">Remove logo</button>
 <p class="small">Keep this station on a trusted local network. The administrator token is sent only to the station.</p></div></div></section>
 </main><script>
@@ -146,39 +146,51 @@ $('#custom-fine').onsubmit=async e=>{
 drawCustomFine();
 
 async function prepareImage(file){
-  if(!file||file.size>2000000)throw Error('Image max upload is 2 MB');
-  const url=URL.createObjectURL(file);
-  try{
-    const img=new Image();img.src=url;await img.decode();
-    if(img.width*img.height>12000000)throw Error('Image too large');
-    const factor=Math.min(1,384/img.width,240/img.height);
-    const w=Math.max(1,Math.round(img.width*factor)),h=Math.max(1,Math.round(img.height*factor));
-    const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
-    const ctx=canvas.getContext('2d',{willReadFrequently:true});
-    ctx.fillStyle='#fff';ctx.fillRect(0,0,w,h);ctx.drawImage(img,0,0,w,h);
-    const pixels=ctx.getImageData(0,0,w,h);
-    for(let i=0;i<pixels.data.length;i+=4){
-       const a=pixels.data[i]*0.299+pixels.data[i+1]*0.587+pixels.data[i+2]*0.114;
-       const v=a<150?0:255;
-       pixels.data[i]=pixels.data[i+1]=pixels.data[i+2]=v;
-       pixels.data[i+3]=255;
-    }
-    ctx.putImageData(pixels,0,0);
-    const data=canvas.toDataURL('image/png').split(',')[1];
-    if(data.length>44000)throw Error('Image too detailed after conversion (32 KiB limit). Try a simpler image');
-    return data;
-  }finally{URL.revokeObjectURL(url)}
+  if(!file)throw Error('Select an image first');
+  if(file.size>12*1024*1024)throw Error('Source file exceeds the 12 MiB image upload limit');
+  // Keep original image local to this request; the printer converts it
+  // to monochrome 384x240 using Pillow. The full source is NOT saved in
+  // receipt history, only the resulting compact PNG.
+  const resp=await fetch('/api/image/prepare',{
+    method:'POST',
+    credentials:'same-origin',
+    headers:{'Content-Type':'application/octet-stream'},
+    body:file
+  });
+  let data;
+  try{data=await resp.json()}catch{throw Error('Print Pet image conversion unavailable')}
+  if(!resp.ok)throw Error(data.error||'Image conversion failed');
+  if(!data.image||data.image.length>44000)throw Error('Printer returned an invalid image');
+  notice('Pillow resized '+data.source_width+'×'+data.source_height+
+    ' to '+data.width+'×'+data.height+' monochrome ('+data.bytes+' bytes)');
+  return data.image;
 }
 function makeRow(type='text',text='',label='',image=''){
   const div=document.createElement('div');div.className='line-editor';
-  div.innerHTML='<div class="two"><label>Element type<select class="type"><option value="text">Text</option><option value="heading">Heading</option><option value="pair">Label / value</option><option value="rule">Divider line</option><option value="blank">Blank line</option><option value="image">Image</option></select></label><label class="label-field">Label<input class="item-label" maxlength="40"></label></div><label class="text-field">Content<input class="item-text" maxlength="160"></label><div class="image-field"><label>PNG, JPG or WebP<input type="file" class="item-upload" accept="image/png,image/jpeg,image/webp"></label><img class="item-preview" style="max-width:100%;max-height:160px;background:white" alt="Receipt image preview"></div><div class="controls"><button class="secondary remove" type="button">Remove</button><button class="secondary up" type="button">↑</button><button class="secondary down" type="button">↓</button></div>';
+  div.innerHTML='<div class="two"><label>Element type<select class="type"><option value="text">Text</option><option value="heading">Heading</option><option value="pair">Label / value</option><option value="rule">Divider line</option><option value="blank">Blank line</option><option value="image">Image</option></select></label><label class="label-field">Label<input class="item-label" maxlength="40"></label></div><label class="text-field">Content<input class="item-text" maxlength="160"></label><div class="image-field"><label>PNG, JPG, WebP, GIF or BMP (up to 12 MiB)<input type="file" class="item-upload" accept="image/png,image/jpeg,image/webp"></label><img class="item-preview" style="max-width:100%;max-height:160px;background:white" alt="Receipt image preview"></div><div class="controls"><button class="secondary remove" type="button">Remove</button><button class="secondary up" type="button">↑</button><button class="secondary down" type="button">↓</button></div>';
   $('#lines').appendChild(div);
   div.querySelector('.type').value=type;div.querySelector('.item-label').value=label;div.querySelector('.item-text').value=text;
   div._image=image;
   const refreshRow=()=>{const t=div.querySelector('.type').value;div.querySelector('.label-field').hidden=t!=='pair';div.querySelector('.text-field').hidden=t==='rule'||t==='blank'||t==='image';div.querySelector('.image-field').hidden=t!=='image';div.querySelector('.item-preview').hidden=!div._image;if(div._image)div.querySelector('.item-preview').src='data:image/png;base64,'+div._image;drawCustom()};
   div.querySelector('.type').addEventListener('change',refreshRow);
   div.querySelectorAll('.item-label,.item-text').forEach(n=>n.addEventListener('input',drawCustom));
-  div.querySelector('.item-upload').onchange=async()=>{try{const f=div.querySelector('.item-upload').files[0];if(!f)return;div._image=await prepareImage(f);refreshRow();notice('Image converted for receipt printing')}catch(e){notice(e.message,true)}};
+  div.querySelector('.item-upload').onchange=async()=>{
+    const picker=div.querySelector('.item-upload');
+    const f=picker.files[0];if(!f)return;
+    picker.disabled=true;
+    const previous=div._image;
+    notice('Converting photo with Print Pet Pillow…');
+    try{
+      div._image=await prepareImage(f);
+      refreshRow();
+    }catch(e){
+      div._image=previous;
+      notice(e.message,true);
+    }finally{
+      picker.disabled=false;
+      picker.value='';
+    }
+  };
   div.querySelector('.remove').onclick=()=>{div.remove();drawCustom()};
   div.querySelector('.up').onclick=()=>{if(div.previousElementSibling)div.parentNode.insertBefore(div,div.previousElementSibling);drawCustom()};
   div.querySelector('.down').onclick=()=>{if(div.nextElementSibling)div.parentNode.insertBefore(div.nextElementSibling,div);drawCustom()};
