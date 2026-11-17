@@ -14,6 +14,9 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageOps, ImageTk
+from pathlib import Path as _Path
+sys.path.insert(0,str(_Path(__file__).resolve().parents[1]/"print_station"))
+from mailbox_protocol import pack
 
 HERE=Path(__file__).resolve().parent
 CLI=HERE/"print_pet_mailbox.py"
@@ -128,6 +131,11 @@ class PrintPetApp(tk.Tk):
                 if not name or not msg or len(name)>40 or len(msg)>40 or not(name+msg).isascii():
                     messagebox.showerror("Text receipt","Use short ASCII fields (1–40 characters)",parent=self)
                     return
+                try:
+                    pack("print","00000000",name=name,message=msg,code=code)
+                except ValueError as exc:
+                    messagebox.showerror("NFC receipt limit",str(exc)+"; use a shorter message.",parent=self)
+                    return
                 cmd.extend(["--name",name,"--message",msg])
             else:
                 photo=Path(self.image_path.get()).expanduser()
@@ -143,32 +151,48 @@ class PrintPetApp(tk.Tk):
         self.state.set("Communicating over NFC…")
         def work():
             try:
-                proc=subprocess.run(cmd,capture_output=True,text=True,timeout=180)
-                self.events.put((proc.returncode,proc.stdout,proc.stderr))
-            except (OSError,subprocess.TimeoutExpired) as exc:
-                self.events.put((-1,"",str(exc)))
+                proc=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+                                      text=True,bufsize=1)
+                lines=[]
+                for line in proc.stdout:
+                    lines.append(line)
+                    self.events.put(("line",line))
+                rc=proc.wait()
+                self.events.put(("exit",rc))
+            except OSError as exc:
+                self.events.put(("line",str(exc)))
+                self.events.put(("exit",-1))
         threading.Thread(target=work,daemon=True).start()
 
     def _poll(self):
         try:
             while True:
-                code,out,err=self.events.get_nowait()
-                self.busy=False
-                for line in (out+"\n"+err).splitlines():
-                    if line.strip():self._append(line)
-                for line in out.splitlines():
+                event=self.events.get_nowait()
+                if event[0]=="line":
+                    line=event[1]
+                    if line.strip():
+                        self._append(line)
+                    if line.startswith("Image NFC "):
+                        self.state.set(line.strip())
                     if line.startswith("Print Pet:"):
-                        text=line.split("Print Pet:",1)[1]
                         try:
                             import ast
-                            status=ast.literal_eval(text.strip())
+                            status=ast.literal_eval(line.split("Print Pet:",1)[1].strip())
                             if isinstance(status,dict):
-                                self.report.set("Printer: "+("ready" if status.get("ready") else "offline/unknown")
-                                                +" | Printing: "+str(bool(status.get("printing")))
-                                                +" | Queue: "+str(status.get("queue","—"))
-                                                +" | Printed: "+str(status.get("printed","—")))
+                                if "ready" in status:
+                                    self.report.set("Printer: "+("ready" if status.get("ready") else "offline")
+                                                    +" | Printing: "+str(bool(status.get("printing")))
+                                                    +" | Queue: "+str(status.get("queue","—"))
+                                                    +" | Printed: "+str(status.get("printed","—")))
+                                elif status.get("ok"):
+                                    self.state.set(str(status.get("message","Accepted by Print Pet")))
                         except (ValueError,SyntaxError):pass
-                self.state.set("Completed" if code==0 else "NFC error — see log")
+                elif event[0]=="exit":
+                    self.busy=False
+                    if event[1]:
+                        self.state.set("NFC error — see log")
+                    elif not self.state.get().startswith("Image queued"):
+                        self.state.set("Completed")
         except queue.Empty:
             pass
         self.after(100,self._poll)
