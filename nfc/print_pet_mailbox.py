@@ -11,6 +11,7 @@ import os
 import base64
 import hashlib
 import io
+from collections import deque
 from pathlib import Path
 import secrets
 import sys
@@ -98,7 +99,7 @@ def transact(reader,uid,packet,timeout=5):
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("action",choices=("status","print","image","pair"))
+    ap.add_argument("action",choices=("status","print","image","pair","linktest"))
     ap.add_argument("--uid",required=True,help="EXTERNAL Print Pet ST25DV ISO15693 UID (16 hex chars)")
     ap.add_argument("--bus",type=int,default=1)
     ap.add_argument("--name",default="PT35")
@@ -106,7 +107,13 @@ def main():
     ap.add_argument("--key-file",type=Path,default=PT35_KEY,help="Paired NFC owner key file")
     ap.add_argument("--confirm",action="store_true",help="Required for physical printing")
     ap.add_argument("--image",type=Path,help="Image file for NFC transfer (PNG/JPEG)")
+    ap.add_argument("--samples",type=int,default=40,
+                    help="Number of status round trips for RF link test (1-500)")
+    ap.add_argument("--interval",type=float,default=.15,
+                    help="Pause between link-test samples (0-5 seconds)")
     args=ap.parse_args()
+    if not 1 <= args.samples <= 500:ap.error("--samples must be 1-500")
+    if not 0 <= args.interval <= 5:ap.error("--interval must be 0-5 seconds")
     uid=args.uid.upper()
     if len(uid)!=16 or any(c not in "0123456789ABCDEF" for c in uid):
         ap.error("--uid must contain exactly 16 hexadecimal digits")
@@ -131,6 +138,56 @@ def main():
         try:
             reader.initialize()
             print("Hold PT35's NFC reader at the Print Pet tag throughout exchange.",flush=True)
+            if args.action=="linktest":
+                # No printer commands, no key, and no modification to the tag.
+                # A test transaction is the same status exchange the GUI uses.
+                # It measures APPLICATION-LAYER quality, not RF SNR/RSSI.
+                results=deque(maxlen=10)
+                start=time.monotonic()
+                successes=0
+                errors=0
+                payload_bytes=0
+                elapsed_success=0.0
+                for attempt in range(1,args.samples+1):
+                    request=pack("status",secrets.token_hex(4))
+                    t0=time.monotonic()
+                    try:
+                        response=transact(reader,uid,request,timeout=5)
+                        elapsed=time.monotonic()-t0
+                        if not response.get("ok"):
+                            raise RuntimeError(str(response.get("error","status failed")))
+                        successes+=1
+                        results.append(True)
+                        # Includes request + response payload; excludes ISO15693 overhead.
+                        payload_bytes+=len(request)+len(
+                            pack("reply",response["id"],
+                                 **{k:v for k,v in response.items()
+                                    if k not in ("v","t","id")}))
+                        elapsed_success+=elapsed
+                        verdict="OK"
+                    except (OSError,ValueError,TimeoutError,RuntimeError,IndexError) as exc:
+                        elapsed=time.monotonic()-t0
+                        errors+=1
+                        results.append(False)
+                        verdict="FAIL "+str(exc)[:80]
+                    total=time.monotonic()-start
+                    quality=int(round(100*sum(results)/len(results)))
+                    print(
+                        f"LINK {attempt}/{args.samples} {verdict} "
+                        f"RTT={elapsed*1000:.0f}ms "
+                        f"quality10={quality}% "
+                        f"success={successes}/{attempt} "
+                        f"payload={payload_bytes/max(total,0.001):.1f}B/s",
+                        flush=True,
+                    )
+                    if attempt<args.samples:time.sleep(args.interval)
+                total=time.monotonic()-start
+                print(f"SUMMARY success={successes}/{args.samples} "
+                      f"rate={100*successes/args.samples:.1f}% "
+                      f"avg_success_rtt={1000*elapsed_success/max(successes,1):.0f}ms "
+                      f"payload={payload_bytes/max(total,0.001):.1f}B/s "
+                      f"failures={errors}",flush=True)
+                return 0 if successes==args.samples else 2
             if args.action=="pair":
                 from cryptography.hazmat.primitives.asymmetric import x25519
                 from cryptography.hazmat.primitives.serialization import Encoding,PublicFormat
