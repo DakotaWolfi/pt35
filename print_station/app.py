@@ -99,8 +99,8 @@ def load_config(path=CONFIG_FILE):
         raise ValueError("max_jobs_per_hour_per_ip must be 1..100")
     if not 0 <= int(conf["global_min_interval_seconds"]) <= 3600:
         raise ValueError("global_min_interval_seconds must be 0..3600")
-    if not 1 <= int(conf["max_images_per_receipt"]) <= 4:
-        raise ValueError("max_images_per_receipt must be 1..4")
+    if not 1 <= int(conf["max_images_per_receipt"]) <= 100:
+        raise ValueError("max_images_per_receipt must be 1..100")
     if not 128 <= int(conf["image_width_dots"]) <= 576 or int(conf["image_width_dots"]) % 8:
         raise ValueError("image_width_dots must be 128..576 in steps of 8")
     if not 1 <= int(conf["max_image_upload_mib"]) <= 12:
@@ -256,8 +256,8 @@ def clean_line(value, limit):
 def validate_custom(payload, conf):
     title = str(payload.get("title", "")).strip()
     items = payload.get("lines", [])
-    if not (1 <= len(title) <= 48 and isinstance(items, list) and 1 <= len(items) <= 25):
-        raise ValueError("Custom receipt needs a title and 1-25 lines")
+    if not (1 <= len(title) <= 48 and isinstance(items, list) and 1 <= len(items) <= 125):
+        raise ValueError("Custom receipt needs a title and 1-125 lines")
     allowed_types = {"text", "heading", "pair", "rule", "blank", "image"}
     clean_items=[]
     image_count=0
@@ -660,7 +660,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(500,{"error":"Image converter unavailable"})
         try:
             size = int(self.headers.get("Content-Length", "0"))
-            if size < 1 or size > (2500000 if urlsplit(self.path).path == "/api/logo" else (550000 if urlsplit(self.path).path == "/api/custom" else 4096)):
+            if size < 1 or size > (2500000 if urlsplit(self.path).path == "/api/logo" else (14*1024*1024 if urlsplit(self.path).path == "/api/custom" else 4096)):
                 return self.reply(413, {"error": "Invalid request size"})
             if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
                 return self.reply(415, {"error": "JSON required"})
@@ -696,7 +696,7 @@ class Handler(BaseHTTPRequestHandler):
                             if not minimum <= value <= maximum:
                                 return self.reply(400, {"error": limit_key + " must be " + str(minimum) + ".." + str(maximum)})
                             changed[limit_key] = value
-                    for image_key, minimum, maximum in (("max_images_per_receipt", 1, 4),
+                    for image_key, minimum, maximum in (("max_images_per_receipt", 1, 100),
                                                       ("image_width_dots", 128, 576),
                                                       ("max_image_upload_mib", 1, 12)):
                         if image_key in changed:
