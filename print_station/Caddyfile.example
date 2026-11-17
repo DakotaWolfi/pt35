@@ -1,0 +1,17 @@
+# Example for an INTERNET-REACHABLE hostname with valid public TLS certificate.
+# Replace print.example.com with a DNS name you control and resolve to Caddy.
+# Caddy must be reachable on TCP/80 and TCP/443, directly or through a compatible tunnel.
+# Never expose :8767 publicly. Keep the printer isolated on its Ethernet subnet.
+
+print.example.com {
+    encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        Strict-Transport-Security "max-age=31536000"
+    }
+    reverse_proxy 127.0.0.1:8767 {
+        # No trusted_proxies configured: Caddy replaces untrusted incoming XFF.
+        header_up X-Forwarded-Proto https
+    }
+}
