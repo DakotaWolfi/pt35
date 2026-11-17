@@ -17,6 +17,7 @@ import threading
 import time
 import receipt_store
 import challenge
+from draft_reaction import submit as react_to_draft
 from image_prepare import prepare_receipt_image, MAX_UPLOAD
 IMAGE_PREPARE_SLOTS=threading.BoundedSemaphore(2)
 IMAGE_PREPARE_LOCK=threading.Lock()
@@ -34,6 +35,7 @@ DEFAULT = {
     "public_base_url": "", "nfc_url": "",
     "nfc_i2c_bus": None, "nfc_auto_update": False,
     "challenge_enabled": False,
+    "pet_draft_reactions": True,
     "printer_host": "192.168.50.2", "printer_port": 9100,
     "printer_mdns_name": "", "printer_interface": "",
     "dry_run": True, "cut": True, "feed_lines": 3, "feed_mm": 50,
@@ -418,7 +420,7 @@ def public_config(conf):
     keys = ("station_name", "subtitle", "footer", "printer_host", "printer_port",
             "printer_mdns_name", "printer_interface",
             "dry_run", "cut", "feed_mm", "logo_enabled", "logo_width",
-            "default_amount", "currency")
+            "default_amount", "currency", "challenge_enabled", "pet_draft_reactions")
     return {key: conf.get(key) for key in keys}
 
 def worker(conf):
@@ -576,7 +578,7 @@ class Handler(BaseHTTPRequestHandler):
         else: self.reply(404, {"error": "Not found"})
     def do_POST(self):
         if not self.permitted(): return
-        if urlsplit(self.path).path not in ("/api/print", "/api/custom", "/api/image/prepare", "/api/settings", "/api/logo", "/api/logo/remove", "/api/probe"):
+        if urlsplit(self.path).path not in ("/api/print", "/api/custom", "/api/image/prepare", "/api/pet/draft", "/api/settings", "/api/logo", "/api/logo/remove", "/api/probe"):
             return self.reply(404, {"error": "Not found"})
         # Same-origin check prevents common cross-site drive-by printing.
         origin = self.headers.get("Origin")
@@ -587,6 +589,22 @@ class Handler(BaseHTTPRequestHandler):
                 expected.add(self.conf["public_base_url"].rstrip("/"))
             if origin.rstrip("/") not in expected:
                 return self.reply(403, {"error": "Origin not allowed"})
+        if urlsplit(self.path).path=="/api/pet/draft":
+            if not self.conf.get("pet_draft_reactions",True):
+                return self.reply(200,{"displayed":False})
+            try:
+                size=int(self.headers.get("Content-Length","0"))
+                if not 0<size<=512 or self.headers.get("Content-Type","").split(";")[0].strip()!="application/json":
+                    return self.reply(400,{"error":"Small JSON field required"})
+                item=json.loads(self.rfile.read(size))
+                if not isinstance(item,dict) or set(item)!={"field","value"}:
+                    return self.reply(400,{"error":"Field and value required"})
+                if not isinstance(item["value"],str) or len(item["value"])>160:
+                    return self.reply(400,{"error":"Invalid field"})
+                accepted=react_to_draft(item["field"],item["value"])
+                return self.reply(200,{"displayed":accepted})
+            except (ValueError,TypeError):
+                return self.reply(400,{"error":"Invalid draft"})
         if urlsplit(self.path).path=="/api/image/prepare":
             # Images are processed in RAM, never persisted until a validated
             # custom receipt is explicitly submitted. The same origin and
@@ -659,6 +677,11 @@ class Handler(BaseHTTPRequestHandler):
                             changed[discovery_key] = value
                     if changed.get("printer_mdns_name", self.conf.get("printer_mdns_name")) and not changed.get("printer_interface", self.conf.get("printer_interface")):
                         return self.reply(400, {"error": "Printer interface required for mDNS discovery"})
+                    for toggle in ("challenge_enabled","pet_draft_reactions"):
+                        if toggle in changed and type(changed[toggle]) is not bool:
+                            return self.reply(400,{"error":"Invalid boolean setting"})
+                    if changed.get("challenge_enabled") is True:
+                        challenge.get_key(create=True)
                     self.conf.update(changed)
                     target = ROOT / "config.json"
                     saved = json.loads(target.read_text()) if target.exists() else {}
