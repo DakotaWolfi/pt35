@@ -253,15 +253,36 @@ def main():
                 reply=acknowledged
             elif args.action=="image":
                 from PIL import Image, ImageOps
-                with Image.open(args.image.expanduser()) as im:
-                    im=ImageOps.exif_transpose(im)
-                    im.thumbnail((160,120), Image.Resampling.LANCZOS)
-                    bw=ImageOps.autocontrast(im.convert("L")).point(lambda x:255 if x>=150 else 0).convert("1")
+                # Preserve the source aspect ratio. Try increasingly compact
+                # 1-bit PNGs: fewer NFC mailbox transactions mean dramatically
+                # fewer opportunities for the RF link to fail.
+                # Larger source photos are accepted but never sent unchanged.
+                with Image.open(args.image.expanduser()) as original:
+                    if original.width * original.height > 32_000_000:
+                        raise ValueError("Source image exceeds 32 megapixels")
+                    if original.format=="JPEG":
+                        original.draft("RGB",(160,120))
+                    source=ImageOps.exif_transpose(original).convert("RGBA")
+                    background=Image.new("RGBA",source.size,"white")
+                    background.alpha_composite(source)
+                    gray=ImageOps.autocontrast(background.convert("RGB").convert("L"))
+                best=None
+                for size in ((160,120),(128,96),(112,84),(96,72),(80,60),(64,48)):
+                    current=gray.copy()
+                    current.thumbnail(size,Image.Resampling.LANCZOS)
+                    bw=current.point(lambda x:255 if x>=145 else 0).convert("1")
                     out=io.BytesIO()
                     bw.save(out,format="PNG",optimize=True)
-                png=out.getvalue()
+                    candidate=out.getvalue()
+                    if best is None or len(candidate)<len(best[0]):
+                        best=(candidate,bw.size)
+                    if len(candidate)<=850:
+                        best=(candidate,bw.size)
+                        break
+                png,dimensions=best
+                print(f"NFC image prepared: {dimensions[0]}x{dimensions[1]}, {len(png)} bytes",flush=True)
                 if len(png)>7680:
-                    raise ValueError("Compressed image exceeds 7.5 KiB NFC limit; crop or simplify it")
+                    raise ValueError("Image is too noisy for NFC; crop it or use Print Pet web upload")
                 sid=secrets.token_hex(4)
                 def ask(kind,**values):
                     reqid=secrets.token_hex(4)
