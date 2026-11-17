@@ -81,7 +81,7 @@ def load_config(path=CONFIG_FILE):
 def request_identity(handler):
     """Trust forwarded client IP only when a localhost reverse proxy connects."""
     peer = handler.client_address[0]
-    via_local_proxy = bool(handler.conf.get("require_https_proxy")) and peer in ("127.0.0.1", "::1")
+    via_local_proxy = (bool(getattr(handler, "admin_listener", False)) or bool(handler.conf.get("require_https_proxy"))) and peer in ("127.0.0.1", "::1")
     if via_local_proxy:
         forwarded = handler.headers.get("X-Forwarded-For", "").split(",")[0].strip()
         try:
