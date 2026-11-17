@@ -81,4 +81,5 @@ def get_job(job_id):
     return {"id":row["id"],"created":row["created"],"finished":row["finished"],
             "kind":row["kind"],"state":row["state"],"error":row["error"],
             "source_ip":row["source_ip"],"user_agent":row["user_agent"],
+            "reverse_dns":row["reverse_dns"],
             "receipt":unpack(row["payload"])}
