@@ -3,7 +3,7 @@
 set -euo pipefail
 IFACE=enx9cebe8ec46e1
 if [[ "${1:-}" != "--apply" ]]; then
-  echo "Preview: install dnsmasq, bind DHCP ONLY to $IFACE, add 10.88.77.1/24."
+  echo "Preview: configure NetworkManager static 10.88.77.1/24, dnsmasq DHCP ONLY on $IFACE."
   echo "Pool: 10.88.77.20-40; Epson reserved 10.88.77.30. No Wi-Fi, DNS or NAT."
   echo "Run: sudo bash setup_printer_dhcp.sh --apply"
   exit 0
@@ -25,36 +25,41 @@ dhcp-option=option:router
 dhcp-option=option:dns-server
 log-dhcp
 EOF
-cat >/usr/local/sbin/fmi-printer-ip <<EOF
-#!/bin/sh
-set -eu
-if ! ip -4 address show dev "$IFACE" | grep -q "10.88.77.1/24"; then
-  ip address add 10.88.77.1/24 dev "$IFACE"
+# NetworkManager owns this USB NIC. A one-shot 'ip address add' loses races
+# against NM reactivation, cable reconnects, and USB device re-enumeration.
+if ! command -v nmcli >/dev/null; then
+  echo "NetworkManager/nmcli required for persistent printer Ethernet configuration" >&2
+  exit 1
 fi
-ip link set "$IFACE" up
-EOF
-chmod 755 /usr/local/sbin/fmi-printer-ip
-cat >/etc/systemd/system/fmi-printer-lan.service <<EOF
-[Unit]
-Description=FMI isolated wired printer IP
-After=network.target
-Before=dnsmasq.service
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/fmi-printer-ip
-RemainAfterExit=yes
-[Install]
-WantedBy=multi-user.target
-EOF
-mkdir -p /etc/systemd/system/dnsmasq.service.d
-cat >/etc/systemd/system/dnsmasq.service.d/fmi-printer-lan.conf <<EOF
-[Unit]
-Requires=fmi-printer-lan.service
-After=fmi-printer-lan.service
-EOF
+CONN="$(nmcli -g GENERAL.CONNECTION device show "$IFACE" | head -n 1)"
+if [[ -z "$CONN" || "$CONN" == "--" ]]; then
+  echo "No active NetworkManager connection on $IFACE; configure it first" >&2
+  exit 1
+fi
+echo "Configuring NetworkManager connection: $CONN"
+nmcli connection modify "$CONN" \
+  connection.interface-name "$IFACE" \
+  connection.autoconnect yes \
+  ipv4.method manual \
+  ipv4.addresses 10.88.77.1/24 \
+  ipv4.gateway "" \
+  ipv4.dns "" \
+  ipv4.never-default yes \
+  ipv4.link-local disabled \
+  ipv6.method disabled
+# Remove obsolete one-shot assignment and dependency override from older installs.
+systemctl disable --now fmi-printer-lan.service 2>/dev/null || true
+rm -f /etc/systemd/system/dnsmasq.service.d/fmi-printer-lan.conf
+# Restart of the wired NM connection does not touch Wi-Fi.
+nmcli connection up "$CONN" ifname "$IFACE"
+ip -4 addr show dev "$IFACE" | grep -q 'inet 10.88.77.1/24' || {
+  echo "Static printer subnet is not active on $IFACE" >&2
+  exit 1
+}
+systemctl daemon-reload
 dnsmasq --test
 systemctl daemon-reload
-systemctl enable --now fmi-printer-lan.service
-systemctl enable --now dnsmasq.service
+systemctl enable dnsmasq.service
+systemctl restart dnsmasq.service
 echo "Done. Epson MAC f8:25:51:79:eb:5f reserved 10.88.77.30. Restart printer for DHCP."
 echo "Check: sudo journalctl -u dnsmasq -n 60 --no-pager"
