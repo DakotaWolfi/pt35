@@ -28,10 +28,10 @@ img#logo{max-width:250px;max-height:130px;background:white}
 </style></head><body><main>
 <header><span style="font-size:39px" aria-hidden="true">🐺</span><div><h1>FMI Print Station</h1><p>Department of Unlicensed Howling</p></div><span class="pill" id="mode">Checking…</span></header>
 <nav aria-label="Print station pages">
-<a href="#home" data-page="home">Overview</a><a href="#fines" data-page="fines">AWOO Fines</a><a href="#custom" data-page="custom">Custom Receipt</a><a href="#history" data-page="history" data-admin-nav>Print History</a><a href="#settings" data-page="settings" data-admin-nav>Settings</a>
+<a href="#home" data-page="home">Overview</a><a href="#fines" data-page="fines">AWOO Fines</a><a href="#custom-fine" data-page="custom-fine">Custom Fine</a><a href="#custom" data-page="custom">Custom Receipt</a><a href="#history" data-page="history" data-admin-nav>Print History</a><a href="#settings" data-page="settings" data-admin-nav>Settings</a>
 </nav><div id="flash" role="status"></div>
 <section class="panel" id="page-home">
-<div class="card"><h2>Welcome to the AWOO Fine Office</h2><p>Issue silly fines, build custom thermal receipts, and review print history. The direct Ethernet printer is not accessible to browsers.</p><div class="controls"><button id="goto-fines">Issue AWOO fine</button><button class="secondary" id="goto-custom">Create custom receipt</button></div></div>
+<div class="card"><h2>Welcome to the AWOO Fine Office</h2><p>Issue silly fines, build custom thermal receipts, and review print history. The direct Ethernet printer is not accessible to browsers.</p><div class="controls"><button id="goto-fines">Issue AWOO fine</button><button class="secondary" id="goto-custom-fine">Custom fine</button><button class="secondary" id="goto-custom">Create custom receipt</button></div></div>
 <div class="card"><h2>Station activity</h2><p id="health">Checking station…</p><p class="small">Requests are rate-limited. Queued does not mean printed. Print history is visible only to administrators.</p></div>
 </section>
 <section class="panel" id="page-fines" hidden><div class="grid"><div class="card"><h2>Issue an AWOO Fine</h2>
@@ -41,6 +41,19 @@ img#logo{max-width:250px;max-height:130px;background:white}
 <label>Location<input name="location" maxlength="80" placeholder="40C3"></label><label>Officer notes<textarea name="message" maxlength="160" required></textarea></label>
 <div class="controls"><button type="submit">Print AWOO fine</button><button type="reset" class="secondary">Clear</button></div></form></div>
 <div class="card"><h2>Fine preview</h2><div class="receipt" id="fine-preview"></div></div></div></section>
+<section class="panel" id="page-custom-fine" hidden><div class="grid">
+<div class="card"><h2>Issue a Custom Fine</h2>
+<p class="small">Make up your own silly fine without building a receipt from scratch. Always a parody, never a real demand for payment.</p>
+<form id="custom-fine">
+<div class="two"><label>Fine heading<input name="fine_title" maxlength="40" value="OFFICIAL FLUFF CITATION" required></label><label>Status<input name="fine_status" maxlength="30" value="UNPAID" required></label></div>
+<div class="two"><label>Offender<input name="name" maxlength="40" required placeholder="Suspicious Wolf"></label><label>Issued by<input name="issuer" maxlength="80" placeholder="Officer Jenna"></label></div>
+<label>Custom offence<input name="offence" maxlength="80" required placeholder="Illegal levels of fluffiness"></label>
+<div class="two"><label>Fine amount<input name="amount" type="number" min="0" step=".01" value="350"></label><label>Currency<input name="currency" maxlength="8" value="CHF"></label></div>
+<label>Location<input name="location" maxlength="80" placeholder="FMI Labs"></label>
+<label>Officer notes<textarea name="message" maxlength="160" required placeholder="Explain this extraordinarily serious fluffy infraction"></textarea></label>
+<div class="controls"><button type="submit">Print custom fine</button><button type="reset" class="secondary">Clear</button></div>
+</form></div><div class="card"><h2>Custom fine preview</h2><div class="receipt" id="custom-fine-preview"></div><p class="small">Ticket number and issue time are added when printing.</p></div>
+</div></section>
 <section class="panel" id="page-custom" hidden><div class="grid"><div class="card"><h2>Build a custom receipt</h2>
 <p>Compose up to 25 elements, including two custom images. Images are converted to compact black-and-white PNGs for the Epson. Templates can be saved privately in this browser.</p>
 <form id="custom"><label>Title<input name="title" maxlength="48" value="FMI CUSTOM RECEIPT" required></label><label>Subtitle<input name="subtitle" maxlength="64" value="Officially unofficial"></label>
@@ -74,9 +87,9 @@ document.querySelectorAll("[data-admin-nav]").forEach(el=>{el.hidden=!secureAdmi
 let historyUnlocked=false;
 let historyJobs=[];
 function notice(msg,bad=false){$('#flash').className=bad?'error':'ok';$('#flash').textContent=msg}
-function navigate(){let page=location.hash.slice(1)||'home';if(!['home','fines','custom','history','settings'].includes(page)||(page==='history'||page==='settings')&&!secureAdmin)page='home';document.querySelectorAll('.panel').forEach(n=>n.hidden=n.id!=='page-'+page);document.querySelectorAll('nav a').forEach(n=>n.classList.toggle('active',n.dataset.page===page));if(page==='home')refresh();if(page==='history'&&!historyUnlocked)$('#history-token').value=''}
+function navigate(){let page=location.hash.slice(1)||'home';if(!['home','fines','custom-fine','custom','history','settings'].includes(page)||(page==='history'||page==='settings')&&!secureAdmin)page='home';document.querySelectorAll('.panel').forEach(n=>n.hidden=n.id!=='page-'+page);document.querySelectorAll('nav a').forEach(n=>n.classList.toggle('active',n.dataset.page===page));if(page==='home')refresh();if(page==='history'&&!historyUnlocked)$('#history-token').value=''}
 window.addEventListener('hashchange',navigate);navigate();
-$('#goto-fines').onclick=()=>location.hash='fines';$('#goto-custom').onclick=()=>location.hash='custom';
+$('#goto-fines').onclick=()=>location.hash='fines';$('#goto-custom-fine').onclick=()=>location.hash='custom-fine';$('#goto-custom').onclick=()=>location.hash='custom';
 async function api(path,method='GET',body,overrideToken){const headers=body?{'Content-Type':'application/json'}:{};const token=overrideToken===undefined?$('#token').value:overrideToken;if(token)headers['X-FMI-Admin']=token;const response=await fetch(path,{method,headers,body:body?JSON.stringify(body):undefined});const data=await response.json();if(!response.ok)throw Error(data.error||'Request failed');return data}
 function fineData(){return Object.fromEntries(new FormData($('#fine')))}
 function drawFine(){
@@ -94,6 +107,37 @@ function drawFine(){
 }
 $('#fine').addEventListener('input',drawFine);$('#fine').addEventListener('change',drawFine);$('#fine').addEventListener('reset',()=>setTimeout(drawFine,0));
 $('#fine').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const result=await api('/api/print','POST',fineData());notice('Queued receipt #'+result.id+'; check history for the outcome');refresh()}catch(err){notice(err.message,true)}finally{b.disabled=false}};
+
+function customFineData(){
+ return {...Object.fromEntries(new FormData($('#custom-fine'))),custom_fine:true};
+}
+function drawCustomFine(){
+ const f=customFineData(),line='--------------------------------';
+ const lines=[settings.station_name,settings.subtitle,line,
+  f.fine_title||'CUSTOM FINE','Ticket (assigned when printed)','Issued: (at print time)',
+  'Offender: '+(f.name||'')];
+ if(f.issuer)lines.push('Issued by: '+f.issuer);
+ if(f.location)lines.push('Location: '+f.location);
+ if(f.offence)lines.push('Offence: '+f.offence);
+ if(f.message)lines.push(f.message);
+ lines.push(line,'');
+ if(f.amount!=='')lines.push('FINE: '+(f.currency||'CHF')+' '+f.amount,
+  'Status: '+(f.fine_status||'UNPAID'),'');
+ lines.push(line,settings.footer,'NO LEGAL FORCE - JUST FURRY NONSENSE');
+ $('#custom-fine-preview').textContent=lines.join('\n');
+}
+$('#custom-fine').addEventListener('input',drawCustomFine);
+$('#custom-fine').addEventListener('change',drawCustomFine);
+$('#custom-fine').addEventListener('reset',()=>setTimeout(drawCustomFine,0));
+$('#custom-fine').onsubmit=async e=>{
+ e.preventDefault();const b=e.submitter;b.disabled=true;
+ try{
+  const result=await api('/api/print','POST',customFineData());
+  notice('Custom fine #'+result.id+' queued; check history for outcome');refresh();
+ }catch(err){notice(err.message,true)}
+ finally{b.disabled=false}
+};
+drawCustomFine();
 
 async function prepareImage(file){
   if(!file||file.size>2000000)throw Error('Image max upload is 2 MB');
@@ -249,9 +293,9 @@ $('#history-unlock').onclick=async()=>{if(!secureAdmin)return notice('HTTPS requ
 function renderHistory(jobs){historyJobs=jobs;const list=$('#history-list');list.replaceChildren();for(const job of jobs){const row=document.createElement('div');row.className='history-item';const left=document.createElement('div');const date=new Date(job.created*1000).toLocaleString();left.textContent='#'+job.id+' · '+date+' · '+job.kind.toUpperCase()+' · '+job.state.toUpperCase()+(job.error?' · '+job.error:'');const b=document.createElement('button');b.className='secondary';b.textContent='View print';b.onclick=()=>showPrint(job);const edit=document.createElement('button');edit.className='secondary';edit.textContent='Edit / Reprint';edit.onclick=()=>loadJob(job);row.append(left,b,edit);list.appendChild(row)}if(!jobs.length)list.textContent='No jobs yet'}
 $('#load-history').onclick=async()=>{if(!historyUnlocked)return notice('Unlock history first',true);try{const data=await api('/api/history');renderHistory(data.jobs);notice('History loaded')}catch(err){notice(err.message,true)}};
 function showPrint(job){$('#history-detail').hidden=false;$('#history-meta').textContent='Job #'+job.id+' · '+new Date(job.created*1000).toLocaleString()+' · '+job.state+' · Source IP: '+(job.source_ip||'not recorded')+' · Reverse DNS: '+(job.reverse_dns||'not available')+' · Browser / OS: '+(job.user_agent||'not recorded');$('#history-text').textContent=job.receipt.rendered_text||'(Exact print text unavailable for this old record)';}
-function loadJob(job){const data=job.receipt;if(job.kind==='custom'){const f=$('#custom');f.elements.title.value=data.title;f.elements.subtitle.value=data.subtitle;f.elements.footer.value=data.footer;$('#lines').replaceChildren();for(const item of data.lines)makeRow(item.type,item.text,item.label,item.image||'');drawCustom();location.hash='custom'}else{const f=$('#fine');for(const k of ['name','issuer','location','offence','amount','currency','message','device_name'])if(f.elements[k])f.elements[k].value=data[k]||'';drawFine();location.hash='fines'}notice('Loaded job #'+job.id+' into editor; printing creates a new history entry')}
-$('#load-settings').onclick=async()=>{if(!secureAdmin)return notice('HTTPS required for admin settings',true);try{settings=await api('/api/settings');let form=$('#settings-form');for(const [k,v]of Object.entries(settings))if(form.elements[k]){if(form.elements[k].type==='checkbox')form.elements[k].checked=!!v;else form.elements[k].value=v}form.hidden=false;drawFine();notice('Settings unlocked')}catch(err){notice(err.message,true)}};
-$('#settings-form').onsubmit=async e=>{e.preventDefault();const form=e.target,data={};for(const k of ['printer_host','printer_port','printer_mdns_name','printer_interface','station_name','subtitle','footer','feed_mm','logo_width'])data[k]=form.elements[k].value;for(const k of ['logo_enabled','cut','dry_run'])data[k]=form.elements[k].checked;try{settings=await api('/api/settings','POST',data);notice('Settings saved');drawFine();refresh()}catch(err){notice(err.message,true)}};
+function loadJob(job){const data=job.receipt;if(job.kind==='custom'){const f=$('#custom');f.elements.title.value=data.title;f.elements.subtitle.value=data.subtitle;f.elements.footer.value=data.footer;$('#lines').replaceChildren();for(const item of data.lines)makeRow(item.type,item.text,item.label,item.image||'');drawCustom();location.hash='custom'}else if(data.custom_fine){const f=$('#custom-fine');for(const k of ['fine_title','fine_status','name','issuer','location','offence','amount','currency','message'])if(f.elements[k])f.elements[k].value=data[k]??'';drawCustomFine();location.hash='custom-fine'}else{const f=$('#fine');for(const k of ['name','issuer','location','offence','amount','currency','message'])if(f.elements[k])f.elements[k].value=data[k]??'';drawFine();location.hash='fines'}notice('Loaded job #'+job.id+' into editor; printing creates a new history entry')}
+$('#load-settings').onclick=async()=>{if(!secureAdmin)return notice('HTTPS required for admin settings',true);try{settings=await api('/api/settings');let form=$('#settings-form');for(const [k,v]of Object.entries(settings))if(form.elements[k]){if(form.elements[k].type==='checkbox')form.elements[k].checked=!!v;else form.elements[k].value=v}form.hidden=false;drawFine();drawCustomFine();notice('Settings unlocked')}catch(err){notice(err.message,true)}};
+$('#settings-form').onsubmit=async e=>{e.preventDefault();const form=e.target,data={};for(const k of ['printer_host','printer_port','printer_mdns_name','printer_interface','station_name','subtitle','footer','feed_mm','logo_width'])data[k]=form.elements[k].value;for(const k of ['logo_enabled','cut','dry_run'])data[k]=form.elements[k].checked;try{settings=await api('/api/settings','POST',data);notice('Settings saved');drawFine();drawCustomFine();refresh()}catch(err){notice(err.message,true)}};
 $('#probe').onclick=async()=>{try{notice((await api('/api/probe','POST',{})).message)}catch(err){notice(err.message,true)}};
 $('#upload').onchange=async()=>{const file=$('#upload').files[0];if(!file)return;if(file.size>1500000)return notice('Max file size is 1.5MB',true);const encoded=await new Promise((res,rej)=>{const reader=new FileReader();reader.onload=()=>res(reader.result.split(',')[1]);reader.onerror=rej;reader.readAsDataURL(file)});try{await api('/api/logo','POST',{data:encoded});$('#logo').hidden=false;$('#logo').src='/api/logo?v='+Date.now();notice('Logo uploaded')}catch(err){notice(err.message,true)}};
 $('#remove-logo').onclick=async()=>{try{await api('/api/logo/remove','POST',{});$('#logo').hidden=true;notice('Logo removed')}catch(err){notice(err.message,true)}};
