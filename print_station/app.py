@@ -497,7 +497,18 @@ class Handler(BaseHTTPRequestHandler):
                 token=challenge.pass_token(secret)
                 import qrcode
                 import io as _io
-                image=qrcode.make(token)
+                from urllib.parse import quote
+                guest_url=self.conf.get("nfc_url","")
+                if not guest_url:
+                    raw=subprocess.check_output(["ip","-j","-4","addr","show","dev","wlan0"],text=True,timeout=2)
+                    links=json.loads(raw)
+                    guest_ip=next((x["local"] for item in links for x in item.get("addr_info",[]) if x.get("family")=="inet"),None)
+                    if not guest_ip: raise RuntimeError("No guest Wi-Fi IPv4 address")
+                    guest_url="http://{}:{}/".format(guest_ip,int(self.conf["port"]))
+                if urlsplit(guest_url).scheme != "http":
+                    raise ValueError("Owner pass QR must point to the HTTP guest page")
+                qr_url=guest_url.rstrip("/")+"/#pass="+quote(token)
+                image=qrcode.make(qr_url)
                 buf=_io.BytesIO()
                 image.save(buf,format="PNG")
                 qr=base64.b64encode(buf.getvalue()).decode("ascii")
