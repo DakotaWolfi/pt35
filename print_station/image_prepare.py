@@ -12,8 +12,10 @@ MAX_PIXELS=32_000_000
 TARGET=(384,240)
 MAX_PNG=32*1024
 
-def prepare_receipt_image(raw, brightness=25):
+def prepare_receipt_image(raw, brightness=25, width=384):
     """Brightness 0..70; 25 is a deliberately lighter thermal-photo default."""
+    if type(width) is not int or not 128 <= width <= 576 or width % 8:
+        raise ValueError("Image width must be 128..576 dots in steps of 8")
     if type(brightness) is not int or not 0 <= brightness <= 70:
         raise ValueError("Brightness must be between 0 and 70")
     if not isinstance(raw,(bytes,bytearray)) or not 0<len(raw)<=MAX_UPLOAD:
@@ -26,10 +28,10 @@ def prepare_receipt_image(raw, brightness=25):
                 raise ValueError("Unsupported image type")
             source_width,source_height=im.size
             if im.format=="JPEG":
-                im.draft("RGB",TARGET)
+                im.draft("RGB",(width,240))
             im.seek(0)  # first page/frame for GIF and TIFF
             source=ImageOps.exif_transpose(im)
-            source.thumbnail(TARGET,Image.Resampling.LANCZOS)
+            source.thumbnail((width,240),Image.Resampling.LANCZOS)
             rgba=source.convert("RGBA")
             background=Image.new("RGBA",rgba.size,"white")
             background.alpha_composite(rgba)
@@ -47,7 +49,7 @@ def prepare_receipt_image(raw, brightness=25):
             png=out.getvalue()
             if len(png)>MAX_PNG:
                 # Should be unusual at <=384x240 1-bit; retry at half-size.
-                bw.thumbnail((192,120),Image.Resampling.NEAREST)
+                bw.thumbnail((max(1,width//2),120),Image.Resampling.NEAREST)
                 out=io.BytesIO()
                 bw.save(out,format="PNG",optimize=True)
                 png=out.getvalue()
