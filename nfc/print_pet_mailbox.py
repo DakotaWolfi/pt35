@@ -265,12 +265,14 @@ def main():
                     source=ImageOps.exif_transpose(original).convert("RGBA")
                     background=Image.new("RGBA",source.size,"white")
                     background.alpha_composite(source)
-                    gray=ImageOps.autocontrast(background.convert("RGB").convert("L"))
+                    gray=ImageOps.autocontrast(background.convert("RGB").convert("L"),cutoff=1)
+                    # Thermal printer photos benefit from lifted midtones.
+                    gray=gray.point([round(255*((v/255)**0.74)) for v in range(256)])
                 best=None
                 for size in ((160,120),(128,96),(112,84),(96,72),(80,60),(64,48)):
                     current=gray.copy()
                     current.thumbnail(size,Image.Resampling.LANCZOS)
-                    bw=current.point(lambda x:255 if x>=145 else 0).convert("1")
+                    bw=current.point(lambda x:255 if x>=125 else 0).convert("1")
                     out=io.BytesIO()
                     bw.save(out,format="PNG",optimize=True)
                     candidate=out.getvalue()
