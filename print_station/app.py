@@ -17,6 +17,7 @@ import threading
 import time
 import receipt_store
 import challenge
+from pet_activity import report as pet_report
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -490,6 +491,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.permitted(): return
         path = urlsplit(self.path).path
         if path in ("/", "/fines", "/custom", "/history", "/settings"):
+            pet_report("web")
             self.reply(200, (ROOT / "index.html").read_text(encoding="utf-8"), "text/html")
         elif path == "/api/logo":
             logo = ROOT / "header_logo.png"
@@ -733,6 +735,7 @@ class Handler(BaseHTTPRequestHandler):
                     dns_jobs.put_nowait((job_id, ip))
                 except queue.Full:
                     pass  # Printing must not be delayed by DNS.
+            pet_report("nfc_print" if nfc_owner else "web_print")
             return self.reply(202, {"message": "Receipt queued!", "id": job_id, "queue": jobs.qsize()})
         except Exception as exc:
             LOG.warning("Request rejected: %s", exc)
