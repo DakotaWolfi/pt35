@@ -196,3 +196,19 @@ or phone names. Print jobs automatically record observed IP and the
 browser's supplied User-Agent, which may hint at OS/browser/device model.
 These fields are not authenticated identification. The manual device-name
 question was removed from guest forms.
+
+## Optional reverse DNS in print audit records
+
+New accepted print jobs enqueue a best-effort reverse DNS (PTR) lookup of the
+source IP in one of two daemon lookup workers. A network DNS timeout or missing
+PTR entry **never blocks the print request or printer worker**. The audit
+database has a migration-safe `reverse_dns` column; existing receipts keep
+an empty hostname. The admin History view reports `not available` when
+the resolver finds nothing. The job's captured IP and User-Agent remain
+available.
+
+Reverse DNS is not a device-name API and is **unverified**: local LAN DNS
+might yield `jenna-laptop.lan`, but event Wi-Fi, NAT, proxies or a
+misconfigured resolver may yield only a shared gateway/provider hostname, a
+spoofable PTR record, or no result. Hostnames and IPs should not be treated as
+proof of identity. The guest-facing form does not request a device name.
