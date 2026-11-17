@@ -39,7 +39,7 @@ DEFAULT = {
     "printer_host": "192.168.50.2", "printer_port": 9100,
     "printer_mdns_name": "", "printer_interface": "",
     "dry_run": True, "cut": True, "feed_lines": 3, "feed_mm": 50,
-    "max_message_chars": 160, "max_jobs_per_hour_per_ip": 3,
+    "max_message_chars": 160, "max_jobs_per_hour_per_ip": 6,
     "global_min_interval_seconds": 10, "max_queue": 8,
     "station_name": "FMI PRINT STATION", "footer": "AWOO responsibly!",
     "admin_token_env": "FMI_PRINT_ADMIN_TOKEN",
@@ -93,6 +93,10 @@ def load_config(path=CONFIG_FILE):
         raise ValueError("Invalid port")
     if not 1 <= int(conf["max_message_chars"]) <= 500:
         raise ValueError("max_message_chars must be 1..500")
+    if not 1 <= int(conf["max_jobs_per_hour_per_ip"]) <= 100:
+        raise ValueError("max_jobs_per_hour_per_ip must be 1..100")
+    if not 0 <= int(conf["global_min_interval_seconds"]) <= 3600:
+        raise ValueError("global_min_interval_seconds must be 0..3600")
     if int(conf["max_queue"]) < 1 or int(conf["max_queue"]) > 50:
         raise ValueError("max_queue must be 1..50")
     if int(conf["logo_width"]) not in (256, 384, 512, 576):
@@ -420,7 +424,8 @@ def public_config(conf):
     keys = ("station_name", "subtitle", "footer", "printer_host", "printer_port",
             "printer_mdns_name", "printer_interface",
             "dry_run", "cut", "feed_mm", "logo_enabled", "logo_width",
-            "default_amount", "currency", "challenge_enabled", "pet_draft_reactions")
+            "default_amount", "currency", "challenge_enabled", "pet_draft_reactions",
+            "max_jobs_per_hour_per_ip", "global_min_interval_seconds")
     return {key: conf.get(key) for key in keys}
 
 def worker(conf):
@@ -670,6 +675,16 @@ class Handler(BaseHTTPRequestHandler):
                     changed["printer_port"] = int(changed.get("printer_port", self.conf["printer_port"]))
                     if not 1 <= changed["printer_port"] <= 65535:
                         return self.reply(400, {"error": "Invalid port"})
+                    for limit_key, minimum, maximum in (("max_jobs_per_hour_per_ip", 1, 100),
+                                                        ("global_min_interval_seconds", 0, 3600)):
+                        if limit_key in changed:
+                            value = changed[limit_key]
+                            if type(value) is not int and not (isinstance(value, str) and value.isdecimal()):
+                                return self.reply(400, {"error": "Invalid " + limit_key})
+                            value = int(value)
+                            if not minimum <= value <= maximum:
+                                return self.reply(400, {"error": limit_key + " must be " + str(minimum) + ".." + str(maximum)})
+                            changed[limit_key] = value
                     for name_key in ("station_name", "subtitle", "footer"):
                         if name_key in changed:
                             changed[name_key] = str(changed[name_key])[:160]
