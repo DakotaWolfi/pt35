@@ -35,14 +35,16 @@ def unpack(raw):
     if msg.get("t") not in ("status","print","reply","img0","img1","img2"):
         raise ValueError("Unknown command")
     if msg["t"]=="print":
-        if set(msg) - {"v","t","id","name","message","code"}:
+        if set(msg) - {"v","t","id","name","message","a"}:
             raise ValueError("Unsupported fields in print command")
         for key,limit in (("name",40),("message",MAX_TEXT)):
             val=msg.get(key,"")
             if not isinstance(val,str) or not 1<=len(val)<=limit or any(ord(c)<32 or ord(c)>126 for c in val):
                 raise ValueError("Print fields must be short printable ASCII")
-    if msg["t"]=="print" and not (isinstance(msg.get("code"),str) and len(msg["code"])==6 and msg["code"].isascii() and msg["code"].isdecimal()):
-        raise ValueError("Print requires six-digit code")
+    if msg["t"] in ("print","img0") and not (
+        isinstance(msg.get("a"),str) and re.fullmatch(r"[0-9a-f]{16}",msg["a"])
+    ):
+        raise ValueError("Paired NFC signature required")
     if msg["t"] in ("img0","img1","img2"):
         if not ID.fullmatch(str(msg.get("s",""))):
             raise ValueError("Invalid image session")
@@ -51,8 +53,6 @@ def unpack(raw):
                 raise ValueError("Image size outside 8 KiB limit")
             if not (isinstance(msg.get("h"),str) and re.fullmatch(r"[0-9a-f]{16}",msg["h"])):
                 raise ValueError("Invalid image digest")
-            if not (isinstance(msg.get("c"),str) and re.fullmatch(r"[0-9]{6}",msg["c"])):
-                raise ValueError("Physical print code required")
         elif msg["t"]=="img1":
             if not (isinstance(msg.get("i"),int) and 0<=msg["i"]<=255):
                 raise ValueError("Invalid image chunk number")
