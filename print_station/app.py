@@ -703,13 +703,14 @@ class Handler(BaseHTTPRequestHandler):
                                         "logo_enabled": self.conf.get("logo_enabled",False)}
             global last_job_at
             now = time.monotonic()
-            ip = request_identity(self)
+            ip = "nfc-owner" if nfc_owner else request_identity(self)
             with lock:
-                history[ip] = [t for t in history.get(ip, []) if now - t < 3600]
-                if len(history[ip]) >= self.conf["max_jobs_per_hour_per_ip"]:
-                    return self.reply(429, {"error": "Hourly limit reached"})
-                if now - last_job_at < self.conf["global_min_interval_seconds"]:
-                    return self.reply(429, {"error": "Printer cooldown; try again shortly"})
+                if not nfc_owner:
+                    history[ip] = [t for t in history.get(ip, []) if now - t < 3600]
+                    if len(history[ip]) >= self.conf["max_jobs_per_hour_per_ip"]:
+                        return self.reply(429, {"error": "Hourly limit reached"})
+                    if now - last_job_at < self.conf["global_min_interval_seconds"]:
+                        return self.reply(429, {"error": "Printer cooldown; try again shortly"})
                 if jobs.full():
                     return self.reply(503, {"error": "Printer queue full"})
                 job_id = receipt_store.record(kind, receipt, source_ip=ip,
@@ -723,8 +724,9 @@ class Handler(BaseHTTPRequestHandler):
                     receipt["rendered_text"] = raw.decode("ascii")
                     receipt_store.update_payload(job_id, receipt)
                 jobs.put_nowait((job_id, raw))
-                history[ip].append(now)
-                last_job_at = now
+                if not nfc_owner:
+                    history[ip].append(now)
+                    last_job_at = now
                 statistics["queued"] += 1
             try:
                 dns_jobs.put_nowait((job_id, ip))
