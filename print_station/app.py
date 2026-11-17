@@ -48,6 +48,7 @@ lock = threading.Lock()
 history = {}
 last_job_at = 0.0
 statistics = {"queued": 0, "printed": 0, "failed": 0}
+printing_now = False
 dns_jobs = queue.Queue(maxsize=64)
 
 def reverse_dns_worker():
@@ -382,6 +383,9 @@ def worker(conf):
     while True:
         entry = jobs.get()
         job_id, raw = entry
+        global printing_now
+        with lock:
+            printing_now = True
         try:
             send_printer(raw, conf)
             receipt_store.complete(job_id, True)
@@ -394,6 +398,8 @@ def worker(conf):
             with lock:
                 statistics["failed"] += 1
         finally:
+            with lock:
+                printing_now = False
             jobs.task_done()
 
 HTML = """<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -505,6 +511,7 @@ class Handler(BaseHTTPRequestHandler):
                 snapshot = dict(statistics)
             self.reply(200, {"station": self.conf["station_name"], "queue": jobs.qsize(),
                              "dry_run": self.conf["dry_run"], "stats": snapshot,
+                             "printing": printing_now,
                              "nfc_url": self.conf["nfc_url"] or self.conf["public_base_url"],
                              "challenge_enabled": bool(self.conf.get("challenge_enabled"))})
         else: self.reply(404, {"error": "Not found"})
