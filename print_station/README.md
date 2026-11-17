@@ -347,3 +347,43 @@ performs SMBus read-byte probes, not EEPROM writes. An acknowledgement at
 0x53/0x57 does not prove the chip is an ST25DV16K. On this Orange Pi,
 bus 9 corresponds to `0x2519000.twi` and previously logged SCL timeouts;
 bus 20 is HDMI/DDC.
+
+## ST25DV setup on Orange Pi bus 0 and Epson DHCP lease diagnostics
+
+After fixing the bus-0 SDA connection and enabling I2C, the tag responds at
+0x53 and 0x57; the user's additional 0x2D address belongs to their NFC board
+setup and is not an unrelated mystery device. The integration deliberately
+writes only ST25DV user memory at 0x53.
+
+For an initial read-only NDEF preview (no tag or config edits):
+
+```bash
+cd ~/pt35/print_station
+sudo python3 setup_nfc_guest.py --bus 0
+```
+
+If the CC/TLV and existing data are recognized, run
+`sudo python3 setup_nfc_guest.py --bus 0 --apply` to write the current guest
+Wi-Fi URL, verify read-back, and enable NFC auto-updates in private
+`config.json`. Restart `fmi-print-display`. Do not enable writes if the
+read-only preview rejects the CC layout or bus communication is unstable.
+
+The app now prefers the **current dnsmasq lease** assigned to the expected
+Epson MAC `f8:25:51:79:eb:5f` on `10.88.77.0/24`, instead of trusting a
+stale `printer_host` value. The guest Overview shows
+`Epson DHCP: <IP>` when the lease file can be read. The lease normally lives
+at `/var/lib/misc/dnsmasq.leases`. Run:
+
+```bash
+sudo journalctl -u dnsmasq -n 40 --no-pager
+sudo cat /var/lib/misc/dnsmasq.leases
+ls -l /var/lib/misc/dnsmasq.leases
+ip -4 addr show dev enx9cebe8ec46e1
+nc -vz 10.88.77.30 9100
+```
+
+If the lease is at a different path or unreadable by the Print Station
+service user, app detection falls back to mDNS when configured.
+`setup_printer_dhcp.sh --apply` reserves `10.88.77.30` for that MAC,
+but **the Epson must renew DHCP** (usually via printer restart) to move from
+an earlier lease such as `10.88.77.39`.
