@@ -219,6 +219,13 @@ def main():
         last_periodic=0.0
         while True:
             try:
+                # Admin settings use atomic writes. Reload the web-code and
+                # pet-commentary toggles without restarting this service.
+                conf=json.loads(Path(args.config).read_text())
+                setting=conf.get("display",{})
+                rotation=int(setting.get("rotation",180))
+                delay=max(60,int(setting.get("refresh_interval_seconds",90)))
+                min_refresh=max(20,int(setting.get("activity_min_refresh_seconds",25)))
                 state=snapshot(conf)
                 frame=render(state,rotation)
                 frame_bytes=frame.tobytes()
