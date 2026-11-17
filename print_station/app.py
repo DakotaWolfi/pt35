@@ -140,11 +140,14 @@ def make_ticket(name, message, conf, details=None, ticket_id=None, issued_at=Non
         issued = stamp.isoformat(timespec="seconds")
     ident = f"{int(ticket_id):05d}" if ticket_id is not None else "PENDING"
     divider = "-" * 32
+    custom = bool(details.get("custom_fine"))
+    heading = safe(details.get("fine_title", "AWOO FINE"), 40) if custom else "AWOO FINE"
+    status = safe(details.get("fine_status", "UNPAID"), 30) if custom else "UNPAID"
     lines = [
         safe(conf["station_name"], 42),
         safe(conf.get("subtitle", ""), 42),
         divider,
-        "AWOO FINE",
+        heading,
         f"Ticket {ident}",
         f"Issued: {issued}",
         f"Offender: {safe(name, 40)}",
@@ -160,7 +163,7 @@ def make_ticket(name, message, conf, details=None, ticket_id=None, issued_at=Non
     lines.append(divider)
     amount = safe(details.get("amount", ""), 40)
     if amount:
-        lines.extend(["", f"FINE: {amount}", "Status: UNPAID", ""])
+        lines.extend(["", f"FINE: {amount}", f"Status: {status}", ""])
     lines.extend([divider, safe(conf.get("footer", ""), 160),
                   "NO LEGAL FORCE - JUST FURRY NONSENSE", ""])
     return "\n".join(lines).encode("ascii")
@@ -571,6 +574,17 @@ class Handler(BaseHTTPRequestHandler):
                 amount = str(payload.get("amount", ""))[:24]
                 currency = str(payload.get("currency", "CHF"))[:8]
                 details["amount"] = (currency + " " + amount) if amount else ""
+                # A custom fine is still a fine: same rate limits, ticket IDs,
+                # audit trail, and parody disclaimer as the quick AWOO template.
+                custom_fine = payload.get("custom_fine") is True
+                if custom_fine:
+                    title = str(payload.get("fine_title", "")).strip()
+                    status = str(payload.get("fine_status", "")).strip()
+                    if not (1 <= len(title) <= 40 and 1 <= len(status) <= 30):
+                        return self.reply(400, {"error": "Custom title or status is missing or too long"})
+                    if any(ord(c) < 32 or ord(c) == 127 for c in title + status):
+                        return self.reply(400, {"error": "Invalid title or status characters"})
+                    details.update({"custom_fine": True, "fine_title": title, "fine_status": status})
                 receipt = {"name": name, "message": message, **details,
                            "amount": amount, "currency": currency}
                 # Final ticket number is assigned after inserting the audit row.
