@@ -26,6 +26,8 @@ class MailboxReader(Reader):
         Firmware-specific Manchester stream; requires hardware validation.
         """
         frame=encode_vcd(payload)
+        if len(frame)>512:
+            raise ValueError("Encoded NFC-V frame exceeds ST25R3916 512-byte FIFO")
         ticks=min(65535,max(1,int(timeout*13560000/4096)))
         self.update(0x12,setbits=1)
         self.wr(0x10,ticks>>8)
@@ -79,7 +81,7 @@ def transact(reader,uid,packet,timeout=5):
         ctrl=rf_command(reader,uid,0xad,0x0d)
         if ctrl and (ctrl[0]&0x02):
             length=rf_command(reader,uid,0xab)[0]+1
-            if not 1<=length<=192:
+            if not 1<=length<=112:
                 raise ValueError("Unexpected reply length")
             # 0xAC: read message starting offset 0; count is length-1.
             reply=rf_command(reader,uid,0xac,0,length-1)
