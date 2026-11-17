@@ -31,7 +31,6 @@ class PrintPetApp(tk.Tk):
         self.minsize(640,400)
         self.configure(bg="#111923")
         self.uid=tk.StringVar(value=DEFAULT_UID)
-        self.code=tk.StringVar()
         self.name=tk.StringVar(value="PT35")
         self.message=tk.StringVar(value="AWOO from PT35!")
         self.image_path=tk.StringVar()
@@ -68,8 +67,8 @@ class PrintPetApp(tk.Tk):
         ttk.Entry(tickets,textvariable=self.name).grid(row=0,column=1,sticky="ew",pady=5)
         ttk.Label(tickets,text="Receipt message").grid(row=1,column=0,sticky="w",pady=5)
         ttk.Entry(tickets,textvariable=self.message).grid(row=1,column=1,sticky="ew",pady=5)
-        ttk.Label(tickets,text="Six-digit code on Print Pet").grid(row=2,column=0,sticky="w",pady=5)
-        ttk.Entry(tickets,textvariable=self.code,width=12).grid(row=2,column=1,sticky="w",pady=5)
+        ttk.Label(tickets,text="Paired owner NFC key — no display code needed").grid(
+            row=2,column=0,columnspan=2,sticky="w",pady=5)
         ttk.Button(tickets,text="Print text over NFC",command=lambda:self._run("print")).grid(row=3,column=0,columnspan=2,sticky="ew",pady=12)
 
         ttk.Label(pictures,text="Photo / image").grid(row=0,column=0,sticky="w",pady=5)
@@ -121,10 +120,6 @@ class PrintPetApp(tk.Tk):
             return
         cmd=[sys.executable,"-u",str(CLI),action,"--uid",uid]
         if action in ("print","image"):
-            code=self.code.get().strip()
-            if not re.fullmatch(r"[0-9]{6}",code):
-                messagebox.showerror("Print code","Enter the six-digit code displayed on Print Pet",parent=self)
-                return
             if action=="print":
                 name=self.name.get().strip()
                 msg=self.message.get().strip()
@@ -132,7 +127,7 @@ class PrintPetApp(tk.Tk):
                     messagebox.showerror("Text receipt","Use short ASCII fields (1–40 characters)",parent=self)
                     return
                 try:
-                    pack("print","00000000",name=name,message=msg,code=code)
+                    pack("print","00000000",name=name,message=msg,a="0"*16)
                 except ValueError as exc:
                     messagebox.showerror("NFC receipt limit",str(exc)+"; use a shorter message.",parent=self)
                     return
@@ -146,7 +141,7 @@ class PrintPetApp(tk.Tk):
             if not messagebox.askyesno("Confirm NFC print",
                 "Send this print job to Print Pet over NFC?\nKeep the antennas aligned until acknowledged.",parent=self):
                 return
-            cmd.extend(["--code",code,"--confirm"])
+            cmd.append("--confirm")
         self.busy=True
         self.state.set("Communicating over NFC…")
         def work():
