@@ -46,6 +46,14 @@ def record(kind, payload, source_ip="", user_agent=""):
         db.commit()
         return cursor.lastrowid
 
+def update_payload(job_id, payload):
+    """Persist the finalized receipt with its assigned database ticket number."""
+    raw = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode()
+    with _guard, connection() as db:
+        db.execute("UPDATE receipts SET payload=? WHERE id=?",
+                   (zlib.compress(raw, level=9), int(job_id)))
+        db.commit()
+
 def complete(job_id, success, error=""):
     with _guard, connection() as db:
         db.execute("UPDATE receipts SET finished=?,state=?,error=? WHERE id=?",
