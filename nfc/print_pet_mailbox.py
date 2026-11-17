@@ -148,7 +148,7 @@ def main():
                 temporary=target.with_name(target.name+".pending")
                 fd=os.open(str(temporary),os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
                 with os.fdopen(fd,"w",encoding="ascii") as stream:
-                    stream.write(keydata.hex()+"\\n")
+                    stream.write(keydata.hex()+chr(10))
                     stream.flush()
                     os.fsync(stream.fileno())
                 confirmid=secrets.token_hex(4)
