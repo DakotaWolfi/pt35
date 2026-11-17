@@ -17,6 +17,7 @@ import threading
 import time
 import receipt_store
 import challenge
+from image_prepare import prepare_receipt_image, MAX_UPLOAD
 from pet_activity import report as pet_report
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -572,7 +573,7 @@ class Handler(BaseHTTPRequestHandler):
         else: self.reply(404, {"error": "Not found"})
     def do_POST(self):
         if not self.permitted(): return
-        if urlsplit(self.path).path not in ("/api/print", "/api/custom", "/api/settings", "/api/logo", "/api/logo/remove", "/api/probe"):
+        if urlsplit(self.path).path not in ("/api/print", "/api/custom", "/api/image/prepare", "/api/settings", "/api/logo", "/api/logo/remove", "/api/probe"):
             return self.reply(404, {"error": "Not found"})
         # Same-origin check prevents common cross-site drive-by printing.
         origin = self.headers.get("Origin")
@@ -583,6 +584,23 @@ class Handler(BaseHTTPRequestHandler):
                 expected.add(self.conf["public_base_url"].rstrip("/"))
             if origin.rstrip("/") not in expected:
                 return self.reply(403, {"error": "Origin not allowed"})
+        if urlsplit(self.path).path=="/api/image/prepare":
+            # Images are processed in RAM, never persisted until a validated
+            # custom receipt is explicitly submitted. The same origin and
+            # local/public access policy still applies.
+            try:
+                size=int(self.headers.get("Content-Length","0"))
+                if not 0<size<=MAX_UPLOAD:
+                    return self.reply(413,{"error":"Image upload limit: 12 MiB"})
+                if self.headers.get("Content-Type","").split(";")[0].strip()!="application/octet-stream":
+                    return self.reply(415,{"error":"Binary image upload required"})
+                image=prepare_receipt_image(self.rfile.read(size))
+                return self.reply(200,image)
+            except ValueError as exc:
+                return self.reply(400,{"error":str(exc)})
+            except Exception:
+                LOG.exception("Image conversion failed")
+                return self.reply(500,{"error":"Image converter unavailable"})
         try:
             size = int(self.headers.get("Content-Length", "0"))
             if size < 1 or size > (2500000 if urlsplit(self.path).path == "/api/logo" else (85000 if urlsplit(self.path).path == "/api/custom" else 4096)):
