@@ -117,29 +117,63 @@ def make_ticket(name, message, conf, details=None):
     lines += [safe(message), "-" * 32, safe(conf["footer"]), ""]
     return "\n".join(lines).encode("ascii")
 
+def raster_image_block(png_b64):
+    """Decode a strictly limited PNG and emit Epson GS v 0 raster bytes."""
+    from PIL import Image, ImageOps, UnidentifiedImageError
+    try:
+        binary = base64.b64decode(png_b64, validate=True)
+        with Image.open(io.BytesIO(binary)) as im:
+            if im.format != "PNG" or im.width > 384 or im.height > 240 or im.width < 1 or im.height < 1:
+                raise ValueError("Image must be a PNG at most 384 x 240")
+            im.load()
+            rgba = im.convert("RGBA")
+        on_white = Image.new("RGBA", rgba.size, "white")
+        on_white.alpha_composite(rgba)
+        bw = ImageOps.grayscale(on_white.convert("RGB")).point(lambda v: 255 if v >= 150 else 0)
+        w,h=bw.size
+        stride=(w+7)//8
+        dots=bytearray(stride*h)
+        px=bw.load()
+        for y in range(h):
+            for x in range(w):
+                if px[x,y] == 0:
+                    dots[y*stride+x//8] |= 0x80 >> (x%8)
+        return bytes([27,97,1,29,118,48,0,stride&255,stride>>8,h&255,h>>8])+dots+b"\n"
+    except (OSError, ValueError, UnidentifiedImageError) as exc:
+        raise ValueError("Invalid custom receipt PNG") from exc
+
 def make_custom_receipt(payload, conf):
-    """Structured ESC/POS-safe custom receipt; fixed layout options, no raw commands."""
+    """Render text and limited bitmap blocks in their requested receipt order."""
     title = clean_line(payload.get("title", "CUSTOM RECEIPT"), 48)
     subtitle = clean_line(payload.get("subtitle", ""), 64)
     footer = clean_line(payload.get("footer", conf["footer"]), 100)
-    lines = [title]
-    if subtitle: lines.append(subtitle)
-    lines.append("-" * 32)
+    result = bytearray((title + "\n" + (subtitle+"\n" if subtitle else "") + "-"*32+"\n").encode("ascii"))
     for item in payload.get("lines", []):
-        kind = item["type"]
-        value = clean_line(item.get("text", ""), 160)
-        if kind == "rule":
-            lines.append("-" * 32)
-        elif kind == "blank":
-            lines.append("")
-        elif kind == "heading":
-            lines.append(value.upper()[:42])
-        elif kind == "pair":
-            lines.append(clean_line(item.get("label", ""), 40) + ": " + value)
-        else:
-            lines.append(value)
-    lines.extend(["-" * 32, footer, ""])
-    return "\n".join(lines).encode("ascii", errors="replace")
+        kind=item["type"]
+        value=clean_line(item.get("text", ""),160)
+        if kind=="image":
+            result.extend(raster_image_block(item["image"]))
+            continue
+        if kind=="rule": value="-"*32
+        elif kind=="blank": value=""
+        elif kind=="heading": value=value.upper()[:42]
+        elif kind=="pair": value=clean_line(item.get("label",""),40)+": "+value
+        result.extend((value+"\n").encode("ascii", errors="replace"))
+    result.extend(("-"*32+"\n"+footer+"\n").encode("ascii",errors="replace"))
+    return bytes(result)
+
+def custom_receipt_text(payload):
+    """Human-readable audit preview; image binary is in payload lines, not text."""
+    lines=[payload["title"],payload.get("subtitle",""),"-"*32]
+    for item in payload["lines"]:
+        k=item["type"]
+        if k=="image": lines.append("[IMAGE: PNG, embedded in saved receipt]")
+        elif k=="rule": lines.append("-"*32)
+        elif k=="blank": lines.append("")
+        elif k=="pair": lines.append(item.get("label","")+": "+item.get("text",""))
+        elif k=="heading": lines.append(item.get("text","").upper())
+        else: lines.append(item.get("text",""))
+    return "\n".join(lines+["-"*32,payload.get("footer","")])
 
 def clean_line(value, limit):
     return "".join(c if 32 <= ord(c) < 127 else "?" for c in str(value))[:limit]
@@ -148,20 +182,36 @@ def validate_custom(payload, conf):
     title = str(payload.get("title", "")).strip()
     items = payload.get("lines", [])
     if not (1 <= len(title) <= 48 and isinstance(items, list) and 1 <= len(items) <= 25):
-        raise ValueError("Custom receipt needs a title and 1–25 lines")
-    allowed_types = {"text", "heading", "pair", "rule", "blank"}
+        raise ValueError("Custom receipt needs a title and 1-25 lines")
+    allowed_types = {"text", "heading", "pair", "rule", "blank", "image"}
     clean_items=[]
+    image_count=0
+    total_binary=0
     for entry in items:
-        if not isinstance(entry, dict) or entry.get("type") not in allowed_types:
+        if not isinstance(entry,dict) or entry.get("type") not in allowed_types:
             raise ValueError("Unsupported receipt item")
         typ=entry["type"]
-        v=str(entry.get("text", ""))
-        label=str(entry.get("label", ""))
-        if len(v)>160 or len(label)>40 or "\n" in v or "\n" in label:
+        v=str(entry.get("text",""))
+        label=str(entry.get("label",""))
+        if len(v)>160 or len(label)>40 or "\n" in v or "\n" in label or "\r" in v or "\r" in label:
             raise ValueError("Receipt item too long")
         if typ in ("text","heading","pair") and not v.strip():
             raise ValueError("Receipt line cannot be empty")
-        clean_items.append({"type":typ,"text":v,"label":label})
+        clean={"type":typ,"text":v,"label":label}
+        if typ=="image":
+            image_count+=1
+            if image_count>2:
+                raise ValueError("Maximum 2 images per receipt")
+            png=str(entry.get("image",""))
+            if len(png)>44000:
+                raise ValueError("Image exceeds 32 KiB")
+            total_binary+=len(png)
+            if total_binary>65000:
+                raise ValueError("Receipt images too large")
+            # Decode and validate before placing job in queue or history.
+            raster_image_block(png)
+            clean["image"]=png
+        clean_items.append(clean)
     return {"title":title,"subtitle":str(payload.get("subtitle",""))[:64],
             "footer":str(payload.get("footer",conf["footer"]))[:100],
             "lines":clean_items}
@@ -348,7 +398,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(403, {"error": "Origin not allowed"})
         try:
             size = int(self.headers.get("Content-Length", "0"))
-            if size < 1 or size > (2500000 if urlsplit(self.path).path == "/api/logo" else 4096):
+            if size < 1 or size > (2500000 if urlsplit(self.path).path == "/api/logo" else (85000 if urlsplit(self.path).path == "/api/custom" else 4096)):
                 return self.reply(413, {"error": "Invalid request size"})
             if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
                 return self.reply(415, {"error": "JSON required"})
@@ -425,7 +475,7 @@ class Handler(BaseHTTPRequestHandler):
                            "amount": amount, "currency": currency}
                 raw = make_ticket(name, message, self.conf, details)
             receipt["device_name"] = str(payload.get("device_name","")).strip()[:64]
-            receipt["rendered_text"] = raw.decode("ascii")
+            receipt["rendered_text"] = raw.decode("ascii",errors="replace") if kind=="fine" else custom_receipt_text(receipt)
             receipt["print_options"] = {"feed_mm": self.conf["feed_mm"], "cut": self.conf["cut"],
                                         "dry_run": self.conf["dry_run"],
                                         "logo_enabled": self.conf.get("logo_enabled",False)}
