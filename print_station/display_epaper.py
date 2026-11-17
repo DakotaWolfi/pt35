@@ -48,39 +48,42 @@ def render_access_qr(url):
     return raw.resize((raw.width * scale, raw.height * scale), Image.Resampling.NEAREST)
 
 def render(state,rotation=180):
+    if rotation not in (0,180): raise ValueError("Rotation must be 0 or 180")
     img=Image.new("1",(W,H),1)
     d=ImageDraw.Draw(img)
-    guest_url=state.get("guest_url","")
-    if guest_url:
-        d.rectangle((0,0,W-1,23),fill=0)
-        d.text((6,3),"FMI PRINT STATION",font=font(13,True),fill=1)
+    d.rectangle((0,0,249,19),fill=0)
+    d.text((5,2),"FMI PRINT PET",font=font(12,True),fill=1)
+    printing=bool(state.get("printing"))
+    online=bool(state.get("printer_ok"))
+    status="PRINTING" if printing else ("READY" if online else "OFFLINE")
+    mood="EXCITED" if printing else ("HAPPY" if online else "SAD")
+    d.polygon([(5,57),(14,30),(32,45),(53,30),(62,57)],fill=1,outline=0)
+    d.ellipse((8,41,61,101),outline=0,width=2)
+    d.ellipse((21,63,27,70),fill=0)
+    d.ellipse((43,63,49,70),fill=0)
+    d.polygon([(33,78),(39,78),(36,83)],fill=0)
+    d.arc((28,82,46,96),180 if not online else 0,360 if not online else 180,fill=0,width=2)
+    d.text((8,106),mood,font=font(9,True),fill=0)
+    d.text((69,27),status,font=font(12,True),fill=0)
+    d.text((69,44),"Q:{} P:{}".format(state.get("queue",0),state.get("printed",0)),font=font(10),fill=0)
+    if state.get("challenge_code"):
+        d.text((69,63),"PRINT CODE",font=font(9,True),fill=0)
+        d.text((69,78),str(state["challenge_code"]),font=font(17,True),fill=0)
+    else:
+        d.text((69,74),"AWOO :3",font=font(10,True),fill=0)
+    url=state.get("guest_url","")
+    if url:
         try:
-            qr=render_access_qr(guest_url)
-            img.paste(qr,(6+(96-qr.width)//2,25+(96-qr.height)//2))
-            d.text((109,30),"SCAN OR TAP",font=font(12,True),fill=0)
-            d.text((109,51),"TO PRINT",font=font(12,True),fill=0)
-            d.line((109,75,242,75),fill=0)
-            d.text((109,82),"AWOO FINE",font=font(11,True),fill=0)
-            d.text((109,100),"QUEUE {}".format(state.get("queue","?")),font=font(10),fill=0)
-            return img.rotate(rotation) if rotation else img
+            import qrcode
+            qr=qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L,box_size=1,border=4)
+            qr.add_data(url);qr.make(fit=True)
+            bitmap=qr.make_image(fill_color="black",back_color="white").convert("1")
+            scale=max(1,76//bitmap.width)
+            bitmap=bitmap.resize((bitmap.width*scale,bitmap.height*scale),Image.Resampling.NEAREST)
+            img.paste(bitmap,(W-bitmap.width-2,25))
+            d.text((183,106),"SCAN / TAP",font=font(8,True),fill=0)
         except (ImportError, ValueError) as exc:
-            LOG.warning("QR display unavailable: %s",exc)
-    d.rectangle((0,0,W-1,28),fill=0)
-    d.text((7,5),"FMI PRINT STATION",font=font(14,True),fill=1)
-    paste_paw(img)
-    d.text((9,34),"AWOO FINE OFFICE",font=font(12,True),fill=0)
-    d.line((8,53,242,53),fill=0)
-    online=state.get("printer_ok",False)
-    icon_printer(d,10,62,online)
-    d.text((48,59),"PRINTER READY" if online else "PRINTER OFFLINE",
-           font=font(13,True),fill=0)
-    d.text((48,82),"QUEUE {}  PRINTED {}".format(state.get("queue","?"),
-                                                    state.get("printed","?")),
-           font=font(11),fill=0)
-    d.line((8,101,242,101),fill=0)
-    d.text((9,105),("DRY RUN" if state.get("dry_run",True) else "LIVE")
-           +"  |  LOCAL NETWORK",font=font(10),fill=0)
-    if rotation not in (0,180): raise ValueError("Rotation must be 0 or 180")
+            LOG.warning("QR unavailable: %s",exc)
     return img.rotate(rotation) if rotation else img
 
 def guest_print_url(conf):
