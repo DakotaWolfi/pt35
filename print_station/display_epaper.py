@@ -5,6 +5,7 @@ import json
 import logging
 from pathlib import Path
 import socket
+import subprocess
 import time
 import urllib.request
 from PIL import Image, ImageDraw, ImageFont
@@ -81,6 +82,23 @@ def render(state,rotation=180):
     if rotation not in (0,180): raise ValueError("Rotation must be 0 or 180")
     return img.rotate(rotation) if rotation else img
 
+def guest_print_url(conf):
+    """Pick explicit guest URL, otherwise current IPv4 of the Wi-Fi link."""
+    if conf.get("nfc_url"):
+        return str(conf["nfc_url"])
+    try:
+        raw=subprocess.check_output(["ip","-j","-4","addr","show","dev","wlan0"],
+                                     text=True,timeout=2)
+        interfaces=json.loads(raw)
+        for iface in interfaces:
+            for entry in iface.get("addr_info",[]):
+                if entry.get("family") == "inet" and entry.get("local"):
+                    return "http://{}:{}/".format(entry["local"],int(conf.get("port",8767)))
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    return ""
+
+
 def snapshot(conf):
     try:
         with socket.create_connection(__import__("app").printer_destination(conf),timeout=2):
@@ -91,7 +109,7 @@ def snapshot(conf):
             status=json.load(r)
     except Exception: status={}
     stats=status.get("stats",{})
-    return {"guest_url":str(conf.get("nfc_url") or ""),
+    return {"guest_url":guest_print_url(conf),
             "printer_ok":online,"queue":status.get("queue","?"),
             "printed":stats.get("printed","?"),"dry_run":status.get("dry_run",conf.get("dry_run",True))}
 
@@ -115,10 +133,10 @@ def main():
             try:
                 epd.init()
                 state=snapshot(conf)
-                if conf.get("nfc_auto_update") and conf.get("nfc_url") and conf.get("nfc_i2c_bus") is not None:
+                if conf.get("nfc_auto_update") and state.get("guest_url") and conf.get("nfc_i2c_bus") is not None:
                     try:
                         from nfc_tag import sync
-                        sync(int(conf["nfc_i2c_bus"]), conf["nfc_url"], allow_write=True)
+                        sync(int(conf["nfc_i2c_bus"]), state["guest_url"], allow_write=True)
                     except Exception:
                         LOG.exception("Could not synchronize ST25DV16K guest URL")
                 epd.display(render(state,rotation))
