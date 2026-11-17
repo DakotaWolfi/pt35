@@ -61,7 +61,9 @@ class PrintPetApp(tk.Tk):
         ttk.Entry(status,textvariable=self.uid,width=25).grid(row=0,column=1,sticky="ew",pady=5)
         ttk.Label(status,textvariable=self.report,font=("DejaVu Sans",13)).grid(row=1,column=0,columnspan=2,sticky="w",pady=20)
         ttk.Button(status,text="Read NFC status",command=lambda:self._run("status")).grid(row=2,column=0,columnspan=2,sticky="ew",pady=6)
-        ttk.Label(status,text="No Wi-Fi required. Hold the NFC antennas aligned until the reply arrives.").grid(row=3,column=0,columnspan=2,sticky="w",pady=10)
+        ttk.Button(status,text="Pair owner key (arm via SSH first)",
+                   command=lambda:self._run("pair")).grid(row=3,column=0,columnspan=2,sticky="ew",pady=6)
+        ttk.Label(status,text="No Wi-Fi required. Hold the NFC antennas aligned until the reply arrives.").grid(row=4,column=0,columnspan=2,sticky="w",pady=10)
 
         ttk.Label(tickets,text="Recipient / name").grid(row=0,column=0,sticky="w",pady=5)
         ttk.Entry(tickets,textvariable=self.name).grid(row=0,column=1,sticky="ew",pady=5)
@@ -119,6 +121,14 @@ class PrintPetApp(tk.Tk):
             messagebox.showerror("Invalid UID","Expected 16 hex digits for the external Print Pet tag",parent=self)
             return
         cmd=[sys.executable,"-u",str(CLI),action,"--uid",uid]
+        if action=="pair":
+            if not messagebox.askyesno("One-time NFC owner pairing",
+                "Arm pairing on Print Pet over SSH first:\n"
+                "python3 ~/pt35/print_station/nfc_pairing.py arm\n\n"
+                "Then keep PT35 aligned with the tag for BOTH pairing steps.\n"
+                "This will replace any previous PT35 owner key.",parent=self):
+                return
+            cmd.append("--confirm")
         if action in ("print","image"):
             if action=="print":
                 name=self.name.get().strip()
