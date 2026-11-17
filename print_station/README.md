@@ -419,7 +419,7 @@ drop mid-request. The PT35 ST25R3916 backend is shared with its existing
 NFC scanner, so stop the scanner/GUI before running the mailbox client.
 
 Protocol: `print_station/mailbox_protocol.py` defines bounded FMP1 JSON
-messages, with eight-hex-character request IDs. `mailbox_host.py` handles
+messages, with eight-hex-character request IDs and a 112-byte application frame limit. `mailbox_host.py` handles
 I2C side; `nfc/print_pet_mailbox.py` RF side. Every print call still uses
 normal application challenge/rate limits/audit records. A random ID is
 deduplicated for 90 seconds in daemon RAM; this is **not cryptographic
