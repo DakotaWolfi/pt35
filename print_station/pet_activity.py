@@ -37,11 +37,15 @@ def report(kind):
 
 def current(now=None):
     now=time.time() if now is None else now
-    for kind in ("error","printing","printed","nfc_print","web_print","pair","nfc","web"):
+    events=("web","nfc","pair","web_print","nfc_print","printing","printed","error")
+    latest=(-1.0,-1,"idle")
+    for priority,kind in enumerate(events):
         try:
             data=json.loads((ROOT/("activity_"+kind+".json")).read_text(encoding="ascii"))
-            age=now-float(data["at"])
-            if 0<=age<DURATION[kind]:return kind
+            at=float(data["at"])
+            age=now-at
+            if 0<=age<DURATION[kind] and (at,priority)>(latest[0],latest[1]):
+                latest=(at,priority,kind)
         except (OSError,ValueError,TypeError,KeyError):
             pass
-    return "idle"
+    return latest[2]
