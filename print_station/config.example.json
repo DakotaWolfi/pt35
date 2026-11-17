@@ -18,7 +18,7 @@
   "feed_lines": 3,
   "feed_mm": 50,
   "max_message_chars": 160,
-  "max_jobs_per_hour_per_ip": 3,
+  "max_jobs_per_hour_per_ip": 6,
   "global_min_interval_seconds": 10,
   "max_queue": 8,
   "station_name": "FMI PRINT STATION",
