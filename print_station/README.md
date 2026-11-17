@@ -322,7 +322,7 @@ off requires an explicit private config change and service restart.
 
 For a short-lived owner pass, open the admin HTTPS Settings page, enter the
 admin token and press **Get temporary print pass**. The resulting 10-character
-pass and QR can be shared with a trusted visitor. It is a **printing-only**
+pass and QR can be shared with a trusted visitor. Scanning the QR opens the\nguest page with the pass prefilled via a URL fragment (not an admin URL).\nIt is a **printing-only**
 bypass, NOT an admin token, and works for at most 10 minutes. It does not
 bypass rate or queue limits. The pass is issued only via an authenticated
 HTTPS admin endpoint; unauthenticated guests cannot request it.
