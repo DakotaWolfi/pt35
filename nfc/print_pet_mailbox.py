@@ -132,16 +132,36 @@ def main():
             reader.initialize()
             print("Hold PT35's NFC reader at the Print Pet tag throughout exchange.",flush=True)
             if args.action=="pair":
-                result=transact(reader,uid,pack("pair",secrets.token_hex(4)))
-                if not result.get("k"):
+                from cryptography.hazmat.primitives.asymmetric import x25519
+                from cryptography.hazmat.primitives.serialization import Encoding,PublicFormat
+                from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+                from cryptography.hazmat.primitives import hashes
+                from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+                private=x25519.X25519PrivateKey.generate()
+                pub=private.public_key().public_bytes(Encoding.Raw,PublicFormat.Raw)
+                pair_id=secrets.token_hex(4)
+                result=transact(reader,uid,pack("pair",pair_id,
+                    p=base64.b64encode(pub).decode("ascii")))
+                if not result.get("p"):
                     raise RuntimeError("Print Pet pairing rejected: "+str(result))
-                import base64
-                keydata=base64.b64decode(result["k"],validate=True)
+                server_pub=base64.b64decode(result["p"],validate=True)
+                if len(server_pub)!=32:
+                    raise ValueError("Invalid server X25519 public key")
+                peer=x25519.X25519PublicKey.from_public_bytes(server_pub)
+                shared=private.exchange(peer)
+                nonce_salt=bytes.fromhex(pair_id)
+                wrapping_key=HKDF(algorithm=hashes.SHA256(),length=32,
+                                  salt=nonce_salt,
+                                  info=b"FMI Print Pet NFC pairing v2").derive(shared)
+                result=transact(reader,uid,pack("pair-key",secrets.token_hex(4),s=pair_id))
+                if not result.get("c"):
+                    raise RuntimeError("Print Pet secret transfer rejected: "+str(result))
+                ciphertext=base64.b64decode(result["c"],validate=True)
+                nonce=hashlib.sha256(b"FMI-NFC-pair"+nonce_salt).digest()[:12]
+                keydata=AESGCM(wrapping_key).decrypt(nonce,ciphertext,nonce_salt)
                 if len(keydata)!=32:
-                    raise ValueError("Incorrect pairing key length")
-                session=result["s"]
-                if len(session)!=8:
-                    raise ValueError("Invalid pairing session")
+                    raise ValueError("Incorrect decrypted pairing key length")
+                session=pair_id
                 target=args.key_file.expanduser()
                 target.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
                 os.chmod(target.parent,0o700)
