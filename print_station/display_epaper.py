@@ -64,11 +64,13 @@ def render(state,rotation=180):
     elif activity in ("nfc_print","web_print"):status="QUEUED"
     else:status="READY"
     modes={
-        "error":("annoyed","GRUMPY","TRY AGAIN"),
+        "error":("annoyed","GRUMPY","PRINT ERROR"),
+        "printing":("startled","EXCITED","PRINTING!"),
+        "printed":("smug","PROUD","GOOD JOB!"),
         "nfc":("curious","CURIOUS","NFC HELLO!"),
-        "pair":("curious_2","CURIOUS","PAIRING"),
+        "pair":("listening","CURIOUS","PAIRING"),
         "nfc_print":("startled","EXCITED","NFC RECEIPT"),
-        "web":("curious","CURIOUS","WEB VISITOR"),
+        "web":("social","SOCIAL","WEB VISITOR"),
         "web_print":("startled","EXCITED","WEB RECEIPT"),
         "idle":("happy","HAPPY","AWOO :3"),
     }
