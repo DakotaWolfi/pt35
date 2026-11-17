@@ -34,5 +34,7 @@
     "enabled": true,
     "rotation": 180,
     "refresh_interval_seconds": 90
-  }
+  },
+  "admin_port": 8768,
+  "require_https_proxy": false
 }
