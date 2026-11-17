@@ -126,20 +126,45 @@ def allowed(addr, conf):
     mode = conf["access_mode"]
     return mode in ("public", "both") or client_is_local(addr, conf)
 
-def make_ticket(name, message, conf, details=None):
-    # ASCII-only on purpose: reliable across older Epson ESC/POS models.
-    def safe(x):
-        return "".join(ch if (ord(ch) >= 32 or ch == "\n") else " " for ch in x).encode("ascii", errors="replace").decode("ascii")
+def make_ticket(name, message, conf, details=None, ticket_id=None, issued_at=None):
+    """Detailed, left-photo-style AWOO fine with real ticket number and local time."""
+    def safe(value, limit=100):
+        return "".join(
+            c if 32 <= ord(c) < 127 else " " for c in str(value)
+        )[:limit]
     details = details or {}
-    lines = [safe(conf["station_name"])[:42], safe(conf.get("subtitle", ""))[:42],
-             "-" * 32, "AWOO FINE / FMI TICKET", "To: " + safe(name)]
+    stamp = issued_at or dt.datetime.now().astimezone()
+    if isinstance(stamp, str):
+        issued = safe(stamp, 48)
+    else:
+        issued = stamp.isoformat(timespec="seconds")
+    ident = f"{int(ticket_id):05d}" if ticket_id is not None else "PENDING"
+    divider = "-" * 32
+    lines = [
+        safe(conf["station_name"], 42),
+        safe(conf.get("subtitle", ""), 42),
+        divider,
+        "AWOO FINE",
+        f"Ticket {ident}",
+        f"Issued: {issued}",
+        f"Offender: {safe(name, 40)}",
+    ]
     for title, key in (("Issued by", "issuer"), ("Location", "location"),
-                       ("Offence", "offence"), ("Amount", "amount")):
-        value = safe(str(details.get(key, "")))[:80]
+                       ("Offence", "offence")):
+        value = safe(details.get(key, ""), 80)
         if value:
-            lines.append(title + ": " + value)
-    lines += [safe(message), "-" * 32, safe(conf["footer"]), ""]
+            lines.append(f"{title}: {value}")
+    note = safe(message, 160)
+    if note:
+        lines.append(note)
+    lines.append(divider)
+    amount = safe(details.get("amount", ""), 40)
+    if amount:
+        lines.extend(["", f"FINE: {amount}", "Status: UNPAID", ""])
+    lines.extend([divider, safe(conf.get("footer", ""), 160),
+                  "NO LEGAL FORCE - JUST FURRY NONSENSE", ""])
     return "\n".join(lines).encode("ascii")
+
 
 def raster_image_block(png_b64):
     """Decode a strictly limited PNG and emit Epson GS v 0 raster bytes."""
@@ -548,7 +573,8 @@ class Handler(BaseHTTPRequestHandler):
                 details["amount"] = (currency + " " + amount) if amount else ""
                 receipt = {"name": name, "message": message, **details,
                            "amount": amount, "currency": currency}
-                raw = make_ticket(name, message, self.conf, details)
+                # Final ticket number is assigned after inserting the audit row.
+                raw = b""
             receipt["rendered_text"] = raw.decode("ascii",errors="replace") if kind=="fine" else custom_receipt_text(receipt)
             receipt["print_options"] = {"feed_mm": self.conf["feed_mm"], "cut": self.conf["cut"],
                                         "dry_run": self.conf["dry_run"],
@@ -566,6 +592,14 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(503, {"error": "Printer queue full"})
                 job_id = receipt_store.record(kind, receipt, source_ip=ip,
                                               user_agent=self.headers.get("User-Agent", ""))
+                if kind == "fine":
+                    issued_at = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+                    raw = make_ticket(name, message, self.conf, details,
+                                      ticket_id=job_id, issued_at=issued_at)
+                    receipt["ticket_number"] = f"{job_id:05d}"
+                    receipt["issued_at"] = issued_at
+                    receipt["rendered_text"] = raw.decode("ascii")
+                    receipt_store.update_payload(job_id, receipt)
                 jobs.put_nowait((job_id, raw))
                 history[ip].append(now)
                 last_job_at = now
