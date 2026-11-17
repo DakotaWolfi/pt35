@@ -57,12 +57,6 @@ def render(state,rotation=180):
     online=bool(state.get("printer_ok"))
     activity=state.get("activity","idle")
     # One operational status only; Q/P appear once in the header.
-    if not online:status="OFFLINE"
-    elif printing:status="PRINTING"
-    elif activity in ("nfc","pair"):status="NFC ACTIVE"
-    elif activity=="web":status="WEB VISIT"
-    elif activity in ("nfc_print","web_print"):status="QUEUED"
-    else:status="READY"
     modes={
         "error":("annoyed","GRUMPY","PRINT ERROR"),
         "printing":("startled","EXCITED","PRINTING!"),
