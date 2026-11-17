@@ -133,7 +133,7 @@ def main():
             print("Hold PT35's NFC reader at the Print Pet tag throughout exchange.",flush=True)
             if args.action=="pair":
                 result=transact(reader,uid,pack("pair",secrets.token_hex(4)))
-                if not result.get("ok"):
+                if not result.get("k"):
                     raise RuntimeError("Print Pet pairing rejected: "+str(result))
                 import base64
                 keydata=base64.b64decode(result["k"],validate=True)
