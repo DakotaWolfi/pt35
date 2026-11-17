@@ -301,13 +301,13 @@ Enable the challenge locally (config.json is private and not tracked):
 
 ```bash
 cd ~/pt35/print_station
-python3 - <<\'PY\'
+python3 - <<'PY'
 import json
 from pathlib import Path
 p=Path("config.json")
 data=json.loads(p.read_text())
 data["challenge_enabled"]=True
-p.write_text(json.dumps(data,indent=2)+"\\n")
+p.write_text(json.dumps(data,indent=2)+chr(10))
 PY
 sudo systemctl restart fmi-print-station fmi-print-display
 ```
