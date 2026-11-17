@@ -7,3 +7,6 @@ __pycache__/
 # Local print history (SQLite and WAL files)
 print_history.sqlite3*
 config.before-https.json
+
+# Pairing secrets and SSH-armed authorization files
+.private/
