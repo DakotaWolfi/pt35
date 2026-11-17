@@ -6,6 +6,7 @@ NDEF URL first, then enables automatic URL refresh in local config.json.
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -42,6 +43,8 @@ def main():
     conf["nfc_auto_update"]=True
     temporary=path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(conf,indent=2)+"\n",encoding="utf-8")
+    original_stat=path.stat()
+    os.chown(temporary,original_stat.st_uid,original_stat.st_gid)
     temporary.chmod(0o600)
     temporary.replace(path)
     print("NFC automatic URL sync enabled in local config.json.")
