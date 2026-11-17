@@ -10,7 +10,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 MAX_UPLOAD=12*1024*1024
 MAX_PIXELS=32_000_000
 MAX_PRINT_HEIGHT=1024
-MAX_PNG=32*1024
+MAX_PNG=96*1024
 
 def prepare_receipt_image(raw, brightness=25, width=384):
     """Brightness 0..70; 25 is a deliberately lighter thermal-photo default."""
@@ -48,8 +48,8 @@ def prepare_receipt_image(raw, brightness=25, width=384):
             bw.save(out,format="PNG",optimize=True)
             png=out.getvalue()
             if len(png)>MAX_PNG:
-                # Complex noisy photos may exceed the compressed PNG budget.
-                # Downscale proportionally only when necessary.
+                # Keep an absolute size bound for unexpectedly large PNGs.
+                # 576x1024 monochrome should normally fit below 96 KiB.
                 bw.thumbnail((max(1,bw.width//2),max(1,bw.height//2)),Image.Resampling.NEAREST)
                 out=io.BytesIO()
                 bw.save(out,format="PNG",optimize=True)
