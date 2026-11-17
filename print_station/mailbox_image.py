@@ -9,43 +9,43 @@ import io
 import time
 
 from mailbox_protocol import pack
-from mailbox_host import http_json
 
 class ImageReceiver:
-    def __init__(self):
+    def __init__(self,http_json):
+        self.http_json=http_json
         self.active=None
         self.completed={}
 
     def process(self,request,api):
-        typ=request["t"]; sid=request["sid"]; rid=request["id"]
+        typ=request["t"]; sid=request["s"]; rid=request["id"]
         now=time.monotonic()
         self.completed={k:v for k,v in self.completed.items() if now-v[0]<180}
-        if typ=="image-start":
-            status=http_json(api+"/api/status")
+        if typ=="img0":
+            status=self.http_json(api+"/api/status")
             if not status.get("challenge_enabled"):
                 return pack("reply",rid,ok=False,error="Print challenge disabled")
             current=self.active
             if current and current["sid"]==sid:
                 return pack("reply",rid,ok=True,seq=current["seq"])
-            self.active={"sid":sid,"title":request["title"],"code":request["code"],
-                         "length":request["length"],"sha":request["sha"],
+            self.active={"sid":sid,"title":"PT35 NFC IMAGE","code":request["c"],
+                         "length":request["n"],"sha":request["h"],
                          "data":bytearray(),"seq":0,"updated":now}
             return pack("reply",rid,ok=True,seq=0)
-        if typ=="image-finish" and sid in self.completed:
+        if typ=="img2" and sid in self.completed:
             return pack("reply",rid,ok=True,message="Already submitted")
         state=self.active
         if not state or state["sid"]!=sid or now-state["updated"]>120:
             self.active=None
             return pack("reply",rid,ok=False,error="Image session expired")
         state["updated"]=now
-        if typ=="image-part":
-            seq=request["seq"]
+        if typ=="img1":
+            seq=request["i"]
             if seq==state["seq"]-1:
                 return pack("reply",rid,ok=True,seq=state["seq"])
             if seq!=state["seq"]:
                 return pack("reply",rid,ok=False,error="Unexpected chunk",seq=state["seq"])
             try:
-                chunk=base64.b64decode(request["data"],validate=True)
+                chunk=base64.b64decode(request["d"],validate=True)
             except (ValueError,base64.binascii.Error):
                 return pack("reply",rid,ok=False,error="Invalid image chunk")
             if not chunk or len(state["data"])+len(chunk)>state["length"] or state["seq"]>=256:
@@ -54,7 +54,7 @@ class ImageReceiver:
             state["seq"]+=1
             return pack("reply",rid,ok=True,seq=state["seq"])
         data=bytes(state["data"])
-        if len(data)!=state["length"] or hashlib.sha256(data).hexdigest()!=state["sha"]:
+        if len(data)!=state["length"] or hashlib.sha256(data).hexdigest()[:16]!=state["sha"]:
             return pack("reply",rid,ok=False,error="Image hash mismatch")
         # Validate image server-side before invoking the local API.
         try:
