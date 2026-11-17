@@ -464,3 +464,52 @@ in the connected repository. The installer deliberately does **not**
 overwrite it. Before migrating menu slots, inspect the live file and
 preserve its old LRA / LED test entrypoint commands; the requested layout is
 LRA slot -> Diagnostics (contains LRA and LED), LED slot -> Print Pet.
+
+### Paired PT35 owner printing over NFC (no e-paper challenge code)
+
+The six-digit print challenge belongs to web/visitor printing and is not used by
+the PT35 NFC owner remote. Offline status remains publicly readable over RF.
+Text/image **printing** requires a 32-byte shared owner key, installed manually
+on both devices using a trusted SSH/USB connection. The secret is **never**
+transmitted in an NFC mailbox frame.
+
+The host reads `print_station/.private/nfc_pairing.key` (mode 0600; owned by
+the account running the Print Station HTTP API). PT35 reads
+`~/.config/pt35/print_pet.key` (0600). The hex-encoded key is 64 characters.
+`*.key` is gitignored. Do **not** post the secret into chat or GitHub.
+
+Initial setup on the Print Pet as the normal `jenna` user:
+
+```bash
+cd ~/pt35/print_station
+install -d -m 700 .private
+python3 - <<'PY'
+from pathlib import Path
+import secrets
+p=Path('.private/nfc_pairing.key')
+with p.open('x') as f:
+    f.write(secrets.token_hex(32)+'\n')
+p.chmod(0o600)
+print('Paired NFC key created (contents hidden)')
+PY
+```
+
+Copy this key privately (USB or SSH/SCP) to the PT35 path
+`~/.config/pt35/print_pet.key`; set `chmod 600`. Do not use an
+unprotected NFC RF transfer to send the secret.
+
+Restart `fmi-print-station` (updated `app.py` handles the privileged
+loopback-only owner request header) and restart `mailbox_host.py`. Then run
+the PT35 GUI or:
+
+```bash
+python3 nfc/print_pet_mailbox.py print --uid E00226003269825F --name PT35 \
+  --message "AWOO" --confirm
+```
+
+NFC print MACs use minute-window HMAC and do not send the key. Keep device
+clocks approximately synchronized. They reduce casual spoofing but do not
+replace persistent replay protection, and lost acknowledgements must never
+trigger an automatic repeat of a physical print command.
+
+Picture NFC transfer is still experimental and awaits hardware tests.
