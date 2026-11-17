@@ -40,12 +40,14 @@ class DiscoveryTests(unittest.TestCase):
         conf=dict(app.DEFAULT,printer_mdns_name="Printer-79EB5F.local",printer_interface="enx9cebe8ec46e1")
         self.assertEqual(app.printer_destination(conf),("10.88.77.20",9100))
 
+    @patch("app.printer_dhcp_address",return_value=None)
     @patch("app.subprocess.run")
     def test_no_fallback_to_stale_ip(self, run, lease):
         run.return_value=Mock(stdout="",returncode=0)
         conf=dict(app.DEFAULT, printer_host="169.254.235.95",printer_mdns_name="Printer-79EB5F.local",printer_interface="enx9cebe8ec46e1")
         with self.assertRaises(RuntimeError):
             app.printer_destination(conf)
+    @patch("app.printer_dhcp_address",return_value=None)
     @patch("app.subprocess.run")
     def test_resolves_changed_ip(self, run, lease):
         run.return_value=Mock(stdout=RESULT,returncode=0)
