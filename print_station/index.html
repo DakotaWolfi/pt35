@@ -42,9 +42,9 @@ img#logo{max-width:250px;max-height:130px;background:white}
 <div class="controls"><button type="submit">Print AWOO fine</button><button type="reset" class="secondary">Clear</button></div></form></div>
 <div class="card"><h2>Fine preview</h2><div class="receipt" id="fine-preview"></div></div></div></section>
 <section class="panel" id="page-custom" hidden><div class="grid"><div class="card"><h2>Build a custom receipt</h2>
-<p>Compose up to 25 printable elements. No images or raw printer commands. All items are stored as compact structured data.</p>
+<p>Compose up to 25 elements, including two custom images. Images are converted to compact black-and-white PNGs for the Epson. Templates can be saved privately in this browser.</p>
 <form id="custom"><label>Device name (optional, for audit log)<input name="device_name" maxlength="64" placeholder="e.g. WolfPhone"></label><label>Title<input name="title" maxlength="48" value="FMI CUSTOM RECEIPT" required></label><label>Subtitle<input name="subtitle" maxlength="64" value="Officially unofficial"></label>
-<h3>Receipt content</h3><div id="lines"></div>
+<div class="card" style="padding:12px"><h3>My local templates</h3><p class="small">Stored only in this browser; not shared with other visitors or loaded from print history.</p><label>Saved templates<select id="template-list"><option value="">Choose a template</option></select></label><div class="controls"><button type="button" id="save-template">Save current</button><button type="button" class="secondary" id="load-template">Load</button><button type="button" class="secondary" id="delete-template">Delete</button><button type="button" class="secondary" id="export-template">Export JSON</button><label style="display:inline-flex;align-items:center;gap:5px;margin:0">Import JSON <input type="file" id="import-template" accept="application/json,.json" style="max-width:200px"></label></div></div><h3>Receipt content</h3><div id="lines"></div>
 <div class="controls"><button type="button" class="secondary" id="add-line">+ Add receipt element</button></div>
 <label>Footer<input name="footer" maxlength="100" value="AWOO responsibly!"></label>
 <div class="controls"><button type="submit">Print custom receipt</button><button type="button" class="secondary" id="reset-custom">Reset</button></div></form></div>
@@ -82,21 +82,145 @@ function fineData(){return Object.fromEntries(new FormData($('#fine')))}
 function drawFine(){const f=fineData();$('#fine-preview').textContent=settings.station_name+'\n'+settings.subtitle+'\n--------------------------------\nAWOO FINE\n--------------------------------\nOffender: '+(f.name||'')+'\nIssued by: '+(f.issuer||'')+'\nLocation: '+(f.location||'')+'\nOffence: '+(f.offence||'')+'\nAmount: '+(f.currency||'')+' '+(f.amount||'')+'\n'+(f.message||'')+'\n--------------------------------\n'+settings.footer}
 $('#fine').addEventListener('input',drawFine);$('#fine').addEventListener('change',drawFine);$('#fine').addEventListener('reset',()=>setTimeout(drawFine,0));
 $('#fine').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const result=await api('/api/print','POST',fineData());notice('Queued receipt #'+result.id+'; check history for the outcome');refresh()}catch(err){notice(err.message,true)}finally{b.disabled=false}};
-function makeRow(type='text',text='',label=''){const div=document.createElement('div');div.className='line-editor';div.innerHTML='<div class="two"><label>Element type<select class="type"><option value="text">Text</option><option value="heading">Heading</option><option value="pair">Label / value</option><option value="rule">Divider line</option><option value="blank">Blank line</option></select></label><label class="label-field">Label<input class="item-label" maxlength="40"></label></div><label class="text-field">Content<input class="item-text" maxlength="160"></label><div class="controls"><button class="secondary remove" type="button">Remove</button><button class="secondary up" type="button">↑</button><button class="secondary down" type="button">↓</button></div>';
-$('#lines').appendChild(div);div.querySelector('.type').value=type;div.querySelector('.item-label').value=label;div.querySelector('.item-text').value=text;
-const refreshRow=()=>{const t=div.querySelector('.type').value;div.querySelector('.label-field').hidden=t!=='pair';div.querySelector('.text-field').hidden=t==='rule'||t==='blank';drawCustom()};
-div.querySelector('.type').addEventListener('change',refreshRow);div.querySelectorAll('input').forEach(n=>n.addEventListener('input',drawCustom));
-div.querySelector('.remove').onclick=()=>{div.remove();drawCustom()};
-div.querySelector('.up').onclick=()=>{if(div.previousElementSibling)div.parentNode.insertBefore(div,div.previousElementSibling);drawCustom()};
-div.querySelector('.down').onclick=()=>{if(div.nextElementSibling)div.parentNode.insertBefore(div.nextElementSibling,div);drawCustom()};
-refreshRow()}
-function customData(){const d=Object.fromEntries(new FormData($('#custom')));d.lines=[...document.querySelectorAll('.line-editor')].map(n=>({type:n.querySelector('.type').value,text:n.querySelector('.item-text').value,label:n.querySelector('.item-label').value}));return d}
-function customText(d){const lines=[d.title||'',d.subtitle||'','--------------------------------'];for(const item of d.lines){if(item.type==='rule')lines.push('--------------------------------');else if(item.type==='blank')lines.push('');else if(item.type==='pair')lines.push(item.label+': '+item.text);else lines.push(item.type==='heading'?item.text.toUpperCase():item.text)}lines.push('--------------------------------',d.footer||'');return lines.join('\n')}
-function drawCustom(){$('#custom-preview').textContent=customText(customData())}
-$('#add-line').onclick=()=>{if($('#lines').children.length>=25)return notice('Maximum 25 elements',true);makeRow()};
+
+async function prepareImage(file){
+  if(!file||file.size>2000000)throw Error('Image max upload is 2 MB');
+  const url=URL.createObjectURL(file);
+  try{
+    const img=new Image();img.src=url;await img.decode();
+    if(img.width*img.height>12000000)throw Error('Image too large');
+    const factor=Math.min(1,384/img.width,240/img.height);
+    const w=Math.max(1,Math.round(img.width*factor)),h=Math.max(1,Math.round(img.height*factor));
+    const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
+    const ctx=canvas.getContext('2d',{willReadFrequently:true});
+    ctx.fillStyle='#fff';ctx.fillRect(0,0,w,h);ctx.drawImage(img,0,0,w,h);
+    const pixels=ctx.getImageData(0,0,w,h);
+    for(let i=0;i<pixels.data.length;i+=4){
+       const a=pixels.data[i]*0.299+pixels.data[i+1]*0.587+pixels.data[i+2]*0.114;
+       const v=a<150?0:255;
+       pixels.data[i]=pixels.data[i+1]=pixels.data[i+2]=v;
+       pixels.data[i+3]=255;
+    }
+    ctx.putImageData(pixels,0,0);
+    const data=canvas.toDataURL('image/png').split(',')[1];
+    if(data.length>44000)throw Error('Image too detailed after conversion (32 KiB limit). Try a simpler image');
+    return data;
+  }finally{URL.revokeObjectURL(url)}
+}
+function makeRow(type='text',text='',label='',image=''){
+  const div=document.createElement('div');div.className='line-editor';
+  div.innerHTML='<div class="two"><label>Element type<select class="type"><option value="text">Text</option><option value="heading">Heading</option><option value="pair">Label / value</option><option value="rule">Divider line</option><option value="blank">Blank line</option><option value="image">Image</option></select></label><label class="label-field">Label<input class="item-label" maxlength="40"></label></div><label class="text-field">Content<input class="item-text" maxlength="160"></label><div class="image-field"><label>PNG, JPG or WebP<input type="file" class="item-upload" accept="image/png,image/jpeg,image/webp"></label><img class="item-preview" style="max-width:100%;max-height:160px;background:white" alt="Receipt image preview"></div><div class="controls"><button class="secondary remove" type="button">Remove</button><button class="secondary up" type="button">↑</button><button class="secondary down" type="button">↓</button></div>';
+  $('#lines').appendChild(div);
+  div.querySelector('.type').value=type;div.querySelector('.item-label').value=label;div.querySelector('.item-text').value=text;
+  div._image=image;
+  const refreshRow=()=>{const t=div.querySelector('.type').value;div.querySelector('.label-field').hidden=t!=='pair';div.querySelector('.text-field').hidden=t==='rule'||t==='blank'||t==='image';div.querySelector('.image-field').hidden=t!=='image';div.querySelector('.item-preview').hidden=!div._image;if(div._image)div.querySelector('.item-preview').src='data:image/png;base64,'+div._image;drawCustom()};
+  div.querySelector('.type').addEventListener('change',refreshRow);
+  div.querySelectorAll('.item-label,.item-text').forEach(n=>n.addEventListener('input',drawCustom));
+  div.querySelector('.item-upload').onchange=async()=>{try{const f=div.querySelector('.item-upload').files[0];if(!f)return;div._image=await prepareImage(f);refreshRow();notice('Image converted for receipt printing')}catch(e){notice(e.message,true)}};
+  div.querySelector('.remove').onclick=()=>{div.remove();drawCustom()};
+  div.querySelector('.up').onclick=()=>{if(div.previousElementSibling)div.parentNode.insertBefore(div,div.previousElementSibling);drawCustom()};
+  div.querySelector('.down').onclick=()=>{if(div.nextElementSibling)div.parentNode.insertBefore(div.nextElementSibling,div);drawCustom()};
+  refreshRow();
+}
+function customData(){
+ const d=Object.fromEntries(new FormData($('#custom')));
+ d.lines=[...document.querySelectorAll('.line-editor')].map(n=>({type:n.querySelector('.type').value,text:n.querySelector('.item-text').value,label:n.querySelector('.item-label').value,...(n.querySelector('.type').value==='image'?{image:n._image||''}:{})}));
+ return d;
+}
+function customText(d){
+ const lines=[d.title||'',d.subtitle||'','--------------------------------'];
+ for(const item of d.lines){
+   if(item.type==='image')lines.push('[IMAGE]');
+   else if(item.type==='rule')lines.push('--------------------------------');
+   else if(item.type==='blank')lines.push('');
+   else if(item.type==='pair')lines.push(item.label+': '+item.text);
+   else lines.push(item.type==='heading'?item.text.toUpperCase():item.text);
+ }
+ lines.push('--------------------------------',d.footer||'');
+ return lines.join('\n');
+}
+function drawCustom(){
+ const d=customData(),preview=$('#custom-preview');
+ preview.replaceChildren();
+ const top=document.createElement('div');top.textContent=(d.title||'')+'\n'+(d.subtitle||'')+'\n--------------------------------\n';preview.append(top);
+ for(const item of d.lines){
+   if(item.type==='image'&&item.image){
+     const im=document.createElement('img');im.src='data:image/png;base64,'+item.image;im.style.cssText='max-width:100%;max-height:240px;display:block;margin:auto';preview.append(im);
+   }else{
+     const span=document.createElement('div');
+     span.textContent=(item.type==='rule'?'--------------------------------':item.type==='blank'?'':item.type==='pair'?item.label+': '+item.text:item.type==='heading'?item.text.toUpperCase():item.type==='image'?'[Choose an image]':item.text);
+     preview.append(span);
+   }
+ }
+ const foot=document.createElement('div');foot.textContent='--------------------------------\n'+(d.footer||'');preview.append(foot);
+}
+$('#add-line').onclick=()=>{
+ if($('#lines').children.length>=25)return notice('Maximum 25 elements',true);
+ makeRow();
+};
 $('#custom').addEventListener('input',drawCustom);
-$('#reset-custom').onclick=()=>{$('#custom').reset();$('#lines').replaceChildren();makeRow('heading','HELLO WOLF');makeRow('text','One (1) complimentary AWOO');makeRow('rule');makeRow('pair','0.00','Total CHF');drawCustom()};
-$('#custom').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const result=await api('/api/custom','POST',customData());notice('Custom receipt #'+result.id+' queued; check history for outcome');refresh()}catch(err){notice(err.message,true)}finally{b.disabled=false}};
+$('#reset-custom').onclick=()=>{
+ $('#custom').reset();$('#lines').replaceChildren();
+ makeRow('heading','HELLO WOLF');makeRow('text','One (1) complimentary AWOO');makeRow('rule');makeRow('pair','0.00','Total CHF');drawCustom();
+};
+$('#custom').onsubmit=async e=>{
+ e.preventDefault();const b=e.submitter;
+ const data=customData();
+ if(data.lines.some(x=>x.type==='image'&&!x.image))return notice('Choose an image or remove the empty image block',true);
+ if(data.lines.filter(x=>x.type==='image').length>2)return notice('Maximum two images',true);
+ b.disabled=true;
+ try{const result=await api('/api/custom','POST',data);notice('Custom receipt #'+result.id+' queued; check history for outcome');refresh()}
+ catch(err){notice(err.message,true)}
+ finally{b.disabled=false}
+};
+const templateKey='fmi-printstation-custom-templates-v1';
+function templateStore(){try{return JSON.parse(localStorage.getItem(templateKey)||'{}')}catch{return {}}}
+function refreshTemplates(){
+ const sel=$('#template-list'),previous=sel.value;sel.replaceChildren(new Option('Choose a template',''));
+ Object.keys(templateStore()).sort().forEach(name=>sel.add(new Option(name,name)));
+ sel.value=previous;
+}
+function setCustom(data){
+ const f=$('#custom');
+ for(const k of ['title','subtitle','footer','device_name'])if(f.elements[k])f.elements[k].value=data[k]||'';
+ $('#lines').replaceChildren();
+ for(const row of data.lines||[])if(row&&['text','heading','pair','rule','blank','image'].includes(row.type))makeRow(row.type,row.text||'',row.label||'',row.image||'');
+ drawCustom();
+}
+$('#save-template').onclick=()=>{
+ const name=prompt('Template name (saved only in this browser):');
+ if(!name||!name.trim())return;
+ if(name.length>60)return notice('Template name max 60 characters',true);
+ const templates=templateStore();
+ templates[name.trim()]=customData();
+ try{localStorage.setItem(templateKey,JSON.stringify(templates));refreshTemplates();$('#template-list').value=name.trim();notice('Saved template locally')}
+ catch{notice('Browser storage is full or unavailable; use Export JSON',true)}
+};
+$('#load-template').onclick=()=>{
+ const t=templateStore()[$('#template-list').value];if(!t)return notice('Choose a saved template',true);
+ setCustom(t);notice('Template loaded without using private history');
+};
+$('#delete-template').onclick=()=>{
+ const name=$('#template-list').value;if(!name)return;
+ if(!confirm('Delete saved template '+name+'?'))return;
+ const all=templateStore();delete all[name];localStorage.setItem(templateKey,JSON.stringify(all));refreshTemplates();notice('Local template deleted');
+};
+$('#export-template').onclick=()=>{
+ const d=customData(),raw=JSON.stringify({format:'fmi-receipt-template-v1',receipt:d});
+ const blob=new Blob([raw],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+ a.href=url;a.download='fmi-receipt-template.json';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
+$('#import-template').onchange=async()=>{
+ const f=$('#import-template').files[0];if(!f)return;
+ if(f.size>100000)return notice('Template file is too large',true);
+ try{
+   const parsed=JSON.parse(await f.text());
+   if(parsed.format!=='fmi-receipt-template-v1'||!parsed.receipt||!Array.isArray(parsed.receipt.lines)||parsed.receipt.lines.length>25)throw Error('Invalid template');
+   setCustom(parsed.receipt);notice('Template imported, ready to edit or save locally');
+ }catch(e){notice(e.message,true)}
+ $('#import-template').value='';
+};
+refreshTemplates();
 $('#reset-custom').click();
 async function refresh(){try{const data=await api('/api/status');$('#health').textContent='Queued: '+data.queue+' · Printed: '+data.stats.printed+' · Failed: '+data.stats.failed;$('#mode').textContent=data.dry_run?'DRY RUN':'LIVE PRINT'}catch(err){$('#health').textContent=err.message}}
 function lockHistory(){historyUnlocked=false;historyJobs=[];$('#history-list').replaceChildren();$('#history-detail').hidden=true;$('#history-text').textContent='';$('#history-meta').textContent='';$('#history-lock').hidden=false;$('#history-private').hidden=true;$('#history-token').value='';$('#token').value='';$('#settings-form').hidden=true}
@@ -113,7 +237,7 @@ $('#history-unlock').onclick=async()=>{if(!secureAdmin)return notice('HTTPS requ
 function renderHistory(jobs){historyJobs=jobs;const list=$('#history-list');list.replaceChildren();for(const job of jobs){const row=document.createElement('div');row.className='history-item';const left=document.createElement('div');const date=new Date(job.created*1000).toLocaleString();left.textContent='#'+job.id+' · '+date+' · '+job.kind.toUpperCase()+' · '+job.state.toUpperCase()+(job.error?' · '+job.error:'');const b=document.createElement('button');b.className='secondary';b.textContent='View print';b.onclick=()=>showPrint(job);const edit=document.createElement('button');edit.className='secondary';edit.textContent='Edit / Reprint';edit.onclick=()=>loadJob(job);row.append(left,b,edit);list.appendChild(row)}if(!jobs.length)list.textContent='No jobs yet'}
 $('#load-history').onclick=async()=>{if(!historyUnlocked)return notice('Unlock history first',true);try{const data=await api('/api/history');renderHistory(data.jobs);notice('History loaded')}catch(err){notice(err.message,true)}};
 function showPrint(job){$('#history-detail').hidden=false;$('#history-meta').textContent='Job #'+job.id+' · '+new Date(job.created*1000).toLocaleString()+' · '+job.state+' · Source IP: '+(job.source_ip||'not recorded')+' · Device name: '+(job.receipt.device_name||'not supplied')+' · User agent: '+(job.user_agent||'not recorded');$('#history-text').textContent=job.receipt.rendered_text||'(Exact print text unavailable for this old record)';}
-function loadJob(job){const data=job.receipt;if(job.kind==='custom'){const f=$('#custom');f.elements.title.value=data.title;f.elements.subtitle.value=data.subtitle;f.elements.footer.value=data.footer;f.elements.device_name.value=data.device_name||'';$('#lines').replaceChildren();for(const item of data.lines)makeRow(item.type,item.text,item.label);drawCustom();location.hash='custom'}else{const f=$('#fine');for(const k of ['name','issuer','location','offence','amount','currency','message','device_name'])if(f.elements[k])f.elements[k].value=data[k]||'';drawFine();location.hash='fines'}notice('Loaded job #'+job.id+' into editor; printing creates a new history entry')}
+function loadJob(job){const data=job.receipt;if(job.kind==='custom'){const f=$('#custom');f.elements.title.value=data.title;f.elements.subtitle.value=data.subtitle;f.elements.footer.value=data.footer;f.elements.device_name.value=data.device_name||'';$('#lines').replaceChildren();for(const item of data.lines)makeRow(item.type,item.text,item.label,item.image||'');drawCustom();location.hash='custom'}else{const f=$('#fine');for(const k of ['name','issuer','location','offence','amount','currency','message','device_name'])if(f.elements[k])f.elements[k].value=data[k]||'';drawFine();location.hash='fines'}notice('Loaded job #'+job.id+' into editor; printing creates a new history entry')}
 $('#load-settings').onclick=async()=>{if(!secureAdmin)return notice('HTTPS required for admin settings',true);try{settings=await api('/api/settings');let form=$('#settings-form');for(const [k,v]of Object.entries(settings))if(form.elements[k]){if(form.elements[k].type==='checkbox')form.elements[k].checked=!!v;else form.elements[k].value=v}form.hidden=false;drawFine();notice('Settings unlocked')}catch(err){notice(err.message,true)}};
 $('#settings-form').onsubmit=async e=>{e.preventDefault();const form=e.target,data={};for(const k of ['printer_host','printer_port','station_name','subtitle','footer','feed_mm','logo_width'])data[k]=form.elements[k].value;for(const k of ['logo_enabled','cut','dry_run'])data[k]=form.elements[k].checked;try{settings=await api('/api/settings','POST',data);notice('Settings saved');drawFine();refresh()}catch(err){notice(err.message,true)}};
 $('#probe').onclick=async()=>{try{notice((await api('/api/probe','POST',{})).message)}catch(err){notice(err.message,true)}};
