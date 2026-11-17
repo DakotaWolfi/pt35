@@ -41,6 +41,8 @@ DEFAULT = {
     "dry_run": True, "cut": True, "feed_lines": 3, "feed_mm": 50,
     "max_message_chars": 160, "max_jobs_per_hour_per_ip": 6,
     "global_min_interval_seconds": 10, "max_queue": 8,
+    "max_images_per_receipt": 2, "image_width_dots": 384,
+    "max_image_upload_mib": 12,
     "station_name": "FMI PRINT STATION", "footer": "AWOO responsibly!",
     "admin_token_env": "FMI_PRINT_ADMIN_TOKEN",
     "admin_token": "", "logo_enabled": True, "logo_width": 384,
@@ -97,6 +99,12 @@ def load_config(path=CONFIG_FILE):
         raise ValueError("max_jobs_per_hour_per_ip must be 1..100")
     if not 0 <= int(conf["global_min_interval_seconds"]) <= 3600:
         raise ValueError("global_min_interval_seconds must be 0..3600")
+    if not 1 <= int(conf["max_images_per_receipt"]) <= 4:
+        raise ValueError("max_images_per_receipt must be 1..4")
+    if not 128 <= int(conf["image_width_dots"]) <= 576 or int(conf["image_width_dots"]) % 8:
+        raise ValueError("image_width_dots must be 128..576 in steps of 8")
+    if not 1 <= int(conf["max_image_upload_mib"]) <= 12:
+        raise ValueError("max_image_upload_mib must be 1..12")
     if int(conf["max_queue"]) < 1 or int(conf["max_queue"]) > 50:
         raise ValueError("max_queue must be 1..50")
     if int(conf["logo_width"]) not in (256, 384, 512, 576):
@@ -184,13 +192,13 @@ def make_ticket(name, message, conf, details=None, ticket_id=None, issued_at=Non
     return "\n".join(lines).encode("ascii")
 
 
-def raster_image_block(png_b64):
+def raster_image_block(png_b64, max_width=384):
     """Decode a strictly limited PNG and emit Epson GS v 0 raster bytes."""
     from PIL import Image, ImageOps, UnidentifiedImageError
     try:
         binary = base64.b64decode(png_b64, validate=True)
         with Image.open(io.BytesIO(binary)) as im:
-            if im.format != "PNG" or im.width > 384 or im.height > 240 or im.width < 1 or im.height < 1:
+            if im.format != "PNG" or im.width > max_width or im.height > 240 or im.width < 1 or im.height < 1:
                 raise ValueError("Image must be a PNG at most 384 x 240")
             im.load()
             rgba = im.convert("RGBA")
@@ -219,7 +227,7 @@ def make_custom_receipt(payload, conf):
         kind=item["type"]
         value=clean_line(item.get("text", ""),160)
         if kind=="image":
-            result.extend(raster_image_block(item["image"]))
+            result.extend(raster_image_block(item["image"],int(conf["image_width_dots"])))
             continue
         if kind=="rule": value="-"*32
         elif kind=="blank": value=""
@@ -267,16 +275,16 @@ def validate_custom(payload, conf):
         clean={"type":typ,"text":v,"label":label}
         if typ=="image":
             image_count+=1
-            if image_count>2:
-                raise ValueError("Maximum 2 images per receipt")
+            if image_count>int(conf["max_images_per_receipt"]):
+                raise ValueError("Too many images per receipt")
             png=str(entry.get("image",""))
             if len(png)>44000:
                 raise ValueError("Image exceeds 32 KiB")
             total_binary+=len(png)
-            if total_binary>65000:
+            if total_binary>int(conf["max_images_per_receipt"])*44000:
                 raise ValueError("Receipt images too large")
             # Decode and validate before placing job in queue or history.
-            raster_image_block(png)
+            raster_image_block(png,int(conf["image_width_dots"]))
             clean["image"]=png
         clean_items.append(clean)
     return {"title":title,"subtitle":str(payload.get("subtitle",""))[:64],
@@ -425,7 +433,8 @@ def public_config(conf):
             "printer_mdns_name", "printer_interface",
             "dry_run", "cut", "feed_mm", "logo_enabled", "logo_width",
             "default_amount", "currency", "challenge_enabled", "pet_draft_reactions",
-            "max_jobs_per_hour_per_ip", "global_min_interval_seconds")
+            "max_jobs_per_hour_per_ip", "global_min_interval_seconds",
+            "max_images_per_receipt", "image_width_dots", "max_image_upload_mib")
     return {key: conf.get(key) for key in keys}
 
 def worker(conf):
@@ -579,7 +588,7 @@ class Handler(BaseHTTPRequestHandler):
                              "dry_run": self.conf["dry_run"], "stats": snapshot,
                              "printing": printing_now,
                              "nfc_url": self.conf["nfc_url"] or self.conf["public_base_url"],
-                             "challenge_enabled": bool(self.conf.get("challenge_enabled"))})
+                             "challenge_enabled": bool(self.conf.get("challenge_enabled")), "image_settings": {k:self.conf[k] for k in ("max_images_per_receipt","image_width_dots","max_image_upload_mib")}})
         else: self.reply(404, {"error": "Not found"})
     def do_POST(self):
         if not self.permitted(): return
@@ -616,8 +625,9 @@ class Handler(BaseHTTPRequestHandler):
             # local/public access policy still applies.
             try:
                 size=int(self.headers.get("Content-Length","0"))
-                if not 0<size<=MAX_UPLOAD:
-                    return self.reply(413,{"error":"Image upload limit: 12 MiB"})
+                max_upload=min(MAX_UPLOAD,int(self.conf["max_image_upload_mib"])*1024*1024)
+                if not 0<size<=max_upload:
+                    return self.reply(413,{"error":"Image upload exceeds configured size limit"})
                 if self.headers.get("Content-Type","").split(";")[0].strip()!="application/octet-stream":
                     return self.reply(415,{"error":"Binary image upload required"})
                 ip=request_identity(self)
@@ -638,7 +648,8 @@ class Handler(BaseHTTPRequestHandler):
                         brightness=int(self.headers.get("X-FMI-Image-Brightness","25"))
                     except ValueError:
                         return self.reply(400,{"error":"Invalid brightness setting"})
-                    image=prepare_receipt_image(self.rfile.read(size),brightness=brightness)
+                    image=prepare_receipt_image(self.rfile.read(size),brightness=brightness,
+                                                 width=int(self.conf["image_width_dots"]))
                 finally:
                     IMAGE_PREPARE_SLOTS.release()
                 return self.reply(200,image)
@@ -649,7 +660,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(500,{"error":"Image converter unavailable"})
         try:
             size = int(self.headers.get("Content-Length", "0"))
-            if size < 1 or size > (2500000 if urlsplit(self.path).path == "/api/logo" else (85000 if urlsplit(self.path).path == "/api/custom" else 4096)):
+            if size < 1 or size > (2500000 if urlsplit(self.path).path == "/api/logo" else (190000 if urlsplit(self.path).path == "/api/custom" else 4096)):
                 return self.reply(413, {"error": "Invalid request size"})
             if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
                 return self.reply(415, {"error": "JSON required"})
@@ -685,6 +696,17 @@ class Handler(BaseHTTPRequestHandler):
                             if not minimum <= value <= maximum:
                                 return self.reply(400, {"error": limit_key + " must be " + str(minimum) + ".." + str(maximum)})
                             changed[limit_key] = value
+                    for image_key, minimum, maximum in (("max_images_per_receipt", 1, 4),
+                                                      ("image_width_dots", 128, 576),
+                                                      ("max_image_upload_mib", 1, 12)):
+                        if image_key in changed:
+                            value=changed[image_key]
+                            if type(value) is not int and not (isinstance(value,str) and value.isdecimal()):
+                                return self.reply(400,{"error":"Invalid "+image_key})
+                            value=int(value)
+                            if not minimum<=value<=maximum or (image_key=="image_width_dots" and value%8):
+                                return self.reply(400,{"error":"Out of range: "+image_key})
+                            changed[image_key]=value
                     for name_key in ("station_name", "subtitle", "footer"):
                         if name_key in changed:
                             changed[name_key] = str(changed[name_key])[:160]
