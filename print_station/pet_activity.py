@@ -9,9 +9,9 @@ from pathlib import Path
 import time
 
 ROOT=Path(__file__).resolve().parent/".private"
-ALLOWED={"web","web_print","nfc","nfc_print","pair","error"}
+ALLOWED={"web","web_print","nfc","nfc_print","pair","printing","printed","error"}
 DURATION={"web":24,"web_print":45,"nfc":20,"nfc_print":50,
-          "pair":35,"error":60}
+          "pair":35,"printing":30,"printed":35,"error":60}
 
 def report(kind):
     if kind not in ALLOWED:raise ValueError("Unknown activity")
@@ -35,7 +35,7 @@ def report(kind):
 
 def current(now=None):
     now=time.time() if now is None else now
-    for kind in ("error","nfc_print","web_print","pair","nfc","web"):
+    for kind in ("error","printing","printed","nfc_print","web_print","pair","nfc","web"):
         try:
             data=json.loads((ROOT/("activity_"+kind+".json")).read_text(encoding="ascii"))
             age=now-float(data["at"])
