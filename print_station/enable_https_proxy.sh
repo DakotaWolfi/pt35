@@ -2,6 +2,7 @@
 # Switch Print Station to HTTPS-proxy-only mode AFTER Caddy HTTPS is working.
 # Run as jenna, not root. Changes only the ignored local config.json.
 set -euo pipefail
+cd "$(dirname "$0")"
 if [[ ${1:-} != https://* ]]; then
   echo 'Usage: bash enable_https_proxy.sh https://your-real-hostname.example'
   echo 'Configure and verify Caddy TLS first. Do not use the placeholder.'
@@ -14,7 +15,7 @@ url=sys.argv[1].rstrip("/")
 p=urllib.parse.urlsplit(url)
 if p.scheme!='https' or not p.hostname or p.username or p.password or p.path or p.query or p.fragment:
     raise SystemExit("Provide only HTTPS scheme and hostname; no path/query/credentials")
-path=pathlib.Path(__file__).resolve().parent/"config.json" if "__file__" in globals() else pathlib.Path("config.json")
+path=pathlib.Path("config.json")
 data=json.loads(path.read_text())
 backup=path.with_name("config.before-https.json")
 backup.write_text(json.dumps(data, indent=2)+"\n")
@@ -26,6 +27,7 @@ data["public_base_url"]=url
 tmp=path.with_suffix(".tmp")
 tmp.write_text(json.dumps(data,indent=2)+"\n")
 tmp.replace(path)
+path.chmod(0o600)
 print("Saved HTTPS-only proxy config. Local backup:",backup)
 print("Restart web server after Caddy is working: sudo systemctl restart fmi-print-station")
 PY
