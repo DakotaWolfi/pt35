@@ -337,6 +337,7 @@ def admin_allowed(handler):
 
 def public_config(conf):
     keys = ("station_name", "subtitle", "footer", "printer_host", "printer_port",
+            "printer_mdns_name", "printer_interface",
             "dry_run", "cut", "feed_mm", "logo_enabled", "logo_width",
             "default_amount", "currency")
     return {key: conf.get(key) for key in keys}
@@ -494,6 +495,14 @@ class Handler(BaseHTTPRequestHandler):
                     for name_key in ("station_name", "subtitle", "footer"):
                         if name_key in changed:
                             changed[name_key] = str(changed[name_key])[:160]
+                    for discovery_key in ("printer_mdns_name", "printer_interface"):
+                        if discovery_key in changed:
+                            value = str(changed[discovery_key]).strip()
+                            if len(value) > 128 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_" for c in value):
+                                return self.reply(400, {"error": "Invalid discovery name or interface"})
+                            changed[discovery_key] = value
+                    if changed.get("printer_mdns_name", self.conf.get("printer_mdns_name")) and not changed.get("printer_interface", self.conf.get("printer_interface")):
+                        return self.reply(400, {"error": "Printer interface required for mDNS discovery"})
                     self.conf.update(changed)
                     target = ROOT / "config.json"
                     saved = json.loads(target.read_text()) if target.exists() else {}
