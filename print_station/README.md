@@ -236,3 +236,7 @@ Requirements: `sudo apt install avahi-utils avahi-daemon`. These are already
 installed on the current Orange Pi. The HTTPS admin settings page also exposes
 printer discovery hostname and wired interface. After updating the local
 ignored config, restart the web service. Do not assign a static IP to the Epson.
+
+## Detailed AWOO Fine ticket layout
+
+The AWOO Fine page uses the longer receipt format: AWOO FINE title, a five-digit ticket number derived from the persisted SQLite job ID, the actual issue timestamp with local timezone offset, offender, issuer, location, offence, officer notes, fine amount, UNPAID status and parody footer. The top header logo remains controlled independently by the admin logo setting. The compact ticket style is not used for AWOO Fines. The UI preview shows a ticket-number and timestamp placeholder until printing. The completed structured audit record contains the final printed text, assigned ticket number and issue timestamp. No custom receipt changes.
