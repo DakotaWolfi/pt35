@@ -72,7 +72,7 @@ def init_print_code(path=CODE_STATE_PATH):
     else:
         with os.fdopen(fd,"w",encoding="ascii") as f:
             json.dump({"serial":secrets.randbits(64)},f)
-            f.write("\\n")
+            f.write("\n")
     return _read_code_state(path)
 
 
@@ -105,7 +105,7 @@ def rotate_display_code(secret,path=CODE_STATE_PATH):
         fd=os.open(str(temp),os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
         with os.fdopen(fd,"w",encoding="ascii") as f:
             json.dump({"serial":next_serial},f)
-            f.write("\\n")
+            f.write("\n")
             f.flush()
             os.fsync(f.fileno())
         os.replace(temp,path)
