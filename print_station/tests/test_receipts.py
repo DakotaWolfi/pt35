@@ -34,6 +34,8 @@ class TestReceipts(unittest.TestCase):
                 self.assertEqual(receipt_store.get_job(job_id)["state"],"queued")
                 receipt_store.complete(job_id,False,"Printer offline")
                 receipt_store.set_reverse_dns(job_id,"my-laptop.example")
+                payload["ticket_number"]="00003"
+                receipt_store.update_payload(job_id,payload)
                 job=receipt_store.get_job(job_id)
                 self.assertEqual(job["receipt"],payload)
                 self.assertEqual(job["state"],"failed")
