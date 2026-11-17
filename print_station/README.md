@@ -161,3 +161,38 @@ This fallback is for availability, not secrecy. Keep `8768` bound to
 continue enforcing job limits. An attacker on the guest network may still
 tamper with HTTP print submissions or imitate IPs in some environments.
 No administrator access should be attempted using HTTP.
+
+## Custom receipt pictures and reusable templates
+
+The Custom Receipt editor supports PNG/JPEG/WebP uploads as inline **image** items.
+The browser flattens transparency to white, converts to 1-bit-looking black and
+white, and scales to a maximum **384 × 240 dots**, with **up to 2 images per
+receipt**. It sends PNG-encoded data, not raw printer commands. The backend
+validates file format, dimensions, image count and encoded size, rasterizes to
+ESC/POS GS v 0 bitmaps, and prints elements in editor order. Pillow is
+required on the Orange Pi (`sudo apt install python3-pil`).
+
+The audit record stores each receipt's structured fields and embedded
+compressed PNG data for later editor reconstruction, not a full-page bitmap.
+For receipts containing images, `rendered_text` is a text-only summary
+with markers for bitmap blocks. In private History, **Edit / Reprint** loads
+images and fields into the custom editor. Note that image processing limits
+are deliberately conservative to reduce memory and paper abuse.
+
+The Custom Receipt page has a **My local templates** section: Save, Load,
+Delete, Export JSON and Import JSON. Storage is in browser `localStorage`;
+it requires no login, admin token, or history access. It is per-browser
+and per-origin (HTTP and HTTPS have independent storage). Use JSON export
+to move a saved template to a different browser or hostname. Clearing browser
+site data deletes local templates; exports can act as backups. Templates
+may contain images and private text; exported files and browser profiles
+should be handled accordingly. No template is saved to the server just
+by pressing Save; **printing still records an audit entry**.
+
+## Device metadata caveat
+
+A normal website cannot reliably obtain visitors' actual OS computer names
+or phone names. Print jobs automatically record observed IP and the
+browser's supplied User-Agent, which may hint at OS/browser/device model.
+These fields are not authenticated identification. The manual device-name
+question was removed from guest forms.
