@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import queue
 import socket
+import subprocess
 import threading
 import time
 import receipt_store
@@ -26,6 +27,7 @@ DEFAULT = {
     "local_networks": ["127.0.0.0/8", "::1/128", "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"],
     "public_base_url": "", "nfc_url": "",
     "printer_host": "192.168.50.2", "printer_port": 9100,
+    "printer_mdns_name": "", "printer_interface": "",
     "dry_run": True, "cut": True, "feed_lines": 3, "feed_mm": 50,
     "max_message_chars": 160, "max_jobs_per_hour_per_ip": 3,
     "global_min_interval_seconds": 10, "max_queue": 8,
@@ -84,6 +86,8 @@ def load_config(path=CONFIG_FILE):
         raise ValueError("max_queue must be 1..50")
     if int(conf["logo_width"]) not in (256, 384, 512, 576):
         raise ValueError("logo_width must be 256, 384, 512 or 576")
+    if conf.get("printer_mdns_name") and not conf.get("printer_interface"):
+        raise ValueError("printer_interface required for printer_mdns_name")
     if not 0 <= int(conf["feed_mm"]) <= 200:
         raise ValueError("feed_mm must be 0..200")
     for net in conf["local_networks"]:
@@ -236,6 +240,48 @@ def validate_custom(payload, conf):
             "footer":str(payload.get("footer",conf["footer"]))[:100],
             "lines":clean_items}
 
+def printer_mdns_candidates(output, hostname, interface):
+    """Resolve only the named printer on the chosen physical interface."""
+    expected = hostname.lower().rstrip(".")
+    found = []
+    for line in output.splitlines():
+        parts = line.split(";")
+        # Avahi parsable resolved fields: =;iface;proto;service;type;domain;host;IP;port;TXT...
+        if len(parts) < 9 or parts[0] != "=" or parts[1] != interface:
+            continue
+        if parts[2] != "IPv4" or parts[4] != "_printer._tcp":
+            continue
+        if parts[6].lower().rstrip(".") != expected:
+            continue
+        try:
+            address = ipaddress.ip_address(parts[7])
+        except ValueError:
+            continue
+        if address.version == 4 and address.is_link_local:
+            found.append(str(address))
+    return sorted(set(found))
+
+
+def printer_destination(conf):
+    """Find exact DNS-SD hostname on isolated printer cable; no stale-IP fallback."""
+    name = conf.get("printer_mdns_name", "")
+    if not name:
+        return conf["printer_host"], int(conf["printer_port"])
+    iface = conf.get("printer_interface", "")
+    if not iface:
+        raise RuntimeError("printer_interface required when printer_mdns_name is set")
+    try:
+        result = subprocess.run(
+            ["avahi-browse", "-r", "-t", "-p", "-k", "_printer._tcp"],
+            capture_output=True, text=True, timeout=6, check=True)
+    except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+        raise RuntimeError("Printer discovery unavailable (check Avahi)") from exc
+    matches = printer_mdns_candidates(result.stdout, name, iface)
+    if len(matches) != 1:
+        raise RuntimeError("Expected Epson not discovered on wired printer interface")
+    return matches[0], int(conf["printer_port"])
+
+
 def send_printer(data, conf):
     if conf["dry_run"]:
         LOG.info("DRY RUN: %r", data)
@@ -255,7 +301,8 @@ def send_printer(data, conf):
         dots -= step
     if conf["cut"]:
         raw += bytes([29, 86, 1])
-    with socket.create_connection((conf["printer_host"], int(conf["printer_port"])), timeout=5) as conn:
+    address, port = printer_destination(conf)
+    with socket.create_connection((address, port), timeout=5) as conn:
         conn.settimeout(10)
         conn.sendall(raw)
 
@@ -431,8 +478,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not admin_allowed(self):
                     return self.reply(403, {"error": "Admin token required"})
                 if path == "/api/probe":
-                    with socket.create_connection((self.conf["printer_host"],
-                            int(self.conf["printer_port"])), timeout=3):
+                    with socket.create_connection(printer_destination(self.conf), timeout=3):
                         pass
                     return self.reply(200, {"message": "Printer connected"})
                 if path == "/api/settings":
