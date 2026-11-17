@@ -29,7 +29,14 @@ class PrintPetApp(tk.Tk):
         self.title("PT35 Print Pet")
         self.geometry("800x480")
         self.minsize(640,400)
-        self.configure(bg="#111923")
+        # Match PT35's nfc_touch dark palette: mint accent and navy panels.
+        self.bg="#101923"
+        self.panel="#1d2c3a"
+        self.ink="#f2f7fb"
+        self.muted="#becfdf"
+        self.accent="#76e8bb"
+        self.configure(bg=self.bg)
+        self._configure_style()
         self.uid=tk.StringVar(value=DEFAULT_UID)
         self.name=tk.StringVar(value="PT35")
         self.message=tk.StringVar(value="AWOO from PT35!")
@@ -42,11 +49,48 @@ class PrintPetApp(tk.Tk):
         self._photo=None
         self._build()
         self.after(100,self._poll)
-        self.bind("<Escape>",lambda e:self.destroy())
+        self.bind("<Escape>",lambda e:self._close())
+        self.bind("<Prior>",lambda e:self._switch_tab(-1))
+        self.bind("<Next>",lambda e:self._switch_tab(1))
+        self.bind("<Control-Tab>",lambda e:self._switch_tab(1))
         self.protocol("WM_DELETE_WINDOW",self._close)
+
+    def _configure_style(self):
+        style=ttk.Style(self)
+        style.theme_use("clam")
+        style.configure(".",font=("DejaVu Sans",13),
+                        background=self.bg,foreground=self.ink)
+        style.configure("TFrame",background=self.bg)
+        style.configure("TLabel",background=self.bg,foreground=self.ink)
+        style.configure("Muted.TLabel",foreground=self.muted)
+        style.configure("TButton",background=self.panel,foreground=self.ink,
+                        padding=(14,13),borderwidth=0,relief="flat",
+                        font=("DejaVu Sans",12,"bold"))
+        style.map("TButton",
+                  background=[("pressed","#456076"),("active","#456076")],
+                  foreground=[("disabled","#8295a8")])
+        style.configure("Accent.TButton",background=self.accent,
+                        foreground="#0c241c",padding=(14,14))
+        style.map("Accent.TButton",
+                  background=[("pressed","#a3f3d4"),("active","#a3f3d4")])
+        style.configure("TEntry",fieldbackground=self.panel,foreground=self.ink,
+                        insertcolor=self.ink,padding=(10,9))
+        style.configure("TNotebook",background=self.bg,borderwidth=0)
+        style.configure("TNotebook.Tab",background=self.panel,foreground=self.ink,
+                        padding=(17,11),font=("DejaVu Sans",12,"bold"))
+        style.map("TNotebook.Tab",
+                  background=[("selected",self.accent)],
+                  foreground=[("selected","#0c241c")])
+
+    def _switch_tab(self,direction):
+        tabs=self.tabs.tabs()
+        current=self.tabs.index(self.tabs.select())
+        self.tabs.select((current+direction)%len(tabs))
+        return "break"
 
     def _build(self):
         notebook=ttk.Notebook(self)
+        self.tabs=notebook
         notebook.pack(fill="both",expand=True,padx=10,pady=(8,0))
         status=ttk.Frame(notebook,padding=12)
         tickets=ttk.Frame(notebook,padding=12)
@@ -60,7 +104,7 @@ class PrintPetApp(tk.Tk):
         ttk.Label(status,text="Print Pet NFC UID").grid(row=0,column=0,sticky="w",pady=5)
         ttk.Entry(status,textvariable=self.uid,width=25).grid(row=0,column=1,sticky="ew",pady=5)
         ttk.Label(status,textvariable=self.report,font=("DejaVu Sans",13)).grid(row=1,column=0,columnspan=2,sticky="w",pady=20)
-        ttk.Button(status,text="Read NFC status",command=lambda:self._run("status")).grid(row=2,column=0,columnspan=2,sticky="ew",pady=6)
+        ttk.Button(status,text="Read NFC status",style="Accent.TButton",command=lambda:self._run("status")).grid(row=2,column=0,columnspan=2,sticky="ew",pady=6)
         ttk.Button(status,text="Pair owner key (arm via SSH first)",
                    command=lambda:self._run("pair")).grid(row=3,column=0,columnspan=2,sticky="ew",pady=6)
         ttk.Button(status,text="NFC link quality / positioning test (40 samples)",
@@ -75,7 +119,7 @@ class PrintPetApp(tk.Tk):
         ttk.Entry(tickets,textvariable=self.message).grid(row=1,column=1,sticky="ew",pady=5)
         ttk.Label(tickets,text="Paired owner NFC key — no display code needed").grid(
             row=2,column=0,columnspan=2,sticky="w",pady=5)
-        ttk.Button(tickets,text="Print text over NFC",command=lambda:self._run("print")).grid(row=3,column=0,columnspan=2,sticky="ew",pady=12)
+        ttk.Button(tickets,text="Print text over NFC",style="Accent.TButton",command=lambda:self._run("print")).grid(row=3,column=0,columnspan=2,sticky="ew",pady=12)
 
         ttk.Label(pictures,text="Photo / image").grid(row=0,column=0,sticky="w",pady=5)
         ttk.Entry(pictures,textvariable=self.image_path).grid(row=0,column=1,sticky="ew",pady=5)
@@ -84,15 +128,17 @@ class PrintPetApp(tk.Tk):
         self.preview.grid(row=2,column=0,columnspan=2,sticky="nsew",pady=8)
         pictures.rowconfigure(2,weight=1)
         ttk.Label(pictures,text="NFC sends a small 160×120 monochrome PNG in chunks.").grid(row=3,column=0,columnspan=2,sticky="w")
-        ttk.Button(pictures,text="Print picture over NFC",command=lambda:self._run("image")).grid(row=4,column=0,columnspan=2,sticky="ew",pady=7)
+        ttk.Button(pictures,text="Print picture over NFC",style="Accent.TButton",command=lambda:self._run("image")).grid(row=4,column=0,columnspan=2,sticky="ew",pady=7)
 
         footer=ttk.Frame(self,padding=(10,5))
         footer.pack(fill="x")
-        ttk.Label(footer,textvariable=self.state).pack(side="left",fill="x",expand=True)
+        ttk.Label(footer,textvariable=self.state,style="Muted.TLabel",wraplength=660).pack(side="left",fill="x",expand=True)
         ttk.Button(footer,text="Close",command=self._close).pack(side="right")
         log_frame=ttk.Frame(self,padding=(10,0,10,8))
         log_frame.pack(fill="x")
-        self.log=tk.Text(log_frame,height=4,wrap="word",font=("DejaVu Sans Mono",9))
+        self.log=tk.Text(log_frame,height=3,wrap="word",font=("DejaVu Sans Mono",10),
+                         bg=self.panel,fg=self.ink,insertbackground=self.ink,
+                         relief="flat",borderwidth=0,padx=8,pady=5)
         self.log.pack(fill="x")
         self.log.configure(state="disabled")
 
