@@ -16,6 +16,12 @@ class DiscoveryTests(unittest.TestCase):
     def test_wrong_interface_or_name_is_rejected(self):
         self.assertEqual(app.printer_mdns_candidates(RESULT, "not-this-printer.local", "enx9cebe8ec46e1"), [])
     @patch("app.subprocess.run")
+    def test_managed_dhcp_ip_preferred_when_two_are_advertised(self, run):
+        run.return_value=Mock(stdout=RESULT + "=;enx9cebe8ec46e1;IPv4;EPSON;_printer._tcp;local;Printer-79EB5F.local;10.88.77.20;515;\\n",returncode=0)
+        conf=dict(app.DEFAULT,printer_mdns_name="Printer-79EB5F.local",printer_interface="enx9cebe8ec46e1")
+        self.assertEqual(app.printer_destination(conf),("10.88.77.20",9100))
+
+    @patch("app.subprocess.run")
     def test_no_fallback_to_stale_ip(self, run):
         run.return_value=Mock(stdout="",returncode=0)
         conf=dict(app.DEFAULT, printer_host="169.254.235.95",printer_mdns_name="Printer-79EB5F.local",printer_interface="enx9cebe8ec46e1")
