@@ -8,6 +8,7 @@ the same physical six-digit challenge as browser print requests.
 """
 import argparse
 import json
+import errno
 import logging
 import time
 from urllib.request import Request, urlopen
@@ -115,12 +116,18 @@ def main():
     parser.add_argument("--once",action="store_true")
     args=parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    with SMBus(args.bus) as bus:
-        setup(bus)
-        print("FTM enabled. Waiting for a PT35 NFC mailbox request.",flush=True)
-        seen={}
-        while True:
-            try:
+    seen={}
+    offline=True
+    failures=0
+    while True:
+        try:
+            # Reopen on errors: do not keep reusing a failed I2C file descriptor.
+            with SMBus(args.bus) as bus:
+                if offline:
+                    setup(bus)
+                    LOG.info("ST25DV ready on I2C-%d at 0x%02x (FTM active)",args.bus,TAG)
+                    offline=False
+                    failures=0
                 msg=receive(bus)
                 if msg is not None:
                     try:
@@ -139,11 +146,15 @@ def main():
                     if response and not respond(bus,response):
                         LOG.warning("PT35 did not clear mailbox in time; reply not sent")
                     if args.once: return
-                time.sleep(.07)
-            except (OSError,RuntimeError) as exc:
-                LOG.exception("FTM transport error")
-                if args.once: raise
-                time.sleep(1)
+            time.sleep(.07)
+        except (OSError, RuntimeError) as exc:
+            failures += 1
+            if not offline or failures == 1 or failures % 30 == 0:
+                detail = " (EINVAL: I2C driver rejected transfer; not proof of missing tag)" if isinstance(exc,OSError) and exc.errno==errno.EINVAL else ""
+                LOG.warning("ST25DV I2C unavailable (%s)%s; retrying",exc,detail)
+            offline=True
+            if args.once: raise
+            time.sleep(min(5.0,0.2*2**min(failures,5)))
 
 if __name__=="__main__":
     main()
