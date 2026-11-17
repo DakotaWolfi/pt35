@@ -57,12 +57,27 @@ def render(state,rotation=180):
     online=bool(state.get("printer_ok"))
     status="PRINTING" if printing else ("READY" if online else "OFFLINE")
     mood="EXCITED" if printing else ("HAPPY" if online else "SAD")
-    d.polygon([(5,57),(14,30),(32,45),(53,30),(62,57)],fill=1,outline=0)
-    d.ellipse((8,41,61,101),outline=0,width=2)
-    d.ellipse((21,63,27,70),fill=0)
-    d.ellipse((43,63,49,70),fill=0)
-    d.polygon([(33,78),(39,78),(36,83)],fill=0)
-    d.arc((28,82,46,96),180 if not online else 0,360 if not online else 180,fill=0,width=2)
+    # Real Collar Pet expression sprites; install with fetch_collarpet_assets.sh.
+    sprites=ROOT / "assets" / "wolves"
+    expression="startled" if printing else ("happy" if online else "annoyed")
+    sprite=sprites / ("wolf_" + expression + ".png")
+    if not sprite.exists():
+        sprite=sprites / "wolf_idle.png"
+    if sprite.exists():
+        from PIL import ImageOps
+        with Image.open(sprite) as original:
+            art=original.convert("RGBA")
+            # Match the original Collar Pet face, preserving alpha on white.
+            white=Image.new("RGBA",art.size,"white")
+            white.alpha_composite(art)
+            artwork=ImageOps.grayscale(white.convert("RGB"))
+            artwork.thumbnail((64,78),Image.Resampling.LANCZOS)
+            bw=artwork.point(lambda level: 255 if level>=155 else 0).convert("1")
+            img.paste(bw,((68-bw.width)//2,25+(79-bw.height)//2))
+    else:
+        d.rectangle((4,27,66,98),outline=0,width=2)
+        d.text((11,57),"PET?",font=font(12,True),fill=0)
+        LOG.warning("Collar Pet artwork missing; run fetch_collarpet_assets.sh")
     d.text((8,106),mood,font=font(9,True),fill=0)
     d.text((69,27),status,font=font(12,True),fill=0)
     d.text((69,44),"Q:{} P:{}".format(state.get("queue",0),state.get("printed",0)),font=font(10),fill=0)
