@@ -43,6 +43,8 @@ class PrintPetApp(tk.Tk):
         self.image_path=tk.StringVar()
         self.state=tk.StringVar(value="Ready — hold PT35 near Print Pet")
         self.report=tk.StringVar(value="Printer: unknown | Queue: — | Printed: —")
+        self.link_label=tk.StringVar(value="NFC quality: not tested")
+        self.link_quality=tk.IntVar(value=0)
         self.events=queue.Queue()
         self.busy=False
         self.current=None
@@ -75,6 +77,9 @@ class PrintPetApp(tk.Tk):
                   background=[("pressed","#a3f3d4"),("active","#a3f3d4")])
         style.configure("TEntry",fieldbackground=self.panel,foreground=self.ink,
                         insertcolor=self.ink,padding=(10,9))
+        style.configure("Horizontal.TProgressbar",troughcolor=self.panel,
+                        background=self.accent,lightcolor=self.accent,
+                        darkcolor=self.accent,borderwidth=0)
         style.configure("TNotebook",background=self.bg,borderwidth=0)
         style.configure("TNotebook.Tab",background=self.panel,foreground=self.ink,
                         padding=(17,11),font=("DejaVu Sans",12,"bold"))
@@ -110,8 +115,10 @@ class PrintPetApp(tk.Tk):
         ttk.Button(status,text="NFC link quality / positioning test (40 samples)",
                    command=lambda:self._run("linktest")).grid(
                        row=4,column=0,columnspan=2,sticky="ew",pady=6)
-        ttk.Label(status,text="Move PT35 slowly; higher quality is better. 100% = 10/10 recent replies.",
-                  wraplength=740).grid(row=5,column=0,columnspan=2,sticky="w",pady=5)
+        ttk.Label(status,textvariable=self.link_label).grid(
+            row=5,column=0,columnspan=2,sticky="w",pady=3)
+        ttk.Progressbar(status,maximum=100,variable=self.link_quality).grid(
+            row=6,column=0,columnspan=2,sticky="ew",pady=3)
 
         ttk.Label(tickets,text="Recipient / name").grid(row=0,column=0,sticky="w",pady=5)
         ttk.Entry(tickets,textvariable=self.name).grid(row=0,column=1,sticky="ew",pady=5)
@@ -230,8 +237,15 @@ class PrintPetApp(tk.Tk):
                     if line.startswith("Image NFC "):
                         self.state.set(line.strip())
                     if line.startswith("LINK "):
+                        match=re.search(r"quality10=(\\d+)%",line)
+                        if match:
+                            self.link_quality.set(int(match.group(1)))
+                            self.link_label.set("Recent NFC success: "+match.group(1)+"%")
                         self.state.set(line.strip()[:145])
                     if line.startswith("SUMMARY "):
+                        match=re.search(r"rate=([0-9.]+)%",line)
+                        if match:
+                            self.link_label.set("NFC test finished: "+match.group(1)+"% overall")
                         self.state.set(line.strip()[:145])
                     if line.startswith("Print Pet:"):
                         try:
