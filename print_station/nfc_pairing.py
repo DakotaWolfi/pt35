@@ -73,7 +73,7 @@ def handle_pair(request):
         return {"ok":False,"error":"Pairing already used"},None
     active["state"]="issued"
     active["session"]=secrets.token_hex(4)
-    fields={"ok":True,"k":base64.b64encode(bytes.fromhex(active["key"])).decode("ascii"),
+    fields={"k":base64.b64encode(bytes.fromhex(active["key"])).decode("ascii"),
             "s":active["session"]}
     return fields,active
 
