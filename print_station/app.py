@@ -306,9 +306,14 @@ def printer_destination(conf):
     except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
         raise RuntimeError("Printer discovery unavailable (check Avahi)") from exc
     matches = printer_mdns_candidates(result.stdout, name, iface)
-    if len(matches) != 1:
+    if not matches:
         raise RuntimeError("Expected Epson not discovered on wired printer interface")
-    return matches[0], int(conf["printer_port"])
+    # During DHCP transition Epson may advertise both RFC3927 and managed IPs.
+    managed = [x for x in matches if ipaddress.ip_address(x) in ipaddress.ip_network("10.88.77.0/24")]
+    selected = managed or matches
+    if len(selected) != 1:
+        raise RuntimeError("Ambiguous Epson address on printer Ethernet interface")
+    return selected[0], int(conf["printer_port"])
 
 
 def send_printer(data, conf):
