@@ -36,6 +36,20 @@ class DiscoveryTests(unittest.TestCase):
                              "0 64:eb:8c:f9:68:0a 10.88.77.36 Printer-7B0000 *\n")
             self.assertEqual(app.printer_dhcp_address((lease,), expected_mac="64:eb:8c:f9:68:0a"),"10.88.77.36")
 
+    @patch("app.socket.create_connection")
+    def test_automatic_uses_available_printer_not_stale_lease(self, connect):
+        with TemporaryDirectory() as temp:
+            lease=Path(temp)/"dnsmasq.leases"
+            lease.write_text("0 f8:25:51:79:eb:5f 10.88.77.30 TM-T88VI-79EB5F *\\n"
+                             "1799999999 64:eb:8c:f9:68:0a 10.88.77.36 Printer-7B0000 *\\n"
+                             "0 aa:bb:cc:dd:ee:ff 10.88.77.50 Laptop *\\n")
+            self.assertEqual(app.automatic_printer_dhcp_address(9100,(lease,)),"10.88.77.36")
+            connect.assert_called_once_with(("10.88.77.36",9100),timeout=0.5)
+
+    @patch("app.automatic_printer_dhcp_address",return_value="10.88.77.36")
+    def test_automatic_destination(self, finder):
+        self.assertEqual(app.printer_destination(dict(app.DEFAULT)),("10.88.77.36",9100))
+
     def test_pins_to_epson_and_ethernet(self):
         self.assertEqual(app.printer_mdns_candidates(RESULT, "Printer-79EB5F.local", "enx9cebe8ec46e1"), ["169.254.235.98"])
     def test_wrong_interface_or_name_is_rejected(self):
