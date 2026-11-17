@@ -19,6 +19,7 @@ from smbus2 import SMBus, i2c_msg
 from mailbox_protocol import pack, unpack
 from mailbox_image import ImageReceiver
 from mailbox_auth import read_key, verify, HOST_KEY
+from nfc_pairing import handle_pair, issue_completed, handle_done
 
 LOG=logging.getLogger("fmi.mailbox")
 TAG=0x53
@@ -154,18 +155,33 @@ def main():
                         uid=request["id"]
                         now=time.monotonic()
                         seen={key:val for key,val in seen.items() if now-val[0]<90}
+                        pairing_update=None
                         if uid in seen:
                             response=seen[uid][1]
+                        elif request["t"]=="pair":
+                            fields,pairing_update=handle_pair(request)
+                            response=pack("reply",uid,**fields)
+                        elif request["t"]=="pair-done":
+                            response=pack("reply",uid,**handle_done(request))
+                            # Reload the durable owner key after confirmation.
+                            try:key=read_key(args.pair_key)
+                            except (OSError,ValueError):key=None
+                            image_receiver.key=key
                         else:
                             response=(image_receiver.process(request,args.api)
                                       if request["t"] in ("img0","img1","img2")
                                       else process(msg,args.api,key))
+                        if response is not None:
                             seen[uid]=(now,response)
                     except (ValueError,UnicodeError,KeyError,TypeError) as exc:
                         LOG.warning("Bad RF request: %s",exc)
                         response=None
-                    if response and not respond(bus,response):
-                        LOG.warning("PT35 did not clear mailbox; reply not sent")
+                    if response:
+                        delivered=respond(bus,response)
+                        if delivered:
+                            issue_completed(pairing_update)
+                        else:
+                            LOG.warning("PT35 did not clear mailbox; reply not sent")
                     if args.once: return
                 time.sleep(args.poll_interval)
             except (OSError,RuntimeError) as exc:
