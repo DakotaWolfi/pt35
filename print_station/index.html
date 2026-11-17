@@ -83,6 +83,11 @@ const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
 let settings={station_name:'FMI PRINT STATION',subtitle:'Department of Unlicensed Howling',footer:'AWOO responsibly!'};
 const secureAdmin = location.protocol === "https:";
+if(location.hash.startsWith('#pass=')){
+ const pass=decodeURIComponent(location.hash.slice(6)).toUpperCase();
+ if(/^[A-Z2-7]{10}$/.test(pass))$('#print-pass').value=pass;
+ history.replaceState(null,'',location.pathname+location.search+'#fines');
+}
 document.querySelectorAll("[data-admin-nav]").forEach(el=>{el.hidden=!secureAdmin});
 let historyUnlocked=false;
 let historyJobs=[];
