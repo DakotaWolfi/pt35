@@ -32,6 +32,18 @@ class PrepareReceiptImageTests(unittest.TestCase):
                 return sum(1 for v in im.getdata() if v==0)
         self.assertLess(black_dots(light),black_dots(dark))
 
+    def test_custom_print_width(self):
+        picture=Image.new("RGB",(800,160),(110,120,130))
+        output=io.BytesIO()
+        picture.save(output,"PNG")
+        result=prepare_receipt_image(output.getvalue(),width=576)
+        self.assertEqual(result["width"],576)
+        self.assertLessEqual(result["height"],240)
+
+    def test_invalid_width_rejected(self):
+        with self.assertRaises(ValueError):
+            prepare_receipt_image(b"image",width=577)
+
     def test_invalid_brightness_rejected(self):
         with self.assertRaises(ValueError):
             prepare_receipt_image(b"image",brightness=99)
