@@ -237,7 +237,7 @@ class PrintPetApp(tk.Tk):
                     if line.startswith("Image NFC "):
                         self.state.set(line.strip())
                     if line.startswith("LINK "):
-                        match=re.search(r"quality10=(\\d+)%",line)
+                        match=re.search(r"quality10=([0-9]+)%",line)
                         if match:
                             self.link_quality.set(int(match.group(1)))
                             self.link_label.set("Recent NFC success: "+match.group(1)+"%")
