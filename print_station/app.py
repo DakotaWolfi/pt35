@@ -35,6 +35,7 @@ DEFAULT = {
     "subtitle": "Department of Unlicensed Howling",
     "default_amount": "350.00", "currency": "CHF",
     "display": {"enabled": True, "rotation": 180, "refresh_interval_seconds": 90},
+    "require_https_proxy": False,  # enable ONLY after trusted TLS proxy is online
 }
 LOG = logging.getLogger("fmi.print")
 jobs = queue.Queue()
@@ -71,7 +72,22 @@ def load_config(path=CONFIG_FILE):
         u = urlsplit(conf["public_base_url"])
         if u.scheme != "https" or not u.netloc or u.username or u.password:
             raise ValueError("public_base_url must be a normal HTTPS URL")
+    if conf["require_https_proxy"] and conf["listen"] not in ("127.0.0.1", "::1"):
+        raise ValueError("HTTPS proxy mode requires a loopback-only listen address")
     return conf
+
+def request_identity(handler):
+    """Trust forwarded client IP only when a localhost reverse proxy connects."""
+    peer = handler.client_address[0]
+    via_local_proxy = bool(handler.conf.get("require_https_proxy")) and peer in ("127.0.0.1", "::1")
+    if via_local_proxy:
+        forwarded = handler.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        try:
+            ipaddress.ip_address(forwarded)
+            return forwarded
+        except ValueError:
+            return peer
+    return peer
 
 def client_is_local(addr, conf):
     try:
@@ -252,8 +268,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
     def permitted(self):
-        # Reverse proxy must pass the real client IP and enforce its own rate limits.
-        # Do NOT trust X-Forwarded-For supplied by arbitrary visitors.
+        if self.conf.get("require_https_proxy"):
+            if self.client_address[0] not in ("127.0.0.1", "::1") or self.headers.get("X-Forwarded-Proto","").lower() != "https":
+                self.reply(403, {"error": "HTTPS required"})
+                return False
         if not allowed(self.client_address[0], self.conf):
             self.reply(403, {"error": "Local-network access only"})
             return False
@@ -393,7 +411,7 @@ class Handler(BaseHTTPRequestHandler):
                                         "logo_enabled": self.conf.get("logo_enabled",False)}
             global last_job_at
             now = time.monotonic()
-            ip = self.client_address[0]
+            ip = request_identity(self)
             with lock:
                 history[ip] = [t for t in history.get(ip, []) if now - t < 3600]
                 if len(history[ip]) >= self.conf["max_jobs_per_hour_per_ip"]:
@@ -402,7 +420,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(429, {"error": "Printer cooldown; try again shortly"})
                 if jobs.full():
                     return self.reply(503, {"error": "Printer queue full"})
-                job_id = receipt_store.record(kind, receipt)
+                job_id = receipt_store.record(kind, receipt, source_ip=ip,
+                                              user_agent=self.headers.get("User-Agent", ""))
                 jobs.put_nowait((job_id, raw))
                 history[ip].append(now)
                 last_job_at = now
