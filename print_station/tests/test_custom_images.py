@@ -39,6 +39,12 @@ class TestCustomReceiptImages(unittest.TestCase):
         with self.assertRaises(ValueError):
             app.validate_custom({"title":"T","lines":[{"type":"image","image":encoded}]},app.DEFAULT)
 
+    def test_100_images_allowed_when_configured(self):
+        conf={**app.DEFAULT,"max_images_per_receipt":100}
+        rows=[{"type":"image","image":png_data()} for _ in range(100)]
+        receipt=app.validate_custom({"title":"100 pictures","lines":rows},conf)
+        self.assertEqual(len(receipt["lines"]),100)
+
     def test_limit_image_count(self):
         with self.assertRaises(ValueError):
             app.validate_custom({"title":"T","lines":[{"type":"image","image":png_data()}]*3},app.DEFAULT)
