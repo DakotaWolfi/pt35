@@ -176,7 +176,7 @@ def snapshot(conf):
     except Exception: status={}
     stats=status.get("stats",{})
     try:
-        code=challenge.current_code(challenge.get_key()) if conf.get("challenge_enabled") else ""
+        code=challenge.display_code(challenge.get_key()) if conf.get("challenge_enabled") else ""
     except (OSError, ValueError):
         code="------"
     try:
