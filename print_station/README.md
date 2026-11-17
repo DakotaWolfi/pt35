@@ -440,3 +440,27 @@ MB_MODE at system I2C address 0x57 / offset 0x000D, and verifies readback.
 It preserves the existing GPO configuration and NDEF URL. It refuses to
 write MB_MODE if the factory password fails. This is a one-time persistent
 configuration change, not a recurring service operation. See ST AN4910.
+
+### Print Pet picture GUI and original PT35 R menu
+
+PT35 can stage the independent graphical app without changing its R launcher:
+`bash ~/pt35/scripts/install_print_pet_gui.sh` after fetching
+`nfc/print_pet_gui.py`, `nfc/print_pet_mailbox.py`,
+`print_station/mailbox_protocol.py`, and the install script from the
+feature branch. Launch with `~/.local/bin/pt35-print-pet`.
+
+The 800x480 GUI has Status, Text receipt and Picture tabs. Image prints
+are compressed to a monochrome 160x120 PNG (<=7680 bytes) and sent as
+30-byte binary chunks encoded in FMP1 messages. The host stages <=8192
+bytes, checks a truncated SHA-256 identifier, verifies the PNG and then
+calls the existing /api/custom endpoint with the physical print challenge.
+This pathway is **experimental and not yet hardware tested**. Moving the
+antennas mid-transfer can fail the operation; a lost final acknowledgement
+means the sender must not auto-retry printing.
+
+The current PT35 R-button service invokes
+`~/.local/bin/pt35-nfc-menu`, but that installed launcher is not present
+in the connected repository. The installer deliberately does **not**
+overwrite it. Before migrating menu slots, inspect the live file and
+preserve its old LRA / LED test entrypoint commands; the requested layout is
+LRA slot -> Diagnostics (contains LRA and LED), LED slot -> Print Pet.
