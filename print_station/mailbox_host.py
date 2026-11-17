@@ -9,7 +9,6 @@ the same physical six-digit challenge as browser print requests.
 import argparse
 import json
 import logging
-import secrets
 import time
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
@@ -99,6 +98,9 @@ def process(message,api):
         code=msg.get("code","")
         if not isinstance(code,str) or not (len(code)==6 and code.isdecimal()):
             return pack("reply",uid,ok=False,error="Six-digit print code required")
+        status=http_json(api+"/api/status")
+        if not status.get("challenge_enabled"):
+            return pack("reply",uid,ok=False,error="Enable physical print challenge first")
         result=http_json(api+"/api/print",{"name":msg["name"],
                                           "message":msg["message"],
                                           "challenge_code":code})
