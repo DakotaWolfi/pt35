@@ -387,3 +387,45 @@ service user, app detection falls back to mDNS when configured.
 `setup_printer_dhcp.sh --apply` reserves `10.88.77.30` for that MAC,
 but **the Epson must renew DHCP** (usually via printer restart) to move from
 an earlier lease such as `10.88.77.39`.
+
+## PT35 ↔ Print Pet offline NFC mailbox (experimental; opt-in)
+
+Hardware: Print Pet ST25DV16K on I2C bus 0, with GPO wired to PB4
+(physical pin 7, gpiochip0 line 36); PT35 internal ST25R3916 NFC-V
+reader on I2C bus 1. Link uses ISO15693 RF, **not Wi-Fi**.
+
+On Print Pet: run `sudo python3 mailbox_inspect.py --bus 0` to read
+static MB_MODE, dynamic MB_CTRL, and GPO (read-only). If MB_MODE is disabled,
+the protected static mailbox mode must be enabled using an authorized I2C
+security session; neither diagnostic nor host guesses passwords or modifies
+protected registers. If MB_MODE is enabled, set `challenge_enabled: true`
+in local `config.json`, restart `fmi-print-station`, then manually run
+`sudo python3 mailbox_host.py --bus 0`. The host only enables dynamic FTM,
+reads/writes 256-byte RAM mailbox, and forwards validated requests through
+the existing local print HTTP API. Do not enable automatic boot yet.
+
+On PT35: use the existing `nfc/nfcv_scan.py` to locate the **external**
+Print Pet tag UID; the PT35 has its own ST25DV tag in RF range.
+Run from the `nfc/` directory:
+
+```bash
+python3 print_pet_mailbox.py status --uid EXTERNAL_ST25DV_UID
+python3 print_pet_mailbox.py print --uid EXTERNAL_ST25DV_UID --name PT35 --message AWOO --code 123456 --confirm
+```
+
+Substitute the real six-digit code shown on the Print Pet e-paper.
+Hold PT35 close to Print Pet throughout the exchange; an NFC field can
+drop mid-request. The PT35 ST25R3916 backend is shared with its existing
+NFC scanner, so stop the scanner/GUI before running the mailbox client.
+
+Protocol: `print_station/mailbox_protocol.py` defines bounded FMP1 JSON
+messages, with eight-hex-character request IDs. `mailbox_host.py` handles
+I2C side; `nfc/print_pet_mailbox.py` RF side. Every print call still uses
+normal application challenge/rate limits/audit records. A random ID is
+deduplicated for 90 seconds in daemon RAM; this is **not cryptographic
+authentication or durable exactly-once printing**. NFC proximity and UID
+are not credentials. No raw ESC/POS bytes or secrets may be sent.
+
+**Not yet hardware validated end-to-end.** RF command framing, mailbox
+half-duplex handoff and ST25R3916 large response decoding must be checked
+with both physical devices before calling the feature working.
