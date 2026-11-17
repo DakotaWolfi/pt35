@@ -13,7 +13,7 @@ MAX_TEXT=40
 ID=re.compile(r"^[0-9a-f]{8}$")
 
 def pack(kind, ident, **fields):
-    if kind not in ("status","print","reply","img0","img1","img2"):
+    if kind not in ("status","print","reply","img0","img1","img2","pair","pair-done"):
         raise ValueError("Unknown mailbox command")
     if not ID.fullmatch(ident):
         raise ValueError("Request ID must be eight lowercase hex digits")
@@ -32,7 +32,7 @@ def unpack(raw):
         raise ValueError("Unknown mailbox protocol")
     if not ID.fullmatch(str(msg.get("id",""))):
         raise ValueError("Missing request ID")
-    if msg.get("t") not in ("status","print","reply","img0","img1","img2"):
+    if msg.get("t") not in ("status","print","reply","img0","img1","img2","pair","pair-done"):
         raise ValueError("Unknown command")
     if msg["t"]=="print":
         if set(msg) - {"v","t","id","name","message","a"}:
@@ -41,10 +41,12 @@ def unpack(raw):
             val=msg.get(key,"")
             if not isinstance(val,str) or not 1<=len(val)<=limit or any(ord(c)<32 or ord(c)>126 for c in val):
                 raise ValueError("Print fields must be short printable ASCII")
-    if msg["t"] in ("print","img0") and not (
+    if msg["t"] in ("print","img0","pair-done") and not (
         isinstance(msg.get("a"),str) and re.fullmatch(r"[0-9a-f]{16}",msg["a"])
     ):
         raise ValueError("Paired NFC signature required")
+    if msg["t"]=="pair-done" and not ID.fullmatch(str(msg.get("s",""))):
+        raise ValueError("Invalid pairing session")
     if msg["t"] in ("img0","img1","img2"):
         if not ID.fullmatch(str(msg.get("s",""))):
             raise ValueError("Invalid image session")
