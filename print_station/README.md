@@ -708,3 +708,20 @@ cd ~/pt35/print_station
 /usr/bin/python3 -m unittest discover -s tests -v
 sudo systemctl restart fmi-print-station fmi-print-display
 ```
+
+### Lighter receipt photos (thermal print tuning)
+
+The Print Pet Pillow image converter defaults to **+25 midtone brightness**
+before monochrome Floyd–Steinberg dithering. In **Custom Receipt → Image**,
+each selected photo has a **Lighten photo** slider (0–70) and
+**Reconvert brightness** button. The original photo remains only in that
+browser editing session for reconversion; only its compact printable PNG
+is submitted with the actual receipt. Higher numbers mean fewer black
+thermal dots and a lighter print. The API accepts the same brightness
+range through `X-FMI-Image-Brightness`. TIFF/GIF still use the first frame.
+
+PT35's NFC thumbnail converter now lifts dark midtones and uses a lower
+black-dot threshold by default. Existing queued/historical images are
+unchanged; reselect and reconvert a photo to use new processing. Changes
+require the printer backend and browser page to be updated; PT35 changes
+require updating `nfc/print_pet_mailbox.py`.
