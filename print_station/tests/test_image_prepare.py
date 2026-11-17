@@ -20,6 +20,22 @@ class PrepareReceiptImageTests(unittest.TestCase):
             self.assertEqual(printed.mode,"1")
             self.assertLessEqual(printed.width,384)
 
+    def test_brightness_reduces_black_dot_coverage(self):
+        import base64
+        gradient=Image.linear_gradient("L").resize((256,128))
+        original=io.BytesIO()
+        gradient.save(original,format="PNG")
+        dark=prepare_receipt_image(original.getvalue(),brightness=0)
+        light=prepare_receipt_image(original.getvalue(),brightness=60)
+        def black_dots(item):
+            with Image.open(io.BytesIO(base64.b64decode(item["image"]))) as im:
+                return sum(1 for v in im.getdata() if v==0)
+        self.assertLess(black_dots(light),black_dots(dark))
+
+    def test_invalid_brightness_rejected(self):
+        with self.assertRaises(ValueError):
+            prepare_receipt_image(b"image",brightness=99)
+
     def test_nonimage_rejected(self):
         with self.assertRaises(ValueError):
             prepare_receipt_image(b"not an image")
