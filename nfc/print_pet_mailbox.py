@@ -11,6 +11,7 @@ import os
 import base64
 import hashlib
 import io
+import json
 from collections import deque
 from pathlib import Path
 import secrets
@@ -71,7 +72,19 @@ def transact(reader,uid,packet,timeout=5):
     stop=time.monotonic()+timeout
     while time.monotonic()<stop:
         ctrl=rf_command(reader,uid,0xad,0x0d)
-        if ctrl and (ctrl[0]&1) and not (ctrl[0]&0x06):
+        if ctrl and (ctrl[0]&0x02):
+            # A previous attempt may have written the request successfully
+            # but lost the radio reply. Recover the same response instead
+            # of sending another request to the mailbox.
+            n=rf_command(reader,uid,0xab)[0]+1
+            if not 1<=n<=112:
+                raise ValueError("Unexpected pending response length")
+            raw=rf_command(reader,uid,0xac,0,n-1)
+            pending=unpack(raw)
+            if pending.get("id")==json.loads(packet.decode("ascii"))["id"]:
+                return pending
+            # Discard an older, unrelated reply; the RF read clears it.
+        elif ctrl and (ctrl[0]&1) and not (ctrl[0]&0x06):
             break
         time.sleep(.09)
     else:
@@ -257,10 +270,21 @@ def main():
                         unsigned={"v":"FMP1","t":kind,"id":reqid,**fields}
                         fields["a"]=sign(unsigned,key)["a"]
                     req=pack(kind,reqid,**fields)
-                    result=transact(reader,uid,req,timeout=8)
-                    if not result.get("ok"):
-                        raise RuntimeError("Print Pet rejected transfer: "+str(result))
-                    return result
+                    # Reuse the SAME request ID for retries: the host caches
+                    # completed responses, preventing duplicate data chunks.
+                    # Never auto-retry img2: it can physically enqueue a print.
+                    attempts=1 if kind=="img2" else 3
+                    for attempt in range(1,attempts+1):
+                        try:
+                            result=transact(reader,uid,req,timeout=8)
+                            if not result.get("ok"):
+                                raise RuntimeError("Print Pet rejected transfer: "+str(result))
+                            return result
+                        except (OSError,ValueError,TimeoutError,IndexError) as exc:
+                            if attempt==attempts:
+                                raise RuntimeError(f"{kind} transfer failed after {attempt} tries: {exc}") from exc
+                            print(f"RF retry {attempt}/{attempts-1} ({kind}); keep antennas aligned",flush=True)
+                            time.sleep(.15)
                 reply=ask("img0",n=len(png),h=hashlib.sha256(png).hexdigest()[:16])
                 step=30
                 for idx,start in enumerate(range(0,len(png),step)):
