@@ -701,6 +701,7 @@ class Handler(BaseHTTPRequestHandler):
                             return self.reply(400,{"error":"Invalid boolean setting"})
                     if changed.get("challenge_enabled") is True:
                         challenge.get_key(create=True)
+                        challenge.init_print_code()
                     self.conf.update(changed)
                     target = ROOT / "config.json"
                     saved = json.loads(target.read_text()) if target.exists() else {}
@@ -746,8 +747,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(503, {"error":"Print challenge unavailable"})
                 entered=payload.get("challenge_code","")
                 owner=payload.get("print_pass","")
-                if not (challenge.check_code(secret,entered) or challenge.check_pass(secret,owner)):
-                    return self.reply(403, {"error":"Enter the six-digit code shown on the Print Station"})
+                # Rechecked under the queue lock before accepting the job, so
+                # simultaneous requests cannot spend the same guest code twice.
+                if not (challenge.check_display_code(secret,entered) or challenge.check_pass(secret,owner)):
+                    return self.reply(403, {"error":"Enter the current six-digit code shown on Print Pet"})
             kind = "custom" if path == "/api/custom" else "fine"
             if kind == "custom":
                 try: receipt = validate_custom(payload, self.conf)
@@ -789,6 +792,9 @@ class Handler(BaseHTTPRequestHandler):
             now = time.monotonic()
             ip = "nfc-owner" if nfc_owner else request_identity(self)
             with lock:
+                if self.conf.get("challenge_enabled") and not nfc_owner:
+                    if not (challenge.check_display_code(secret,entered) or challenge.check_pass(secret,owner)):
+                        return self.reply(403, {"error":"Web code expired; read the updated code on Print Pet"})
                 if not nfc_owner:
                     history[ip] = [t for t in history.get(ip, []) if now - t < 3600]
                     if len(history[ip]) >= self.conf["max_jobs_per_hour_per_ip"]:
@@ -808,6 +814,9 @@ class Handler(BaseHTTPRequestHandler):
                     receipt["rendered_text"] = raw.decode("ascii")
                     receipt_store.update_payload(job_id, receipt)
                 jobs.put_nowait((job_id, raw))
+                if self.conf.get("challenge_enabled") and not nfc_owner:
+                    # Owner passes also cause the guest display code to rotate.
+                    challenge.rotate_display_code(secret)
                 if not nfc_owner:
                     history[ip].append(now)
                     last_job_at = now
@@ -832,6 +841,7 @@ def main():
     conf = load_config(Path(args.config))
     if conf.get("challenge_enabled"):
         challenge.get_key(create=True)
+        challenge.init_print_code()
     with receipt_store.connection() as db: pass
     jobs.maxsize = conf["max_queue"]
     Handler.conf = conf
