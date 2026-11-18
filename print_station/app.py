@@ -426,10 +426,26 @@ def printer_destination(conf):
     return selected[0], int(conf["printer_port"])
 
 
+# Persistent fail-closed state: interrupted ESC/POS raster data can make a
+# subsequent receipt print as garbage. A printer power-cycle is required.
+PRINTER_RECOVERY_PATH=Path("/home/jenna/.local/state/fmi-print-station/printer-recovery-required")
+
+def printer_recovery_required():
+    return PRINTER_RECOVERY_PATH.exists()
+
+def mark_printer_uncertain():
+    PRINTER_RECOVERY_PATH.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    PRINTER_RECOVERY_PATH.write_text("Printer may have an incomplete ESC/POS command. Power-cycle it before clearing this warning.\\n")
+
+def clear_printer_uncertain():
+    PRINTER_RECOVERY_PATH.unlink(missing_ok=True)
+
 def send_printer(data, conf):
     if conf["dry_run"]:
         LOG.info("DRY RUN: %r", data)
         return
+    if printer_recovery_required():
+        raise RuntimeError("Printer recovery required: power-cycle printer and confirm reset in admin settings")
     # ESC @ initialize, then feed a configurable length before cutting.
     raw = bytes([27, 64])
     if conf.get("logo_enabled") and (ROOT / "header_logo.png").exists():
@@ -448,7 +464,13 @@ def send_printer(data, conf):
     address, port = printer_destination(conf)
     with socket.create_connection((address, port), timeout=5) as conn:
         conn.settimeout(10)
+        # Mark BEFORE streaming so even a service crash/power loss during a
+        # bitmap transfer cannot silently feed the next job to a desynced printer.
+        mark_printer_uncertain()
         conn.sendall(raw)
+        # sendall confirms bytes reached the TCP stack, not that paper was
+        # printed; printer mechanical/paper errors may still need attention.
+        clear_printer_uncertain()
 
 def raster_logo(path, max_width):
     from PIL import Image, ImageOps
@@ -682,12 +704,13 @@ class Handler(BaseHTTPRequestHandler):
                              "printer_dhcp_ip": lease_ip,
                              "dry_run": self.conf["dry_run"], "stats": snapshot,
                              "printing": printing_now,
+                             "printer_recovery_required": printer_recovery_required(),
                              "nfc_url": self.conf["nfc_url"] or self.conf["public_base_url"],
                              "challenge_enabled": bool(self.conf.get("challenge_enabled")), "image_settings": {k:self.conf[k] for k in ("max_images_per_receipt","image_width_dots","max_image_upload_mib")}})
         else: self.reply(404, {"error": "Not found"})
     def do_POST(self):
         if not self.permitted(): return
-        if urlsplit(self.path).path not in ("/api/print", "/api/custom", "/api/image/prepare", "/api/pet/draft", "/api/settings", "/api/logo", "/api/logo/remove", "/api/probe", "/api/admin/login", "/api/admin/logout"):
+        if urlsplit(self.path).path not in ("/api/print", "/api/custom", "/api/image/prepare", "/api/pet/draft", "/api/settings", "/api/logo", "/api/logo/remove", "/api/probe", "/api/admin/login", "/api/admin/logout", "/api/printer/recovered"):
             return self.reply(404, {"error": "Not found"})
         # Same-origin check prevents common cross-site drive-by printing.
         origin = self.headers.get("Origin")
@@ -774,10 +797,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/admin/logout":
                 if not self.require_secure_admin(): return
                 return self.reply(200,{"message":"Signed out"},cookie=f"{ADMIN_COOKIE}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Strict")
-            if path in ("/api/settings", "/api/logo", "/api/logo/remove", "/api/probe"):
+            if path in ("/api/settings", "/api/logo", "/api/logo/remove", "/api/probe", "/api/printer/recovered"):
                 if not self.require_secure_admin(): return
                 if not admin_allowed(self):
                     return self.reply(403, {"error": "Admin token required"})
+                if path == "/api/printer/recovered":
+                    if printing_now or not jobs.empty():
+                        return self.reply(409,{"error":"Wait for the printer queue to settle"})
+                    clear_printer_uncertain()
+                    return self.reply(200,{"message":"Printer recovery acknowledged; printing re-enabled"})
                 if path == "/api/probe":
                     with socket.create_connection(printer_destination(self.conf), timeout=3):
                         pass
@@ -884,6 +912,8 @@ class Handler(BaseHTTPRequestHandler):
                 # simultaneous requests cannot spend the same guest code twice.
                 if not (challenge.check_display_code(secret,entered) or challenge.check_pass(secret,owner)):
                     return self.reply(403, {"error":"Enter the current six-digit code shown on Print Pet"})
+            if printer_recovery_required():
+                return self.reply(503,{"error":"Printer requires recovery. Power-cycle the printer and acknowledge reset in Admin Settings."})
             kind = "custom" if path == "/api/custom" else "fine"
             if kind == "custom":
                 try: receipt = validate_custom(payload, self.conf)
