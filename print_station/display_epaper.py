@@ -188,7 +188,7 @@ def snapshot(conf):
         pair_armed=False
     return {"guest_url":guest_print_url(conf),"challenge_code":code,
             "nfc_paired":nfc_paired,"pair_armed":pair_armed,
-            "activity":pet_activity(),
+            "activity":"error" if status.get("printer_recovery_required") else pet_activity(),
             "draft":current_draft() if conf.get("pet_draft_reactions",True) else None,
             "printing":bool(status.get("printing",False)),
             "printer_ok":online,"queue":status.get("queue","?"),
