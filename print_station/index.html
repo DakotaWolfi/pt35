@@ -68,7 +68,7 @@ img#logo{max-width:250px;max-height:130px;background:white}
 </div></section>
 <section class="panel" id="page-settings" hidden><div class="grid"><div class="card"><h2>Station settings</h2>
 <label>Administrator token<input id="token" type="password" autocomplete="off" placeholder="From private config.json"></label>
-<div class="controls"><button id="load-settings">Unlock settings</button><button id="probe" class="secondary">Test printer connection</button></div>
+<div class="controls"><button id="load-settings">Unlock / remember this browser</button><button id="admin-logout" class="secondary" type="button">Forget this browser</button><button id="probe" class="secondary">Test printer connection</button></div>
 <form id="settings-form" hidden><div class="two"><label>Printer IP<input name="printer_host"></label><label>Printer port<input name="printer_port" type="number"></label></div>
 <label>Printer MAC (optional)<input name="printer_mac" placeholder="Leave blank for automatic printer selection" pattern="([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}"></label><p class="small">Leave blank to print to a reachable Epson-like device on the dedicated printer network. To pin one printer, enter its MAC address. Detection uses printer hostnames and TCP port 9100; unsupported models may need a manual MAC.</p><div class="two"><label>Printer mDNS name (optional)<input name="printer_mdns_name" placeholder="Printer-79EB5F.local"></label><label>Dedicated Ethernet interface<input name="printer_interface" placeholder="enx9cebe8ec46e1"></label></div><p class="small">When both discovery fields are set, the printer is found by hostname on Ethernet; its numerical IP can change.</p><label>Header<input name="station_name"></label><label>Subtitle<input name="subtitle"></label><label>Footer<textarea name="footer"></textarea></label>
 <div class="two"><label>Feed before cut (mm)<input name="feed_mm" type="number" min="0" max="200"></label><label>Logo width (dots)<select name="logo_width"><option>256</option><option>384</option><option>512</option><option>576</option></select></label></div>
@@ -364,11 +364,39 @@ function renderHistory(jobs){historyJobs=jobs;const list=$('#history-list');list
 $('#load-history').onclick=async()=>{if(!historyUnlocked)return notice('Unlock history first',true);try{const data=await api('/api/history');renderHistory(data.jobs);notice('History loaded')}catch(err){notice(err.message,true)}};
 function showPrint(job){$('#history-detail').hidden=false;$('#history-meta').textContent='Job #'+job.id+' · '+new Date(job.created*1000).toLocaleString()+' · '+job.state+' · Source IP: '+(job.source_ip||'not recorded')+' · Reverse DNS: '+(job.reverse_dns||'not available')+' · Browser / OS: '+(job.user_agent||'not recorded');$('#history-text').textContent=job.receipt.rendered_text||'(Exact print text unavailable for this old record)';}
 function loadJob(job){const data=job.receipt;if(job.kind==='custom'){const f=$('#custom');f.elements.title.value=data.title;f.elements.subtitle.value=data.subtitle;f.elements.footer.value=data.footer;$('#lines').replaceChildren();for(const item of data.lines)makeRow(item.type,item.text,item.label,item.image||'');drawCustom();location.hash='custom'}else if(data.custom_fine){const f=$('#custom-fine');for(const k of ['fine_title','fine_status','name','issuer','location','offence','amount','currency','message'])if(f.elements[k])f.elements[k].value=data[k]??'';drawCustomFine();location.hash='custom-fine'}else{const f=$('#fine');for(const k of ['name','issuer','location','offence','amount','currency','message'])if(f.elements[k])f.elements[k].value=data[k]??'';drawFine();location.hash='fines'}notice('Loaded job #'+job.id+' into editor; printing creates a new history entry')}
-$('#load-settings').onclick=async()=>{if(!secureAdmin)return notice('HTTPS required for admin settings',true);try{settings=await api('/api/settings');let form=$('#settings-form');for(const [k,v]of Object.entries(settings))if(form.elements[k]){if(form.elements[k].type==='checkbox')form.elements[k].checked=!!v;else form.elements[k].value=v}form.hidden=false;drawFine();drawCustomFine();notice('Settings unlocked')}catch(err){notice(err.message,true)}};
+async function unlockSettings(silent=false){
+ if(!secureAdmin)return;
+ try{
+   const token=$('#token').value.trim();
+   if(token){
+     await api('/api/admin/login','POST',{},token);
+     $('#token').value='';
+   }
+   settings=await api('/api/settings');
+   const form=$('#settings-form');
+   for(const [k,v] of Object.entries(settings))if(form.elements[k]){
+     if(form.elements[k].type==='checkbox')form.elements[k].checked=!!v;
+     else form.elements[k].value=v;
+   }
+   form.hidden=false;
+   drawFine();drawCustomFine();
+   if(!silent)notice('Settings unlocked; browser remembered for 30 days');
+ }catch(err){
+   if(!silent)notice(err.message,true);
+ }
+}
+$('#load-settings').onclick=()=>unlockSettings();
+$('#admin-logout').onclick=async()=>{
+ try{
+   await api('/api/admin/logout','POST',{});
+   $('#token').value='';$('#settings-form').hidden=true;
+   lockHistory();notice('This browser was forgotten');
+ }catch(err){notice(err.message,true)}
+};
 $('#settings-form').onsubmit=async e=>{e.preventDefault();const form=e.target,data={};for(const k of ['printer_host','printer_port','printer_mac','printer_mdns_name','printer_interface','station_name','subtitle','footer','feed_mm','logo_width','max_jobs_per_hour_per_ip','global_min_interval_seconds','max_images_per_receipt','image_width_dots','max_image_upload_mib'])data[k]=form.elements[k].value;for(const k of ['logo_enabled','cut','dry_run','challenge_enabled','pet_draft_reactions'])data[k]=form.elements[k].checked;try{settings=await api('/api/settings','POST',data);notice('Settings saved');drawFine();drawCustomFine();refresh()}catch(err){notice(err.message,true)}};
 $('#get-print-pass').onclick=async()=>{try{const data=await api('/api/bypass');$('#owner-pass').textContent=data.token;$('#owner-pass-qr').src='data:image/png;base64,'+data.qr_png_base64;$('#owner-pass-qr').hidden=false;notice('Temporary print pass issued; expires within 10 minutes')}catch(err){notice(err.message,true)}};
 $('#probe').onclick=async()=>{try{notice((await api('/api/probe','POST',{})).message)}catch(err){notice(err.message,true)}};
 $('#upload').onchange=async()=>{const file=$('#upload').files[0];if(!file)return;if(file.size>1500000)return notice('Max file size is 1.5MB',true);const encoded=await new Promise((res,rej)=>{const reader=new FileReader();reader.onload=()=>res(reader.result.split(',')[1]);reader.onerror=rej;reader.readAsDataURL(file)});try{await api('/api/logo','POST',{data:encoded});$('#logo').hidden=false;$('#logo').src='/api/logo?v='+Date.now();notice('Logo uploaded')}catch(err){notice(err.message,true)}};
 $('#remove-logo').onclick=async()=>{try{await api('/api/logo/remove','POST',{});$('#logo').hidden=true;notice('Logo removed')}catch(err){notice(err.message,true)}};
-drawFine();refresh();
+drawFine();refresh();if(secureAdmin)unlockSettings(true);
 </script></body></html>
