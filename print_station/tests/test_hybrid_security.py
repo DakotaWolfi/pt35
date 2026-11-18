@@ -59,6 +59,32 @@ class TestAdminTransport(unittest.TestCase):
             self.assertEqual(self.request(self.http,path,forwarded="https"),403)
         self.assertEqual(self.request(self.http,"api/status"),200)
 
+    def test_admin_cookie_login_and_logout(self):
+        import json
+        base="http://127.0.0.1:{}".format(self.secure.server_port)
+        login=urllib.request.Request(base+"/api/admin/login",
+            data=b"{}",method="POST",
+            headers={"Content-Type":"application/json",
+                     "X-FMI-Admin":"secret-test-token",
+                     "X-Forwarded-Proto":"https"})
+        with urllib.request.urlopen(login,timeout=2) as response:
+            self.assertEqual(response.status,200)
+            header=response.headers["Set-Cookie"]
+        self.assertIn("HttpOnly",header)
+        self.assertIn("Secure",header)
+        self.assertIn("SameSite=Strict",header)
+        cookie=header.split(";",1)[0]
+        settings=urllib.request.Request(base+"/api/settings",
+            headers={"Cookie":cookie,"X-Forwarded-Proto":"https"})
+        with urllib.request.urlopen(settings,timeout=2) as response:
+            self.assertEqual(response.status,200)
+            self.assertIn("image_width_dots",json.load(response))
+        blocked=urllib.request.Request("http://127.0.0.1:{}/api/settings".format(self.http.server_port),
+            headers={"Cookie":cookie,"X-Forwarded-Proto":"https"})
+        with self.assertRaises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(blocked,timeout=2)
+        self.assertEqual(exc.exception.code,403)
+
     def test_admin_listener_needs_https_proxy_indication(self):
         self.assertEqual(self.request(self.secure,"api/settings"),403)
         self.assertEqual(self.request(self.secure,"api/settings",forwarded="https"),200)
