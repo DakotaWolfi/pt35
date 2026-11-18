@@ -3,6 +3,8 @@
 import copy
 import base64
 import hmac
+import hashlib
+import secrets
 import io
 import datetime as dt
 import ipaddress
@@ -472,10 +474,49 @@ def raster_logo(path, max_width):
                    row_bytes & 255, row_bytes >> 8,
                    height & 255, height >> 8]) + data + b"\n")
 
+ADMIN_COOKIE="fmi_admin_session"
+ADMIN_SESSION_SECONDS=30*24*3600
+
+def admin_secret(conf):
+    return str(conf.get("admin_token") or os.environ.get(conf.get("admin_token_env","FMI_PRINT_ADMIN_TOKEN"),""))
+
+def make_admin_session(secret,now=None):
+    expiry=int(time.time() if now is None else now)+ADMIN_SESSION_SECONDS
+    nonce=secrets.token_hex(16)
+    value=f"{expiry}.{nonce}"
+    signature=hmac.new(secret.encode(),("fmi-admin-session:"+value).encode(),hashlib.sha256).hexdigest()
+    return value+"."+signature
+
+def valid_admin_session(secret,cookie,now=None):
+    if not secret or not isinstance(cookie,str) or len(cookie)>256:
+        return False
+    try:
+        expiry_text,nonce,signature=cookie.split(".")
+        expiry=int(expiry_text)
+        if len(nonce)!=32 or len(signature)!=64 or not all(ch in "0123456789abcdef" for ch in nonce+signature):
+            return False
+        current=int(time.time() if now is None else now)
+        if not current<=expiry<=current+ADMIN_SESSION_SECONDS:
+            return False
+        value=expiry_text+"."+nonce
+        expected=hmac.new(secret.encode(),("fmi-admin-session:"+value).encode(),hashlib.sha256).hexdigest()
+        return hmac.compare_digest(signature,expected)
+    except (ValueError,TypeError):
+        return False
+
 def admin_allowed(handler):
-    configured = handler.conf.get("admin_token") or os.environ.get(handler.conf.get("admin_token_env", "FMI_PRINT_ADMIN_TOKEN"), "")
-    provided = handler.headers.get("X-FMI-Admin", "")
-    return bool(configured) and hmac.compare_digest(str(configured), provided)
+    secret=admin_secret(handler.conf)
+    provided=handler.headers.get("X-FMI-Admin","")
+    if secret and provided and hmac.compare_digest(secret,provided):
+        return True
+    from http.cookies import SimpleCookie
+    try:
+        jar=SimpleCookie()
+        jar.load(handler.headers.get("Cookie","")[:2048])
+        session=jar.get(ADMIN_COOKIE)
+        return bool(session and valid_admin_session(secret,session.value))
+    except Exception:
+        return False
 
 def public_config(conf):
     keys = ("station_name", "subtitle", "footer", "printer_host", "printer_port",
@@ -536,12 +577,14 @@ class Handler(BaseHTTPRequestHandler):
         if self.admin_transport(): return True
         self.reply(403, {"error": "Administrator functions require HTTPS; use the secured admin URL"})
         return False
-    def reply(self, code, body, mime="application/json"):
+    def reply(self, code, body, mime="application/json", cookie=None):
         payload = json.dumps(body).encode() if mime == "application/json" else body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", mime + ("; charset=utf-8" if mime.startswith("text/") else ""))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
+        if cookie is not None:
+            self.send_header("Set-Cookie",cookie)
         self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' blob: data:; script-src 'unsafe-inline' 'self'; style-src 'unsafe-inline' 'self'; object-src 'none'; base-uri 'none'")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Length", str(len(payload)))
@@ -644,7 +687,7 @@ class Handler(BaseHTTPRequestHandler):
         else: self.reply(404, {"error": "Not found"})
     def do_POST(self):
         if not self.permitted(): return
-        if urlsplit(self.path).path not in ("/api/print", "/api/custom", "/api/image/prepare", "/api/pet/draft", "/api/settings", "/api/logo", "/api/logo/remove", "/api/probe"):
+        if urlsplit(self.path).path not in ("/api/print", "/api/custom", "/api/image/prepare", "/api/pet/draft", "/api/settings", "/api/logo", "/api/logo/remove", "/api/probe", "/api/admin/login", "/api/admin/logout"):
             return self.reply(404, {"error": "Not found"})
         # Same-origin check prevents common cross-site drive-by printing.
         origin = self.headers.get("Origin")
@@ -720,6 +763,17 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 return self.reply(400, {"error": "JSON object required"})
             path = urlsplit(self.path).path
+            if path == "/api/admin/login":
+                if not self.require_secure_admin(): return
+                secret=admin_secret(self.conf)
+                supplied=self.headers.get("X-FMI-Admin","")
+                if not (secret and supplied and hmac.compare_digest(secret,supplied)):
+                    return self.reply(403,{"error":"Invalid administrator token"})
+                cookie=f"{ADMIN_COOKIE}={make_admin_session(secret)}; Max-Age={ADMIN_SESSION_SECONDS}; Path=/; HttpOnly; Secure; SameSite=Strict"
+                return self.reply(200,{"message":"This browser is remembered for 30 days"},cookie=cookie)
+            if path == "/api/admin/logout":
+                if not self.require_secure_admin(): return
+                return self.reply(200,{"message":"Signed out"},cookie=f"{ADMIN_COOKIE}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Strict")
             if path in ("/api/settings", "/api/logo", "/api/logo/remove", "/api/probe"):
                 if not self.require_secure_admin(): return
                 if not admin_allowed(self):
