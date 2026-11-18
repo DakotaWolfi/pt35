@@ -7,6 +7,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app
 
 class TestPrintStation(unittest.TestCase):
+    def test_admin_cookie_expires_and_rejects_tampering(self):
+        token=app.make_admin_session("test-secret",now=1000)
+        self.assertTrue(app.valid_admin_session("test-secret",token,now=1001))
+        self.assertFalse(app.valid_admin_session("test-secret",token,now=1001+app.ADMIN_SESSION_SECONDS))
+        self.assertFalse(app.valid_admin_session("wrong-secret",token,now=1001))
+        self.assertFalse(app.valid_admin_session("test-secret",token[:-1]+"0",now=1001))
+
+    def test_interrupted_printer_stream_blocks_following_jobs(self):
+        from unittest.mock import patch, Mock
+        with tempfile.TemporaryDirectory() as folder:
+            marker=Path(folder)/"printer-recovery-required"
+            conf={**app.DEFAULT,"dry_run":False,"logo_enabled":False,"cut":False}
+            socket_connection=Mock()
+            socket_connection.__enter__=Mock(return_value=socket_connection)
+            socket_connection.__exit__=Mock(return_value=False)
+            socket_connection.sendall.side_effect=OSError("Printer disconnected during bitmap")
+            with patch.object(app,"PRINTER_RECOVERY_PATH",marker), patch.object(app,"printer_destination",return_value=("10.88.77.30",9100)), patch.object(app.socket,"create_connection",return_value=socket_connection):
+                with self.assertRaises(OSError):
+                    app.send_printer(b"receipt",conf)
+                self.assertTrue(marker.exists())
+                with self.assertRaises(RuntimeError):
+                    app.send_printer(b"next receipt",conf)
+                app.clear_printer_uncertain()
+                socket_connection.sendall.side_effect=None
+                app.send_printer(b"after printer reset",conf)
+                self.assertFalse(marker.exists())
+
     def test_config_default(self):
         with tempfile.TemporaryDirectory() as d:
             c=app.load_config(Path(d)/"missing.json")
