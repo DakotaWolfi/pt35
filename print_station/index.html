@@ -68,7 +68,7 @@ img#logo{max-width:250px;max-height:130px;background:white}
 </div></section>
 <section class="panel" id="page-settings" hidden><div class="grid"><div class="card"><h2>Station settings</h2>
 <label>Administrator token<input id="token" type="password" autocomplete="off" placeholder="From private config.json"></label>
-<div class="controls"><button id="load-settings">Unlock / remember this browser</button><button id="admin-logout" class="secondary" type="button">Forget this browser</button><button id="probe" class="secondary">Test printer connection</button></div>
+<p id="printer-recovery-warning" class="error" hidden>Printer print stream may be corrupted. Power-cycle the Epson before clearing the recovery lock.</p><div class="controls"><button id="printer-recovered" class="secondary" type="button" hidden>I power-cycled the printer — resume printing</button></div><div class="controls"><button id="load-settings">Unlock / remember this browser</button><button id="admin-logout" class="secondary" type="button">Forget this browser</button><button id="probe" class="secondary">Test printer connection</button></div>
 <form id="settings-form" hidden><div class="two"><label>Printer IP<input name="printer_host"></label><label>Printer port<input name="printer_port" type="number"></label></div>
 <label>Printer MAC (optional)<input name="printer_mac" placeholder="Leave blank for automatic printer selection" pattern="([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}"></label><p class="small">Leave blank to print to a reachable Epson-like device on the dedicated printer network. To pin one printer, enter its MAC address. Detection uses printer hostnames and TCP port 9100; unsupported models may need a manual MAC.</p><div class="two"><label>Printer mDNS name (optional)<input name="printer_mdns_name" placeholder="Printer-79EB5F.local"></label><label>Dedicated Ethernet interface<input name="printer_interface" placeholder="enx9cebe8ec46e1"></label></div><p class="small">When both discovery fields are set, the printer is found by hostname on Ethernet; its numerical IP can change.</p><label>Header<input name="station_name"></label><label>Subtitle<input name="subtitle"></label><label>Footer<textarea name="footer"></textarea></label>
 <div class="two"><label>Feed before cut (mm)<input name="feed_mm" type="number" min="0" max="200"></label><label>Logo width (dots)<select name="logo_width"><option>256</option><option>384</option><option>512</option><option>576</option></select></label></div>
@@ -348,7 +348,7 @@ $('#import-template').onchange=async()=>{
 };
 refreshTemplates();
 $('#reset-custom').click();
-async function refresh(){try{const data=await api('/api/status');if(data.image_settings)Object.assign(settings,data.image_settings);$('#challenge-panel').hidden=!data.challenge_enabled;$('#health').textContent='Queued: '+data.queue+' · Printed: '+data.stats.printed+' · Failed: '+data.stats.failed+' · Epson DHCP: '+(data.printer_dhcp_ip||'No matching lease');$('#mode').textContent=data.dry_run?'DRY RUN':'LIVE PRINT'}catch(err){$('#health').textContent=err.message}}
+async function refresh(){try{const data=await api('/api/status');if(data.image_settings)Object.assign(settings,data.image_settings);$('#printer-recovery-warning').hidden=!data.printer_recovery_required;$('#printer-recovered').hidden=!data.printer_recovery_required;$('#challenge-panel').hidden=!data.challenge_enabled;$('#health').textContent='Queued: '+data.queue+' · Printed: '+data.stats.printed+' · Failed: '+data.stats.failed+' · Epson DHCP: '+(data.printer_dhcp_ip||'No matching lease');$('#mode').textContent=data.dry_run?'DRY RUN':'LIVE PRINT'}catch(err){$('#health').textContent=err.message}}
 function lockHistory(){historyUnlocked=false;historyJobs=[];$('#history-list').replaceChildren();$('#history-detail').hidden=true;$('#history-text').textContent='';$('#history-meta').textContent='';$('#history-lock').hidden=false;$('#history-private').hidden=true;$('#history-token').value='';$('#token').value='';$('#settings-form').hidden=true}
 $('#history-lock-button').onclick=()=>{lockHistory();notice('History locked')};
 $('#history-unlock').onclick=async()=>{if(!secureAdmin)return notice('HTTPS required for admin history',true);const key=$('#history-token').value;if(!key)return notice('Enter administrator token',true);try{
@@ -386,6 +386,7 @@ async function unlockSettings(silent=false){
  }
 }
 $('#load-settings').onclick=()=>unlockSettings();
+$('#printer-recovered').onclick=async()=>{if(!confirm('Have you power-cycled the Epson printer to clear its ESC/POS state?'))return;try{await api('/api/printer/recovered','POST',{});notice('Printer printing unlocked');refresh()}catch(err){notice(err.message,true)}};
 $('#admin-logout').onclick=async()=>{
  try{
    await api('/api/admin/logout','POST',{});
