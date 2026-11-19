@@ -1,0 +1,15 @@
+{
+  "device": "Example coffee maker",
+  "device_id": "RC-DEMO-001",
+  "protection_class": "I",
+  "standard": "EXAMPLE ONLY - VERIFY ACTUAL STANDARD",
+  "date": "2026-11-19 14:30",
+  "tester": "DEMO TESTER - NOT CONNECTED",
+  "tester_serial": "DEMO",
+  "operator": "Example operator",
+  "result": "UNKNOWN",
+  "measurements": [
+    {"name": "Protective conductor resistance", "value": "0.12", "unit": "ohm", "result": "EXAMPLE"},
+    {"name": "Insulation resistance", "value": "20", "unit": "Mohm", "result": "EXAMPLE"}
+  ]
+}
