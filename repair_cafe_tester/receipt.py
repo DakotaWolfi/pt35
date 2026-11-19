@@ -17,7 +17,7 @@ MAX_MEASUREMENTS=40
 
 def ascii_text(value, length=70):
     value=unicodedata.normalize("NFKD",str(value))
-    return "".join(ch for ch in value if ord(ch)<128 and ch not in "\r\x1b\x7f")[:length]
+    return "".join(ch for ch in value if 32 <= ord(ch) < 127)[:length]
 
 
 def validate_report(data):
