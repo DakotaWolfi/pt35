@@ -12,8 +12,9 @@ if [[ ! -x "$VENV/bin/python" ]]; then
   python3 -m venv --system-site-packages "$VENV"
 fi
 "$VENV/bin/python" -m pip install --upgrade pip
-"$VENV/bin/python" -m pip install Adafruit-Blinka adafruit-circuitpython-as7341 smbus2
+"$VENV/bin/python" -m pip install Adafruit-Blinka adafruit-circuitpython-as7341 smbus2 "gpiod>=2.2.2,<3" "Adafruit-Blinka-Raspberry-Pi-PWM>=1.0.2" Adafruit-Blinka-Raspberry-Pi5-Neopixel
 echo "=== AS7341 Python import test ==="
+export BLINKA_SKIP_DEPENDENCY_CHECK=1
 "$VENV/bin/python" - <<'PY'
 import sys
 import board
