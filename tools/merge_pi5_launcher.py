@@ -77,6 +77,7 @@ m=re.sub(r"(?m)^(\[menu.settings\][ \t]*\n[\s\S]*?^[ \t]*entries\s*=\s*\[)",
   {{ label = "Normal menu icon", exec = "{toggle2}", icon = "open-menu", glyph = "MN" }},
   {suffix}''',m,count=1)
 m=section_remove(m,"menu.fmi")
+m=section_remove(m,"menu.fmi_leds")
 fmi=[
  ('"Spectral analyser", app = "fmi_spectrum", icon = "utilities-system-monitor"'),
  ('"NFC reader", app = "fmi_nfc", icon = "network-wireless"'),
