@@ -24,7 +24,10 @@ def add_app(id,label,glyph,icon,exec_,match=None,scale=None):
     lines=[f"[app.{id}]",f'label = "{label}"',f'glyph = "{glyph}"',
            f'icon = "{icon}"',f'exec = "{exec_}"']
     if match:
-        lines.append(f'match = {{ app_id = "{match}" }}')
+        if match == "PT35NFC":
+            lines.append('match = { class = "PT35NFC" }')
+        else:
+            lines.append(f'match = {{ app_id = "{match}" }}')
     if scale:
         lines.append(f"scale = {scale}")
     return "\n".join(lines)+"\n"
@@ -35,7 +38,7 @@ for id in ("fmi_spectrum","fmi_nfc","fmi_battery","fmi_remote_eye","fmi_dashboar
     s=section_remove(s,f"app.{id}")
 entries=[
   ("fmi_spectrum","Spectral analyser","SP","utilities-system-monitor",f"foot -a fmi-spectrum {bin} spectrum","fmi-spectrum",None),
-  ("fmi_nfc","NFC reader","NF","network-wireless",f"{bin} nfc",None,0.75),
+  ("fmi_nfc","NFC reader","NF","network-wireless",f"{bin} nfc","PT35NFC",None),
   ("fmi_battery","Battery diagnostics","BT","battery",f"foot -a fmi-battery {bin} battery","fmi-battery",None)]
 for id, label, glyph, icon, cmd, match, scale in entries:
     s=s.rstrip()+"\n\n"+add_app(id,label,glyph,icon,cmd,match,scale)
