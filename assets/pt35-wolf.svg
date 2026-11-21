@@ -1,31 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <title>FMI Wolf Head</title>
-  <desc>A forward-facing wolf with pointed upright ears, cheek fur, expressive eyes, and a tapered muzzle.</desc>
-  <g fill="#ffffff">
-    <!-- Outward-facing ear tufts and the silhouette of a wolf's cheek ruff -->
-    <path d="M7 4 L19 11 Q24 8 32 8 Q40 8 45 11 L57 4 L55 24 Q61 32 57 42 L51 45 L52 50 L43 55 L38 60 L32 63 L26 60 L21 55 L12 50 L13 45 L7 42 Q3 32 9 24 Z"/>
-  </g>
-  <g fill="#121f1a">
-    <!-- Ear interiors -->
-    <path d="M12 11 L22 16 L14 28 Z"/>
-    <path d="M52 11 L42 16 L50 28 Z"/>
-    <!-- Brows and eyes: separate directional shapes are legible at 24px -->
-    <path d="M13 31 Q19 26 28 32 L25 36 Q19 37 13 31 Z"/>
-    <path d="M51 31 Q45 26 36 32 L39 36 Q45 37 51 31 Z"/>
-    <!-- Central white blaze retained between the eyes -->
-    <path d="M28 18 L32 25 L36 18 L34 33 L32 39 L30 33 Z"/>
-    <!-- Cheek/under-eye fur contours -->
-    <path d="M10 39 L22 43 L19 47 L25 50 L15 47 Z"/>
-    <path d="M54 39 L42 43 L45 47 L39 50 L49 47 Z"/>
-    <!-- Tapered two-sided muzzle -->
-    <path d="M23 46 Q29 43 32 45 Q35 43 41 46 L37 54 L32 56 L27 54 Z"/>
-  </g>
-  <!-- Small pale whisker dots add facial definition -->
-  <g fill="#ffffff">
-    <circle cx="25" cy="49" r="1"/>
-    <circle cx="39" cy="49" r="1"/>
-  </g>
-  <!-- Black nose and philtrum -->
-  <path d="M27 48 L37 48 L34 53 L30 53 Z" fill="#121f1a"/>
-  <path d="M32 52 L32 57" fill="none" stroke="#121f1a" stroke-width="2" stroke-linecap="round"/>
+  <title>FMI Wolf</title>
+  <desc>Wolf head with distinctive swept ears, eyebrows, cheek ruff and long muzzle.</desc>
+  <defs>
+    <mask id="features">
+      <rect width="64" height="64" fill="black"/>
+      <path fill="white" d="M7 4 L19 11 Q24 8 32 8 Q40 8 45 11 L57 4 L55 24 Q61 32 57 42 L51 45 L52 50 L43 55 L38 60 L32 63 L26 60 L21 55 L12 50 L13 45 L7 42 Q3 32 9 24 Z"/>
+      <g fill="black">
+        <path d="M12 11 L22 16 L14 28 Z"/>
+        <path d="M52 11 L42 16 L50 28 Z"/>
+        <path d="M13 31 Q19 26 28 32 L25 36 Q19 37 13 31 Z"/>
+        <path d="M51 31 Q45 26 36 32 L39 36 Q45 37 51 31 Z"/>
+        <path d="M28 18 L32 25 L36 18 L34 33 L32 39 L30 33 Z"/>
+        <path d="M10 39 L22 43 L19 47 L25 50 L15 47 Z"/>
+        <path d="M54 39 L42 43 L45 47 L39 50 L49 47 Z"/>
+        <path d="M23 46 Q29 43 32 45 Q35 43 41 46 L37 54 L32 56 L27 54 Z"/>
+        <path d="M28 49 L36 49 L34 53 L30 53 Z"/>
+      </g>
+      <path d="M30 55 L32 57 L34 55" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <rect width="64" height="64" fill="white" mask="url(#features)"/>
 </svg>
