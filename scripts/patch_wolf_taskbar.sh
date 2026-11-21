@@ -48,34 +48,39 @@ if old in data: data=data.replace(old,new,1); ui.write_text(data)
 elif "pt35_ui::pixel::WOLF" not in data: raise SystemExit("Cannot locate menu icon selection; upstream changed")
 print("Wolf source patch applied.")
 PY
-CONF="$HOME/.config/pt35/theme.toml"
-mkdir -p "$(dirname "$CONF")"
-if [ -f "$CONF" ]; then cp -a "$CONF" "$CONF.bak.$(date +%Y%m%d-%H%M%S)"; fi
-python3 - "$CONF" <<'PY'
-from pathlib import Path
-import re,sys
-p=Path(sys.argv[1]); s=p.read_text() if p.exists() else ""
-if re.search(r"(?m)^\[bar\]\s*$",s):
-    m=re.search(r"(?m)^\[bar\]\s*$",s)
-    a=m.end(); n=re.search(r"(?m)^\[",s[a:]); b=a+n.start() if n else len(s)
-    segment=s[a:b]
-    if re.search(r"(?m)^menu_icon\s*=",segment):
-        segment=re.sub(r"(?m)^menu_icon\s*=.*$",'menu_icon = "wolf"',segment)
-    else: segment += '\nmenu_icon = "wolf"\n'
-    s=s[:a]+segment+s[b:]
-else: s=s.rstrip()+'\n\n[bar]\nmenu_icon = "wolf"\n'
-p.write_text(s)
-PY
+# Keep the installed desktop unchanged until a wolf-capable bar is ready.
 if ! command -v cargo >/dev/null; then
-  echo "Wolf option written. To build, install Rust first and rerun:"
-  echo "  curl https://sh.rustup.rs -sSf | sh"
-  echo "  source \"$HOME/.cargo/env\""
+  echo "Wolf source staged, but Rust cargo isn't installed. Existing desktop untouched."
   exit 0
 fi
 cd "$SRC"
 cargo build --release -p pt35-bar --locked
-echo "Build successful. To replace only taskbar binary:"
-echo "  sudo cp -a /usr/bin/pt35-bar /usr/bin/pt35-bar.fmi-before-wolf"
-echo "  sudo install -m755 $SRC/target/release/pt35-bar /usr/bin/pt35-bar"
-echo "  pt35ctl reload"
-echo "Existing binary NOT replaced automatically."
+echo "Wolf bar compiled. Installed desktop has not been changed."
+if [[ "$#" -eq 0 || "$1" != "--install" ]]; then
+  echo "To install: bash $ROOT/scripts/patch_wolf_taskbar.sh --install"
+  exit 0
+fi
+CURRENT="$(command -v pt35-bar)"
+BACKUP="$CURRENT.fmi-before-wolf"
+if [[ ! -f "$BACKUP" ]]; then sudo cp -a "$CURRENT" "$BACKUP"; fi
+sudo install -m755 "$SRC/target/release/pt35-bar" "$CURRENT"
+CONF="$HOME/.config/pt35/theme.toml"
+mkdir -p "$(dirname "$CONF")"
+[[ -f "$CONF" ]] && cp -a "$CONF" "$CONF.bak.$(date +%Y%m%d-%H%M%S)" || true
+python3 - "$CONF" <<'PY'
+from pathlib import Path
+import re,sys
+p=Path(sys.argv[1]); s=p.read_text() if p.exists() else ""
+m=re.search(r"(?m)^\[bar\][ \t]*$",s)
+if m:
+    a=m.end(); n=re.search(r"(?m)^\[",s[a:]); b=a+n.start() if n else len(s)
+    section=s[a:b]
+    if re.search(r"(?m)^[ \t]*menu_icon[ \t]*=",section):
+        section=re.sub(r"(?m)^[ \t]*menu_icon[ \t]*=.*$",'menu_icon = "wolf"',section)
+    else: section += '\nmenu_icon = "wolf"\n'
+    s=s[:a]+section+s[b:]
+else: s=s.rstrip()+'\n\n[bar]\nmenu_icon = "wolf"\n'
+p.write_text(s)
+PY
+echo "Wolf installed. Log out and back in (or reboot) to reload the taskbar binary."
+echo "Rollback executable: sudo cp -a '$BACKUP' '$CURRENT'"
