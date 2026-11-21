@@ -37,3 +37,21 @@ systemctl status pt35-leds.service
 ```
 
 No automatic LED, fan, keyboard firmware, or haptic hardware activation is included in the wolf/launcher scripts.
+
+## Updated launcher / input / LED stage
+
+Run: cd ~/pt35-migration && git pull && bash scripts/install_pi5_shell.sh
+Creates FMI Tools launcher tile (pin with Y), Settings > FMI Tools submenu, conditional Remote Eye / Collar Pet apps, and an LED Controls submenu.
+Settings includes Wolf menu icon and Normal menu icon. Wolf option is blocked until our custom taskbar binary is installed.
+Build and install wolf: bash scripts/patch_wolf_taskbar.sh --install (requires Rust >=1.82; backs up installed bar binary; logout/login afterward).
+
+The legacy pt35-buttons.service must not run alongside native PocketTerm35 input bindings. Check: systemctl --user status pt35-buttons.service
+To stop it: systemctl --user disable --now pt35-buttons.service
+Stock keyboard A/B/X/Y/L/R are indistinguishable from typed letters. Upstream patched firmware makes them distinctive (but flash only after explicit decision); L closes a window, R switches mouse mode, A/B click in mouse mode.
+
+## Pi5 LED test (manual, opt-in)
+Install scripts/install_pi5_leds.sh only after verifying 16 WS2812 pixels on BCM GPIO18 and /dev/pio0 presence. Uses Adafruit RP1 PIO library; does not enable/start the service automatically.
+To bench test: systemctl --user start pt35-leds-pi5
+Then: ~/.local/bin/pt35-ledctl status ; ~/.local/bin/pt35-ledctl color 0 10 0 ; ~/.local/bin/pt35-ledctl off
+Stop: systemctl --user stop pt35-leds-pi5
+Default output OFF and brightness capped at 15%. Requires common ground and adequate 5 V LED supply; a data level shifter may be needed.
