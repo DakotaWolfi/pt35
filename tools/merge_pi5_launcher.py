@@ -62,9 +62,16 @@ extra=[
  ("fmi_dashboard","Collar Pet dashboard","CP","utilities-system-monitor",home/".local/bin/cp-dashboard"),
  ("fmi_trainer","Petmind training","PT","applications-education",home/".local/bin/cp-petmind-training")]
 installed_extra=[]
+log_wrappers = {
+ "fmi_remote_eye": home/".local/bin/pt35-run-eye",
+ "fmi_dashboard": home/".local/bin/pt35-run-collarpet",
+ "fmi_trainer": home/".local/bin/pt35-run-trainer",
+}
 for id,label,glyph,icon,executable in extra:
     if executable.is_file():
-        s=s.rstrip()+"\n\n"+add_app(id,label,glyph,icon,str(executable))
+        effective=log_wrappers.get(id)
+        cmd=effective if effective is not None and effective.is_file() else executable
+        s=s.rstrip()+"\n\n"+add_app(id,label,glyph,icon,str(cmd))
         installed_extra.append((id,label))
 # Delay writing both configurations until TOML validation succeeds.
 
