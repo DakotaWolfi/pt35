@@ -1,41 +1,53 @@
 #!/usr/bin/env python3
-"""Report PT35 battery status without changing sensor configuration.
-
-Prefer Linux power_supply (used by the PocketTerm35-OS taskbar).
-Fallback is the MAX17048 at I2C address 0x36, which is *not* a kernel bar feed.
-"""
+"""Read-only battery diagnostics for the PT35 MAX17048 kernel driver."""
 from pathlib import Path
+from datetime import datetime
 
-def power_supply():
-    root = Path("/sys/class/power_supply")
-    for item in sorted(root.glob("*")):
-        kind = item / "type"
-        if not kind.is_file() or kind.read_text().strip() != "Battery":
-            continue
-        def get(key):
-            f = item / key
-            return f.read_text().strip() if f.exists() else None
-        cap = get("capacity")
-        raw = get("voltage_now")
-        voltage = f"{int(raw)/1000000:.3f} V" if raw and raw.isdigit() else "unknown"
-        print(f"Linux battery: {item.name}, {cap or '?'}%, {voltage}, status={get('status') or 'unknown'}")
-        return True
-    return False
+ROOT = Path("/sys/class/power_supply")
 
-def fallback_max17048():
+
+def read(path, name):
     try:
-        from smbus2 import SMBus
-        with SMBus(1) as bus:
-            # MAX17048 VCELL (0x02/03) LSB 78.125 uV.
-            v = (bus.read_byte_data(0x36, 0x02) << 8) | bus.read_byte_data(0x36, 0x03)
-            # SOC (0x04/05) 1/256 percent per LSB.
-            s = (bus.read_byte_data(0x36, 0x04) << 8) | bus.read_byte_data(0x36, 0x05)
-        print(f"MAX17048 I2C (diagnostic only): {s/256:.1f}%  {v*78.125/1000000:.3f} V")
-        print("This is not connected to the desktop battery bar yet.")
-    except Exception as exc:
-        print(f"No readable gauge: {exc}")
-        print("Install python3-smbus2 for direct diagnostics; check wiring and device variant.")
+        return (path / name).read_text().strip()
+    except (FileNotFoundError, OSError):
+        return None
+
+
+def detail(path):
+    print(f"Device: {path.name}")
+    print(f"Type: {read(path, 'type') or '?'}")
+    for attr in ("model_name", "manufacturer", "capacity", "capacity_level", "status",
+                 "voltage_now", "voltage_min_design", "voltage_max_design",
+                 "charge_now", "current_now", "online"):
+        raw = read(path, attr)
+        if raw is None:
+            continue
+        if attr.startswith("voltage_") and raw.lstrip("-").isdigit():
+            print(f"  {attr}: {int(raw) / 1_000_000:.4f} V  (raw {raw} µV)")
+        elif attr == "current_now" and raw.lstrip("-").isdigit():
+            print(f"  {attr}: {int(raw) / 1_000_000:.3f} A")
+        else:
+            print(f"  {attr}: {raw}")
+
+
+def main():
+    print(f"PT35 Battery Diagnostics — {datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z}")
+    print("=" * 59)
+    if not ROOT.is_dir():
+        print("/sys/class/power_supply not present")
+        return
+    found = False
+    for p in sorted(ROOT.iterdir()):
+        if p.is_dir() and read(p, "type") in ("Battery", "Mains", "USB", "USB_C", "USB_PD"):
+            found = True
+            detail(p)
+            print()
+    if not found:
+        print("No battery/charger power_supply devices exposed by Linux.")
+    print("MAX17048 SOC is a model-based estimate, not a charger termination signal.")
+    print("If the charger says full at 89%, measure cell voltage and identify the pack/charger.")
+    print("A MAX17048 is intended for one cell. Do not attach it across a 2S pack.")
+
 
 if __name__ == "__main__":
-    if not power_supply():
-        fallback_max17048()
+    main()
