@@ -13,7 +13,7 @@ case "\$1" in
     if [[ -x "\$HOME/as7341-env/bin/python" ]]; then
       exec "\$HOME/as7341-env/bin/python" "$ROOT/tools/pt35_tools.py"
     fi
-    exec python3 "$ROOT/tools/pt35_tools.py" ;;
+    exec python3 "$ROOT/tools/pt35_tools.py" --device as7341 ;;
   nfc) exec /usr/bin/python3 "$ROOT/nfc/pt35_nfc_gui.py" ;;
   battery) exec /usr/bin/python3 "$ROOT/tools/pi5_battery_status.py" ;;
   *) echo "Usage: fmi-pt35-tool spectrum|nfc|battery"; exit 2 ;;
