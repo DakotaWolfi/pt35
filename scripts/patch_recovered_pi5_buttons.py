@@ -38,21 +38,31 @@ nfc_keys = """        # PT35 hardware: A=F18 and B=F17 through cafe:4011 bridge.
         # PT35_PI5_AB_BUTTONS_V1
         self.bind('<F18>', self.pt35_a_button, add='+')
         self.bind('<F17>', self.pt35_b_button, add='+')
+"""
+patch(nfc, nfc_anchor, nfc_keys)
 
-    def pt35_a_button(self, _event):
-        # Start/stop a watch scan on the home page only. Don't trigger other
-        # reader actions while viewing settings, archives, editors, etc.
+# Methods must be at class indentation, not inside __init__.
+nfc_methods_anchor = "    def resize_ui(self, event):"
+nfc_methods = """    def pt35_a_button(self, _event):
+        # Only start/stop on the home screen; avoid accidental scanner starts
+        # during archive, settings, and text editing.
         if not self.closing and self.screen == 'home' and self.ready and not self.stopping:
             self.toggle_scan()
         return 'break'
 
     def pt35_b_button(self, _event):
-        # B closes the window; existing close() gracefully stops active RF.
         if not self.closing:
             self.close()
         return 'break'
+
 """
-patch(nfc, nfc_anchor, nfc_keys)
+nfc_source = nfc.read_text(encoding="utf-8")
+if "    def pt35_a_button(" not in nfc_source:
+    if nfc_source.count(nfc_methods_anchor) != 1:
+        raise SystemExit("Could not locate original NFC resize_ui method; inspect manual backup")
+    updated_nfc = nfc_source.replace(nfc_methods_anchor, nfc_methods + nfc_methods_anchor, 1)
+    ast.parse(updated_nfc, str(nfc))
+    nfc.write_text(updated_nfc, encoding="utf-8")
 
 spectrum = base / "tools/as7341_gui.py"
 spectrum_anchor = '        self.bind("<Escape>", lambda _: self.close())'
