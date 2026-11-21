@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # PT35 Pi 5 migration helper. No firmware flash, automatic reboot or legacy GPIO install.
 set -Eeuo pipefail
-case "\${1:-}" in
+case "${1:-}" in
   --check|--install-desktop) MODE="$1";;
   *) echo "Usage: bash scripts/migrate_pi5_desktop.sh --check|--install-desktop"; exit 2;;
 esac
 if [[ "$(id -u)" == 0 ]]; then echo "Run as your normal user, not sudo"; exit 1; fi
 . /etc/os-release
-echo "OS: \${PRETTY_NAME:-unknown} | $(uname -m) | $(uname -r)"
-if [[ "\${VERSION_CODENAME:-}" != trixie || "$(uname -m)" != aarch64 ]]; then
+echo "OS: ${PRETTY_NAME:-unknown} | $(uname -m) | $(uname -r)"
+if [[ "${VERSION_CODENAME:-}" != trixie || "$(uname -m)" != aarch64 ]]; then
   echo "ERROR: PocketTerm35-OS requires Trixie 64-bit"; exit 1
 fi
 DIR="$HOME/pt35-migration-backups/$(date +%Y%m%d-%H%M%S)"
