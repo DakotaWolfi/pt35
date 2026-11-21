@@ -19,6 +19,7 @@ class NFCLeds:
         self.closed = False
         self.active = False
         self.previous_mode = None
+        self.brightness = 12
         self.thread = threading.Thread(target=self.run, daemon=True, name="pt35-nfc-pi5-led")
         self.thread.start()
 
@@ -95,7 +96,9 @@ class NFCLeds:
                     status = self._send("status")
                     if status.startswith("OK mode="):
                         self.previous_mode = status.split("mode=", 1)[1].split()[0]
-                    self._send("idle")
+                    style, brightness = operation[1], operation[2]
+                    self.brightness = max(1, min(32, int(brightness)))
+                    self._send({"sweep": "rainbow", "pulse": "idle", "minimal": "off"}.get(style, "idle"))
                     self.status = "NFC scan LED active"
                 elif operation[0] == "result":
                     rgb = {
@@ -104,7 +107,8 @@ class NFCLeds:
                         "uncertain": "100 65 0", "partial": "100 65 0",
                         "error": "100 0 0", "hold": "0 40 80",
                     }.get(operation[1], "0 40 80")
-                    self._send("flash " + rgb)
+                    levels = [max(0, min(255, round(int(n) * self.brightness / 32))) for n in rgb.split()]
+                    self._send("flash " + " ".join(map(str, levels)))
                 elif operation[0] == "restore":
                     self._restore()
                     self.status = ""
