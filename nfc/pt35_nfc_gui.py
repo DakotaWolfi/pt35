@@ -53,7 +53,7 @@ class NFCWindow(tk.Tk):
     def _style(self):
         """Dark styling designed around the PT35 640x480 display."""
         bg, panel, fg, accent = "#0a1310", "#121f1a", "#dcf3e5", "#3ddc97"
-        self.option_add("*Font", "DejaVu Sans 10")
+        self.option_add("*Font", "{DejaVu Sans} 10")
         self.option_add("*Background", bg)
         self.option_add("*Foreground", fg)
         self.option_add("*Text.background", panel)
@@ -63,7 +63,7 @@ class NFCWindow(tk.Tk):
         self.option_add("*Listbox.foreground", fg)
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure(".", background=bg, foreground=fg, fieldbackground=panel)
+        style.configure(".", background=bg, foreground=fg, fieldbackground=panel, font=("DejaVu Sans", 10))
         style.configure("TFrame", background=bg)
         style.configure("TLabelframe", background=bg, foreground=accent, bordercolor="#254236")
         style.configure("TLabelframe.Label", background=bg, foreground=accent)
