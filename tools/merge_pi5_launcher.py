@@ -71,6 +71,9 @@ for id,label,glyph,icon,executable in extra:
     if executable.is_file():
         effective=log_wrappers.get(id)
         cmd=effective if effective is not None and effective.is_file() else executable
+        if id == "fmi_remote_eye":
+            # Original controller is CLI-only and requires one explicit action.
+            cmd = str(cmd) + " --button"
         s=s.rstrip()+"\n\n"+add_app(id,label,glyph,icon,str(cmd))
         installed_extra.append((id,label))
 # Delay writing both configurations until TOML validation succeeds.
