@@ -4,6 +4,10 @@ set -Eeuo pipefail
 if [[ "$(id -u)" == 0 ]]; then echo "Run without sudo."; exit 1; fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 command -v pt35ctl >/dev/null || { echo "PocketTerm35-OS not installed"; exit 1; }
+python3 -m py_compile "$ROOT/nfc/pt35_nfc_gui.py" "$ROOT/tools/pt35_tools.py" "$ROOT/tools/merge_pi5_launcher.py"
+if ! /usr/bin/python3 -c "import tkinter" 2>/dev/null; then
+  echo "WARNING: NFC GUI needs python3-tk (sudo apt install python3-tk)"
+fi
 mkdir -p "$HOME/.local/bin"
 cat > "$HOME/.local/bin/fmi-pt35-tool" <<EOF
 #!/usr/bin/env bash
