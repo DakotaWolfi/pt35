@@ -26,8 +26,32 @@ cd "$OLD/tools"
 exec "$HOME/as7341-env/bin/python" "$OLD/tools/as7341_gui.py" 2>> "$HOME/.local/state/pt35/old-spectrum-errors.log"
 EOF
 chmod 755 "$HOME/.local/bin/pt35-original-nfc" "$HOME/.local/bin/pt35-original-spectrum"
+# Match the EXACT desktop launcher name on the original Pi 4.
+# Use an absolute executable path: graphical launchers do not always inherit ~/.local/bin in PATH.
+cat > "$HOME/.local/bin/pt35-nfc-gui" <<'EOF'
+#!/usr/bin/env bash
+exec "$HOME/.local/bin/pt35-original-nfc" "$@"
+EOF
+chmod 755 "$HOME/.local/bin/pt35-nfc-gui"
+mkdir -p "$HOME/.local/share/applications" "$HOME/Desktop"
+cat > "$HOME/.local/share/applications/pt35-nfc.desktop" <<EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=PT35 NFC Reader
+Comment=Original Pi 4 touch-friendly NFC reader and archive interface
+Exec=$HOME/.local/bin/pt35-nfc-gui
+Icon=network-wireless
+Terminal=false
+Categories=Utility;System;
+StartupNotify=true
+EOF
+cp "$HOME/.local/share/applications/pt35-nfc.desktop" "$HOME/Desktop/pt35-nfc.desktop"
+chmod +x "$HOME/Desktop/pt35-nfc.desktop"
+echo "Pi4-style PT35 NFC Reader desktop icon and application entry installed."
+
 echo "Recovered GUI wrappers created. No GUI launched and no RF commands sent."
-echo "Original NFC: ~/.local/bin/pt35-original-nfc"
+echo "Original NFC: ~/.local/bin/pt35-nfc-gui (same name as Pi4)"
 echo "Original spectrum: ~/.local/bin/pt35-original-spectrum"
 echo "Preflight library check (safe):"
 for lib in tkinter smbus2; do /usr/bin/python3 -c "import $lib" && echo "system Python: $lib OK" || true; done
