@@ -1,187 +1,264 @@
 #!/usr/bin/env python3
-"""PT35 ISO15693 / Tonie read-only archive. Uses the working nfcv_scan.py driver.
-
-Saves UID and standard Read Single Block data, not protected secrets or authentication.
-No writes to tags. The ST25R3916 does NOT emulate NFC-V Tonies.
-"""
+"""Addressed ISO15693 reads and the standalone PT35 NFC-V dump command."""
 import argparse
-import json
 import time
-from datetime import datetime, timezone
+from contextlib import contextmanager
 from pathlib import Path
 
-from smbus2 import SMBus
-from nfcv_scan import Chip, encode_vcd, crc15693
+from nfc_archive import atomic_write, now, range_bytes, record_bytes, record_path, set_coverage
+from nfc_config import DEFAULT_ARCHIVE, handle_sigterm, reader_lock
+from nfcv_scan import MAX_V_FIFO, Chip, FrameError, decode_response
 
-VERSION = '1.0'
+VERSION = '1.3'
+AUTO_BLOCKS = 32
+ALL_KNOWN = -1
+# SLIX-L datasheet: UID tag type 03h (also used by SLI-L), 8 x 4 user blocks.
+SLI_L_GEOMETRY = {'blocks': 8, 'size': 4, 'source': 'NXP UID type 03'}
+TAG_ERRORS = {0x01: 'unsupported_command', 0x02: 'unrecognized_command',
+              0x03: 'unsupported_option', 0x10: 'block_unavailable',
+              0x12: 'block_locked', 0x15: 'read_protected'}
 
 
-def decode_response(raw, sizes=(7, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16)):
-    """Decode variable-size NFC-V response, by CRC-tested candidate lengths.
+class TagError(ValueError):
+    def __init__(self, code):
+        self.code = code
+        self.kind = TAG_ERRORS.get(code, 'tag_error')
+        super().__init__(f'ISO15693 error 0x{code:02X} ({self.kind})')
 
-    ST25R3916 stream mode delivers a 5-bit SOF, Manchester symbols, then EOF.
-    We stop after the candidate's exact number of payload bytes, as for our
-    already-proven inventory decoder. CRC decides which candidate was correct.
-    """
-    if not raw or (raw[0] & 0x1f) != 0x17:
-        raise ValueError('invalid RF SOF')
-    total_bits = len(raw) * 8
-    for size in sizes:
-        bits = size * 8
-        if (5 + 2 * bits) > total_bits:
-            continue
-        data = bytearray(size)
-        valid = True
-        for i in range(bits):
-            p = 5 + i * 2
-            sym = ((raw[p // 8] >> (p % 8)) & 1) | (((raw[(p + 1) // 8] >> ((p + 1) % 8)) & 1) << 1)
-            if sym not in (1, 2):
-                valid = False
-                break
-            if sym == 2:
-                data[i // 8] |= 1 << (i % 8)
-        if valid and crc15693(data[:-2]) == (data[-2] | (data[-1] << 8)):
-            return bytes(data[:-2])
-    raise ValueError('no CRC-valid RF payload found')
+
+def checked_reply(reply):
+    if not reply:
+        raise FrameError('framing', 'Empty ISO15693 response')
+    if reply[0] & 1:
+        if len(reply) != 2:
+            raise FrameError('framing', 'Invalid ISO15693 error response')
+        raise TagError(reply[1])
+    return reply
+
+
+def failure(exc):
+    kind = getattr(exc, 'kind', 'timeout' if isinstance(exc, TimeoutError) else 'io')
+    result = {'kind': kind, 'error': str(exc)}
+    if isinstance(exc, TagError):
+        result['code'] = exc.code
+    return result
+
+
+def is_sli_l(uid):
+    return uid.startswith('E00403')
 
 
 class Reader(Chip):
-    def exchange(self, payload, timeout=0.35, verbose=False):
-        frame = encode_vcd(payload)
-        ticks = min(65535, max(1, int(timeout * 13560000 / 4096)))
-        self.update(0x12, setbits=0x01)
-        self.wr(0x10, ticks >> 8)
-        self.wr(0x11, ticks & 255)
-        self.irqs()
-        self.cmd(0xdb)
-        self.send(0x80, *frame)
-        nbits = len(frame) * 8
-        self.wr(0x22, nbits >> 8)
-        self.wr(0x23, nbits & 255)
-        self.cmd(0xc5)
-        irq_tx = self.await_irq(0x08, timeout + 0.1)
-        if not (irq_tx & 0x08):
-            raise TimeoutError('NFC-V transmit did not finish')
-        irq_rx = self.await_irq(0x10, timeout + 0.1)
-        b1, b2 = self.read(0x5e, 2)
-        n = b1 | ((b2 & 0xc0) << 2)
-        if n == 0:
-            raise TimeoutError('Tag did not respond')
-        raw = self.read(0x9f, min(n, 128))
-        if verbose:
-            print(f'  IRQ=0x{irq_rx:02X} RF raw={raw.hex(" ")}', flush=True)
-        return decode_response(raw)
+    @contextmanager
+    def transaction(self, stage, **details):
+        self.rf_state = {}
+        try:
+            yield
+        except KeyboardInterrupt:
+            self.trace(stage, 'interrupted', **details, **self.rf_state)
+            raise
+        except (FrameError, TagError, TimeoutError, OSError) as exc:
+            info = failure(exc)
+            if 'code' in info:
+                details['tag_error'] = info['code']
+            self.trace(stage, info['kind'], **details, **self.rf_state)
+            raise
+        else:
+            self.trace(stage, 'ok', **details, **self.rf_state)
 
-    def read_single(self, uid, block, verbose=False):
-        # Addressed high-rate ISO15693 READ SINGLE BLOCK: 0x22 0x20 UID[LSB-first] block.
-        # Use address flag because the PT35 itself contains a nearby ST25DV tag.
-        payload = bytes((0x22, 0x20)) + bytes.fromhex(uid)[::-1] + bytes((block,))
-        answer = self.exchange(payload, verbose=verbose)
-        if not answer:
-            raise ValueError('empty tag response')
-        if answer[0] & 1:
-            code = answer[1] if len(answer) > 1 else None
-            raise ValueError(f'ISO15693 tag error 0x{code:02X}' if code is not None else 'ISO15693 tag error')
-        return answer[1:]
+    def read_single(self, uid, block, verbose=False, expected_size=None):
+        extended = block >= 256
+        payload = (bytes((0x22, 0x30 if extended else 0x20)) + bytes.fromhex(uid)[::-1] +
+                   block.to_bytes(2 if extended else 1, 'little'))
+        with self.transaction('read_block', block=block, **self.trace_context):
+            data = checked_reply(self.exchange(payload, verbose=verbose))[1:]
+            if not 1 <= len(data) <= 32 or (expected_size is not None and len(data) != expected_size):
+                raise FrameError('size', f'Block {block} has unexpected length {len(data)}')
+        return data
+
+    def read_multiple(self, uid, index, count, width, verbose=False):
+        extended = index + count > 256
+        address_size = 2 if extended else 1
+        payload = (bytes((0x22, 0x33 if extended else 0x23)) + bytes.fromhex(uid)[::-1] +
+                   index.to_bytes(address_size, 'little') + (count - 1).to_bytes(address_size, 'little'))
+        with self.transaction('read_batch', block=index, requested=count):
+            data = checked_reply(self.exchange(payload, verbose=verbose))[1:]
+            if len(data) != count * width:
+                raise FrameError('size', 'Multi-block reply length differs from the requested range')
+        return [data[offset:offset + width] for offset in range(0, len(data), width)]
+
+    def system_info(self, uid, verbose=False):
+        air_uid = bytes.fromhex(uid)[::-1]
+        with self.transaction('system_info'):
+            reply = checked_reply(self.exchange(b'\x22\x2b' + air_uid, verbose=verbose))
+            if len(reply) < 10 or reply[2:10] != air_uid:
+                raise FrameError('framing', 'System Information UID mismatch or truncated reply')
+            flags = reply[1]
+            size = 10 + bool(flags & 1) + bool(flags & 2) + 2 * bool(flags & 4) + bool(flags & 8)
+            if flags & 0xf0 or len(reply) != size:
+                raise FrameError('framing', 'Invalid System Information fields')
+            geometry = None
+            if flags & 4:
+                pos = 10 + bool(flags & 1) + bool(flags & 2)
+                if reply[pos + 1] & 0xe0:
+                    raise FrameError('framing', 'Invalid System Information block size')
+                geometry = {'blocks': reply[pos] + 1, 'size': reply[pos + 1] + 1,
+                            'source': 'ISO15693 Get System Information'}
+            ic_reference = reply[-1] if flags & 8 else None
+        info = {'flags': flags, 'dsfid': reply[10] if flags & 1 else None,
+                'afi': reply[10 + bool(flags & 1)] if flags & 2 else None,
+                'ic_reference': ic_reference, 'geometry': geometry}
+        if geometry is None and uid.startswith('E002') and ic_reference == 0x26:
+            # Standard System Information omits ST25DV16K/64K geometry.
+            info['block_size_hint'] = 4
+            try:
+                with self.transaction('extended_info'):
+                    ext = checked_reply(self.exchange(b'\x22\x3b\x14' + air_uid, verbose=verbose))
+                    if (len(ext) != 13 or ext[1] != 0x14 or ext[2:10] != air_uid or
+                            ext[12] != 3 or int.from_bytes(ext[10:12], 'little') not in (511, 2047)):
+                        raise FrameError('framing', 'Invalid ST25DV extended geometry response')
+                    info['geometry'] = {'blocks': int.from_bytes(ext[10:12], 'little') + 1, 'size': 4,
+                                        'source': 'ST25DV Extended Get System Information'}
+            except (FrameError, TagError, TimeoutError) as exc:
+                info['extended_error'] = failure(exc)
+        return info
 
 
-def make_filename(uid):
-    return f'{datetime.now().strftime("%Y%m%d-%H%M%S")}_{uid}'
+def read_memory(reader, uid, limit=0, verbose=False, cap=2048, *, progress=None, batch=False):
+    st_tag = uid.startswith('E002')
+    for attempt in range(2):
+        try:
+            info = reader.system_info(uid, verbose)
+            break
+        except (FrameError, TagError, TimeoutError) as exc:
+            info = {'error': failure(exc)}
+            if attempt or not (st_tag and isinstance(exc, TagError) and exc.code == 0x0f):
+                break
+            # ST25DV can return 0Fh during I²C activity. It can also mean an
+            # unspecified tag error, so keep the original code in diagnostics.
+            time.sleep(.04)
+    geometry = info.get('geometry')
+    if geometry is None and is_sli_l(uid):
+        geometry = dict(SLI_L_GEOMETRY)
+    # Eight is a conservative probe limit for unknown tags, never a geometry claim.
+    if geometry:
+        count = min(cap, geometry['blocks'], geometry['blocks'] if limit == ALL_KNOWN else limit or AUTO_BLOCKS)
+    else:
+        count = min(cap, 256, limit if limit > 0 else 8)
+    width = geometry['size'] if geometry else info.get('block_size_hint')
+    blocks, errors = [], []
+    total = count if geometry else None
+    if progress:
+        progress(0, total)
+    index = missed = 0
+    # Leave room for response flags, CRC and the stream framing bytes.
+    batch_limit = min(8, (MAX_V_FIFO // 2 - 4) // width) if batch and geometry else 1
+
+    def append(data):
+        nonlocal index, missed
+        blocks.append({'index': index, 'hex': data.hex().upper(), 'size': len(data)})
+        index += 1
+        missed = 0
+
+    while index < count:
+        window = min(batch_limit, count - index)
+        if window > 1:
+            try:
+                pieces = reader.read_multiple(uid, index, window, width, verbose)
+            except (FrameError, TagError, TimeoutError):
+                # A rejected batch says nothing about any individual block.
+                # Fall back once for this capture and preserve earlier data.
+                batch_limit = 1
+            else:
+                for data in pieces:
+                    append(data)
+                if progress:
+                    progress(len(blocks), total)
+                continue
+        for attempt in range(1, 4):
+            reader.trace_context['attempt'] = attempt
+            try:
+                data = reader.read_single(uid, index, verbose, width)
+            except (FrameError, TagError, TimeoutError) as exc:
+                ambiguous_st_error = st_tag and isinstance(exc, TagError) and exc.code == 0x0f
+                if attempt == 3 or (isinstance(exc, TagError) and not ambiguous_st_error):
+                    errors.append({'index': index, **failure(exc)})
+                    break
+                time.sleep(.04 * attempt if ambiguous_st_error else .02)
+            else:
+                append(data)
+                width = len(data)
+                if progress:
+                    progress(len(blocks), total)
+                break
+            finally:
+                reader.trace_context.clear()
+        if errors and errors[-1]['index'] == index:
+            kind = errors[-1]['kind']
+            index += 1
+            if geometry and kind == 'read_protected':
+                continue
+            missed += 1
+            if not geometry or kind in (*TAG_ERRORS.values(), 'tag_error') or missed >= 2:
+                break
+    record = dict(blocks=blocks, read_errors=errors, system_info=info, memory_start=0,
+                  verification='CRC-checked successful RF replies')
+    set_coverage(record, count, geometry)
+    sizes = {'geometry_blocks': geometry['blocks'], 'geometry_size': geometry['size']} if geometry else {}
+    reader.trace('geometry', 'ok' if geometry else 'unknown_geometry', **sizes)
+    reader.trace('coverage', record['dump_status'], requested=count, readable=len(blocks), **sizes)
+    return record
 
 
 def main():
-    ap = argparse.ArgumentParser(description='Read and archive ISO15693 figurine UID + memory blocks')
+    ap = argparse.ArgumentParser(description='Read and archive ISO15693 UID and memory blocks')
     ap.add_argument('--bus', type=int, default=1)
-    ap.add_argument('--blocks', type=int, default=8, help='maximum memory blocks to read (default: 8)')
-    ap.add_argument('--out', default=str(Path.home() / 'pt35-nfc' / 'dumps'))
+    ap.add_argument('--blocks', type=int, default=8)
+    ap.add_argument('--out', type=Path, default=DEFAULT_ARCHIVE.parent / 'dumps')
     ap.add_argument('--uid', help='only save a tag matching this UID')
-    ap.add_argument('--all-tags', action='store_true', help='include the PT35 built-in ST25DV tag')
+    ap.add_argument('--all-tags', action='store_true', help='include configured onboard ST25DV UID')
+    ap.add_argument('--exclude-uid', help='onboard ST25DV UID to omit')
     ap.add_argument('--verbose', action='store_true')
-    ap.add_argument('--tries', type=int, default=60, help='inventory attempts, default 60')
+    ap.add_argument('--tries', type=int, default=60)
     args = ap.parse_args()
-    if not 1 <= args.blocks <= 256:
-        ap.error('--blocks must be between 1 and 256')
-    out = Path(args.out).expanduser()
-    out.mkdir(parents=True, exist_ok=True)
-    with SMBus(args.bus) as bus:
-        chip = Reader(bus)
+    if not 1 <= args.blocks <= 2048 or args.tries < 1:
+        ap.error('--blocks must be 1..2048 and --tries must be positive')
+    from smbus2 import SMBus
+    from pt35_nfc import new_record, skip_internal_uid
+    handle_sigterm()
+    with reader_lock(f'i2c-{args.bus}'), SMBus(args.bus) as bus:
+        reader = Reader(bus)
         try:
-            chip.initialize()
-            print('Place a Tonie figurine against the NFC antenna.', flush=True)
-            selected = None
-            dsfid = None
+            reader.initialize(args.verbose)
+            print('Present an ISO15693 tag.', flush=True)
             for _ in range(args.tries):
-                result = chip.inventory(verbose=args.verbose)
+                result = reader.inventory(verbose=args.verbose)
                 if result:
                     uid, inventory = result
-                    if args.uid and uid.upper() != args.uid.upper():
-                        continue
-                    if uid.startswith('E002') and not args.all_tags and not args.uid:
-                        # This is usually PT35's built-in ST25DV tag; don't archive by accident.
-                        if args.verbose:
-                            print(f'Ignoring internal ST tag {uid}')
-                        time.sleep(.15)
-                        continue
-                    selected = uid
-                    dsfid = inventory[1]
-                    break
+                    if (args.uid and uid == args.uid.upper()) or (not args.uid and not
+                            skip_internal_uid(uid, args.all_tags, args.exclude_uid)):
+                        record = new_record(uid, 'internal', dsfid=inventory[1])
+                        record.update(read_memory(reader, uid, args.blocks, args.verbose))
+                        break
                 time.sleep(.15)
-            if not selected:
-                print('No matching NFC-V tag found. Try positioning a figurine closer.', flush=True)
-                return 1
-            print(f'FOUND UID: {selected} DSFID=0x{dsfid:02X}', flush=True)
-            blocks, errors = [], []
-            for idx in range(args.blocks):
-                read = None
-                reason = None
-                for retry in range(3):
-                    try:
-                        read = chip.read_single(selected, idx, verbose=args.verbose)
-                        if read:
-                            break
-                        reason = 'empty block'
-                    except (TimeoutError, ValueError, OSError) as e:
-                        reason = str(e)
-                    time.sleep(.08)
-                if read:
-                    blocks.append({'index': idx, 'hex': read.hex().upper(), 'length': len(read)})
-                    print(f'  Block {idx:03d}: {read.hex(" ").upper()}', flush=True)
-                else:
-                    errors.append({'index': idx, 'reason': reason})
-                    print(f'  Block {idx:03d}: FAILED ({reason})', flush=True)
-                    # Stop on first unreadable block to avoid hammering protected/out-of-range blocks.
-                    break
-            complete = len(blocks) == args.blocks
-            archive = {
-                'format': 'PT35 NFC-V read-only dump v1',
-                'timestamp_utc': datetime.now(timezone.utc).isoformat(),
-                'uid': selected,
-                'manufacturer': 'NXP' if selected.startswith('E004') else ('ST' if selected.startswith('E002') else 'unknown'),
-                'dsfid': f'{dsfid:02X}',
-                'protocol': 'ISO15693 / NFC-V',
-                'requested_blocks': args.blocks,
-                'blocks': blocks,
-                'errors': errors,
-                'complete_requested_range': complete,
-                'authentication_data_present': False,
-                'note': 'Read-only standard memory dump; not a complete clone or Tonie authentication credential.',
-            }
-            basename = make_filename(selected)
-            path = out / (basename + '.json')
-            path.write_text(json.dumps(archive, indent=2) + '\n', encoding='utf-8')
-            print(f'JSON saved: {path}', flush=True)
-            if complete and len({b['length'] for b in blocks}) == 1:
-                rawpath = out / (basename + '.bin')
-                rawpath.write_bytes(b''.join(bytes.fromhex(b['hex']) for b in blocks))
-                print(f'Binary block dump saved: {rawpath}', flush=True)
             else:
-                print('Partial dump: JSON saved with error details; no incomplete .bin file written.')
-            return 0 if complete else 2
+                print('No matching NFC-V tag found.')
+                return 1
+        except KeyboardInterrupt:
+            return 130
         finally:
-            try:
-                chip.shutdown()
-            except OSError:
-                pass
+            reader.shutdown()
+    out = args.out.expanduser()
+    out.mkdir(parents=True, exist_ok=True, mode=0o700)
+    stem = f"{now().replace(':', '-')}_{record['uid']}"
+    path = out / (stem + '.json')
+    binary = range_bytes(record)
+    if binary is not None:
+        record['memory_binary'] = stem + '.bin'
+        atomic_write(out / record['memory_binary'], binary)
+    atomic_write(path, record_bytes(record))
+    print(f"{record['dump_status']}: {path}")
+    return 0 if binary is not None else 2
 
 
 if __name__ == '__main__':
