@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Change PocketTerm35-OS taskbar menu button to a 15x16 wolf pixel icon.
+# Change PocketTerm35-OS taskbar menu button to a 19x19 wolf pixel icon.
 # Uses a separate upstream checkout and recompiles pt35-bar only.
 set -euo pipefail
 if [ "$(id -u)" = 0 ]; then echo "Run as your normal user"; exit 1; fi
@@ -14,31 +14,39 @@ pixel=src/"crates/pt35-ui/src/pixel.rs"
 ui=src/"crates/pt35-bar/src/ui.rs"
 data=pixel.read_text()
 wolf = """
-/// Wolf head for the PT35 launcher button, 15 x 16 pixels.
+/// Wolf face: 19x19, sharp ears, narrow eyes and pointed muzzle.
 pub const WOLF: &[&str] = &[
-    "#.............#",
-    "##...........##",
-    "###.........###",
-    "####.......####",
-    "#####.....#####",
-    "###############",
-    "###############",
-    "###...###...###",
-    "###...###...###",
-    "####.#####.####",
-    ".#############.",
-    "..####...####..",
-    "...####.####...",
-    "....#######....",
-    ".....#####.....",
-    "......###......",
+    "##...............##",
+    "###.............###",
+    "####...........####",
+    "#####.........#####",
+    "######.......######",
+    "#######.....#######",
+    "###################",
+    ".#################.",
+    "..###...###...###..",
+    "..####..###..####..",
+    "...#############...",
+    "...#####...#####...",
+    "....#####.#####....",
+    ".....#########.....",
+    "......#######......",
+    ".......#####.......",
+    "........###........",
+    ".........#.........",
+    "...................",
 ];
 """
-if "pub const WOLF:" not in data:
+
+if "pub const WOLF:" in data:
+    start=data.index("/// Wolf") if "/// Wolf" in data else data.index("pub const WOLF:")
+    end=data.index("];", data.index("pub const WOLF:", start)) + 2
+    data=data[:start]+wolf.strip()+data[end:]
+else:
     anchor="pub const PIN:"
     if anchor not in data: raise SystemExit("Cannot locate pixel-art insertion point; upstream changed")
     data=data.replace(anchor,wolf+"\n"+anchor,1)
-    pixel.write_text(data)
+pixel.write_text(data)
 data=ui.read_text()
 old='''        if self.theme.bar.menu_icon == "bars" {'''
 new='''        if self.theme.bar.menu_icon == "wolf" {
