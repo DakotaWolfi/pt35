@@ -7,6 +7,7 @@ off, idle, rainbow, battery, color R G B, flash R G B, status.
 import math
 import os
 import socket
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -162,6 +163,35 @@ def command(line):
         return "ERR unknown command"
 
 
+def startup_haptic():
+    """Recreate the Pi4 boot buzz (effects 1, then 10) without blocking LEDs.
+
+    Only runs when explicitly enabled by the systemd environment.
+    Missing LRA or unavailable I2C does not prevent LED operation.
+    """
+    if os.getenv("PT35_LED_BOOT_HAPTIC", "0") != "1":
+        return
+    ctl = Path("/usr/local/bin/lra_ctl")
+    if not ctl.is_file() or not os.access(ctl, os.X_OK):
+        print("PT35 boot haptic skipped: /usr/local/bin/lra_ctl missing", flush=True)
+        return
+    for effect, pause in ((1, 0.3), (10, 0)):
+        try:
+            result = subprocess.run(
+                [str(ctl), "play", str(effect)], timeout=2,
+                capture_output=True, text=True, check=False
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout).strip()[-220:]
+                print(f"PT35 boot haptic effect {effect} failed: {detail}", flush=True)
+                return
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"PT35 boot haptic unavailable: {exc}", flush=True)
+            return
+        if pause:
+            time.sleep(pause)
+
+
 def main():
     path = Path(SOCKET)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -181,6 +211,8 @@ def main():
         server.settimeout(1)
         worker = threading.Thread(target=animate, daemon=True)
         worker.start()
+        threading.Thread(target=startup_haptic, daemon=True,
+                         name="pt35-boot-haptic").start()
         try:
             while True:
                 try:
