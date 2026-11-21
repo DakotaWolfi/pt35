@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PT35 Pi 5 NeoPixel daemon; Adafruit RP1 PIO, 16 LEDs on BCM GPIO18.
+"""PT35 Pi 5 NeoPixel daemon; Adafruit RP1 PIO, configurable LEDs on BCM GPIO18.
 Only start after verifying hardware wiring and /dev/pio0. Default output OFF.
 Unix socket protocol compatible with the old PT35 LED controls:
 off, idle, rainbow, battery, color R G B, flash R G B, status.
@@ -15,6 +15,8 @@ import board
 from adafruit_raspberry_pi5_neopixel_write import neopixel_write
 
 COUNT = int(os.getenv("PT35_LED_COUNT", "16"))
+if not 1 <= COUNT <= 256:
+    raise SystemExit("PT35_LED_COUNT must be 1..256")
 GPIO = int(os.getenv("PT35_LED_GPIO", "18"))
 SOCKET = os.getenv("PT35_LED_SOCKET", f"/run/user/{os.getuid()}/pt35-led.sock")
 BRIGHTNESS = min(max(float(os.getenv("PT35_LED_BRIGHTNESS", "0.15")), 0.0), 0.30)
@@ -77,8 +79,10 @@ def animate():
             current = mode
             current_color = color
         if current == "idle":
-            strength = int(14+12*math.sin(phase*2*math.pi))
-            solid((strength//2,0,strength))
+            # Original Pi4 breathing effect, including the per-pixel offset.
+            level = int((math.sin(phase) + 1.0) * 10)
+            send([(level // 2, 0, level + ((i * 4) % 16) // 4)
+                  for i in range(COUNT)])
         elif current == "rainbow":
             gradient(phase)
         elif current == "solid":
@@ -87,8 +91,8 @@ def animate():
         elif current == "off" and last != (current, current_color):
             solid((0,0,0))
         last = (current, current_color)
-        phase = (phase + 0.004) % 1.0
-        time.sleep(.04)
+        phase = (phase + (0.08 if current == "idle" else 0.004)) % (2 * math.pi)
+        time.sleep(.05 if current == "idle" else .04)
 
 
 def command(line):
@@ -103,6 +107,32 @@ def command(line):
             return f"OK {mode}"
         if cmd == "status":
             return f"OK mode={mode} count={COUNT} gpio={GPIO} brightness={BRIGHTNESS}"
+        if cmd == "pixel" and len(parts) == 5:
+            try:
+                n = int(parts[1])
+                rgb = tuple(max(0, min(255, int(x))) for x in parts[2:])
+            except ValueError:
+                return "ERR expected pixel N R G B"
+            if not 1 <= n <= COUNT:
+                return f"ERR pixel index 1..{COUNT}"
+            mode = "hold"
+            pixels = [(0, 0, 0)] * COUNT
+            pixels[n - 1] = rgb
+            send(pixels)
+            return f"OK pixel {n}/{COUNT}"
+        if cmd == "segment" and len(parts) == 2:
+            try:
+                n = int(parts[1])
+            except ValueError:
+                return "ERR expected segment 1..N"
+            if not 1 <= n <= (COUNT + 7) // 8:
+                return f"ERR segment index 1..{(COUNT + 7) // 8}"
+            # Low-power R/G/B rows; each segment is eight LEDs.
+            rgb = ((45,0,0), (0,45,0), (0,0,45))[(n-1) % 3]
+            mode = "hold"
+            send([rgb if (i // 8) == n-1 else (0,0,0)
+                  for i in range(COUNT)])
+            return f"OK segment {n} pixels {(n-1)*8+1}..{min(COUNT,n*8)}"
         if cmd == "color" and len(parts) == 4:
             try:
                 color = tuple(max(0,min(255,int(x))) for x in parts[1:])
