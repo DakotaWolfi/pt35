@@ -40,7 +40,7 @@ entries=[
   ("fmi_spectrum","Spectral analyser","SP","utilities-system-monitor",f"foot -a fmi-spectrum {bin} spectrum","fmi-spectrum",None),
   ("fmi_nfc","NFC reader (classic)","NF","network-wireless",f"{bin} nfc-legacy",None,None),
   ("fmi_nfc_experimental","NFC reader (new/beta)","NB","network-wireless",f"{bin} nfc","PT35NFC",None),
-  ("fmi_battery","Battery diagnostics","BT","battery",f"foot -a fmi-battery {bin} battery","fmi-battery",None)]
+  ("fmi_battery","Battery diagnostics","BT","battery",f"foot --hold -a fmi-battery {bin} battery","fmi-battery",None)]
 for id, label, glyph, icon, cmd, match, scale in entries:
     s=s.rstrip()+"\n\n"+add_app(id,label,glyph,icon,cmd,match,scale)
 extra=[
