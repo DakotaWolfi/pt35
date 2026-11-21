@@ -82,5 +82,7 @@ if m:
 else: s=s.rstrip()+'\n\n[bar]\nmenu_icon = "wolf"\n'
 p.write_text(s)
 PY
-echo "Wolf installed. Log out and back in (or reboot) to reload the taskbar binary."
+mkdir -p "$HOME/.local/share/pt35"
+touch "$HOME/.local/share/pt35/wolf-bar-installed"
+echo "Wolf installed. The Settings > Wolf / Normal menu entries can now switch the icon."
 echo "Rollback executable: sudo cp -a '$BACKUP' '$CURRENT'"
