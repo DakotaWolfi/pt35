@@ -51,7 +51,7 @@ for id,label,glyph,icon,executable in extra:
     if executable.is_file():
         s=s.rstrip()+"\n\n"+add_app(id,label,glyph,icon,str(executable))
         installed_extra.append((id,label))
-apps.write_text(s)
+# Delay writing both configurations until TOML validation succeeds.
 
 icon= root/"tools/pt35_menu_icon.py"
 toggle1=f"python3 {icon} wolf"
@@ -104,13 +104,14 @@ entries = [
   {{ label = "Normal menu icon", exec = "{toggle2}", icon = "open-menu", glyph = "MN" }},
 ]
 """
-menu.write_text(m)
 try:
     import tomllib
-    with open(menu,"rb") as f: tomllib.load(f)
-    with open(apps,"rb") as f: tomllib.load(f)
+    tomllib.loads(m)
+    tomllib.loads(s)
 except Exception as ex:
-    raise SystemExit(f"ERROR: TOML validation failed: {ex}. Restore .bak files.")
-print("FMI Tools page added to Settings, with wolf/normal menu choices and LED controls.")
+    raise SystemExit(f"ERROR: Generated TOML rejected, no config overwritten: {ex}")
+apps.write_text(s)
+menu.write_text(m)
+print("FMI Tools tile and Settings > PT35 customization added, with LED controls.")
 print("Apps: spectrum, NFC, battery"+(" plus "+", ".join(name for _,name in installed_extra) if installed_extra else ""))
 print("Stock navigation remains intact. Wolf option needs the patched taskbar installed.")
