@@ -1,0 +1,68 @@
+"""FMI Print Pet NFC mailbox protocol v1.
+
+Transport-independent payload encoding shared with PT35. ST25DV FTM is a
+single 256-byte half-duplex mailbox. This format is *not authentication*:
+any nearby ISO15693 reader with mailbox support may send a command.
+"""
+import json
+import re
+
+MAGIC="FMP1"
+MAX_BYTES=112
+MAX_TEXT=40
+ID=re.compile(r"^[0-9a-f]{8}$")
+
+def pack(kind, ident, **fields):
+    if kind not in ("status","print","reply","img0","img1","img2","pair","pair-key","pair-done"):
+        raise ValueError("Unknown mailbox command")
+    if not ID.fullmatch(ident):
+        raise ValueError("Request ID must be eight lowercase hex digits")
+    msg={"v":MAGIC,"t":kind,"id":ident}
+    msg.update(fields)
+    encoded=json.dumps(msg,separators=(",",":"),ensure_ascii=True).encode("ascii")
+    if len(encoded)>MAX_BYTES:
+        raise ValueError("Mailbox message exceeds bounded protocol size")
+    return encoded
+
+def unpack(raw):
+    if not isinstance(raw,(bytes,bytearray)) or len(raw)>MAX_BYTES:
+        raise ValueError("Invalid mailbox length")
+    msg=json.loads(raw.decode("ascii"))
+    if not isinstance(msg,dict) or msg.get("v")!=MAGIC:
+        raise ValueError("Unknown mailbox protocol")
+    if not ID.fullmatch(str(msg.get("id",""))):
+        raise ValueError("Missing request ID")
+    if msg.get("t") not in ("status","print","reply","img0","img1","img2","pair","pair-key","pair-done"):
+        raise ValueError("Unknown command")
+    if msg["t"]=="print":
+        if set(msg) - {"v","t","id","name","message","a"}:
+            raise ValueError("Unsupported fields in print command")
+        for key,limit in (("name",40),("message",MAX_TEXT)):
+            val=msg.get(key,"")
+            if not isinstance(val,str) or not 1<=len(val)<=limit or any(ord(c)<32 or ord(c)>126 for c in val):
+                raise ValueError("Print fields must be short printable ASCII")
+    if msg["t"] in ("print","img0","pair-done") and not (
+        isinstance(msg.get("a"),str) and re.fullmatch(r"[0-9a-f]{16}",msg["a"])
+    ):
+        raise ValueError("Paired NFC signature required")
+    if msg["t"]=="pair" and not (
+        isinstance(msg.get("p"),str) and re.fullmatch(r"[A-Za-z0-9+/]{43}=",msg["p"])
+    ):
+        raise ValueError("Pair request needs X25519 public key")
+    if msg["t"] in ("pair-key","pair-done") and not ID.fullmatch(str(msg.get("s",""))):
+        raise ValueError("Invalid pairing session")
+    if msg["t"] in ("img0","img1","img2"):
+        if not ID.fullmatch(str(msg.get("s",""))):
+            raise ValueError("Invalid image session")
+        if msg["t"]=="img0":
+            if not (isinstance(msg.get("n"),int) and 1<=msg["n"]<=8192):
+                raise ValueError("Image size outside 8 KiB limit")
+            if not (isinstance(msg.get("h"),str) and re.fullmatch(r"[0-9a-f]{16}",msg["h"])):
+                raise ValueError("Invalid image digest")
+        elif msg["t"]=="img1":
+            if not (isinstance(msg.get("i"),int) and 0<=msg["i"]<=255):
+                raise ValueError("Invalid image chunk number")
+            if not (isinstance(msg.get("d"),str) and 1<=len(msg["d"])<=40 and
+                    re.fullmatch(r"[A-Za-z0-9+/]*={0,2}",msg["d"])):
+                raise ValueError("Invalid image chunk")
+    return msg

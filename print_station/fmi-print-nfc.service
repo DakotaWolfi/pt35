@@ -1,0 +1,18 @@
+[Unit]
+Description=FMI Print Pet NFC mailbox host (ST25DV16K)
+After=fmi-print-station.service
+Wants=fmi-print-station.service
+ConditionPathExists=/dev/i2c-0
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/jenna/pt35/print_station
+ExecStart=/usr/bin/python3 /home/jenna/pt35/print_station/mailbox_host.py --bus 0
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

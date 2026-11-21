@@ -1,0 +1,20 @@
+[Unit]
+Description=FMI Print Station
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/pt35/print_station
+ExecStart=/usr/bin/python3 /opt/pt35/print_station/app.py --config /etc/fmi-print-station/config.json
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
