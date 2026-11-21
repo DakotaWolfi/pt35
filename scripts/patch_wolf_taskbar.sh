@@ -53,6 +53,13 @@ if ! command -v cargo >/dev/null; then
   echo "Wolf source staged, but Rust cargo isn't installed. Existing desktop untouched."
   exit 0
 fi
+# Verify native dependencies before starting a large Rust compilation.
+if ! command -v pkg-config >/dev/null || ! pkg-config --exists xkbcommon wayland-client; then
+  echo "Missing native build libraries for PocketTerm35-OS."
+  echo "Install with:"
+  echo "  sudo apt install pkg-config libxkbcommon-dev libwayland-dev"
+  exit 1
+fi
 cd "$SRC"
 cargo build --release -p pt35-bar --locked
 echo "Wolf bar compiled. Installed desktop has not been changed."
