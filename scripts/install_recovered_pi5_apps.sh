@@ -14,7 +14,7 @@ mkdir -p "$HOME/.local/bin" "$HOME/.local/state/pt35"
 cat > "$HOME/.local/bin/pt35-original-nfc" <<EOF
 #!/usr/bin/env bash
 set -e
-export PYTHONPATH="$OLD/nfc:${PYTHONPATH:-}"
+export PYTHONPATH="$OLD/nfc:$ROOT/nfc:${PYTHONPATH:-}"
 cd "$OLD/nfc"
 # Match the original Pi4 desktop launcher interpreter exactly.
 PY="\$HOME/as7341-env/bin/python3"
@@ -61,6 +61,6 @@ echo "Original NFC: ~/.local/bin/pt35-nfc-gui (same name as Pi4)"
 echo "Original spectrum: ~/.local/bin/pt35-original-spectrum"
 echo "Preflight library check (safe):"
 for lib in tkinter smbus2; do /usr/bin/python3 -c "import $lib" && echo "system Python: $lib OK" || true; done
-echo "Run: bash scripts/install_pi5_shell.sh to update the FMI launcher entries."
+echo "Run: bash scripts/install_pi5_shell.sh to update the FMI launcher entries."\necho "Pi5 NFC GUI patch: python3 scripts/patch_recovered_pi5_nfc.py (once, with original backup)."
 echo "Do NOT initiate NFC scans until the reader lockup is diagnosed."
 
