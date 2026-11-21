@@ -56,12 +56,13 @@ fi
 if git diff --cached --name-only | grep -Ev '^legacy/pi4/(nfc|tools|tests)/[^/]+\.py$|^legacy/pi4/README\.md$' ; then
  echo "Unexpected staged path; aborting."; exit 1
 fi
+echo "Inspect full staged source locally with: git diff --cached"
 read -r -p "Review files above. Type PUBLISH to commit and push source-only branch: " ACCEPT
 [[ "$ACCEPT" == "PUBLISH" ]] || { echo "Staged only; no push."; exit 1; }
 git -c user.name="$(git config user.name || echo PT35)" \
     -c user.email="$(git config user.email || echo pt35@users.noreply.github.com)" \
     commit -m "Recover original Pi4 NFC and spectral application sources"
-git push -u origin "$BRANCH"
+git -c remote.origin.pushurl=git@github.com:DakotaWolfi/pt35.git push -u origin "$BRANCH"
 echo "Pushed $BRANCH to GitHub. Review diff, then open PR into main."
 echo "Working tree now on branch $BRANCH; switch back with git switch main."
 
