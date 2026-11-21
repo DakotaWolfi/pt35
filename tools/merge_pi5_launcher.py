@@ -97,7 +97,7 @@ m=section_remove(m,"menu.fmi_leds")
 m=section_remove(m,"menu.fmi_settings")
 fmi=[
  (('"Spectrum (original)"' if original_spectrum.is_file() else '"Spectral analyser"') + ', app = "fmi_spectrum", icon = "utilities-system-monitor"'),
- (('"NFC reader (original)"' if original_nfc.is_file() else '"NFC reader (classic)"') + ', app = "fmi_nfc", icon = "network-wireless"'),
+ ('"PT35 NFC Reader", app = "fmi_nfc", icon = "network-wireless"'),
  ('"Battery diagnostics", app = "fmi_battery", icon = "battery"')]
 fmi += [(f'"{label}", app = "{id}", glyph = "{label[:2]}"') for id,label in installed_extra]
 m=m.rstrip()+"\n\n[menu.fmi]\ntitle = \"FMI Tools\"\nentries = [\n"
