@@ -19,7 +19,10 @@ GPIO = int(os.getenv("PT35_LED_GPIO", "18"))
 SOCKET = os.getenv("PT35_LED_SOCKET", f"/run/user/{os.getuid()}/pt35-led.sock")
 BRIGHTNESS = min(max(float(os.getenv("PT35_LED_BRIGHTNESS", "0.15")), 0.0), 0.30)
 PIN = getattr(board, f"D{GPIO}")
-mode = "off"
+DEFAULT_MODE = os.getenv("PT35_LED_IDLE_MODE", "off").strip().lower()
+if DEFAULT_MODE not in ("off", "idle", "rainbow"):
+    DEFAULT_MODE = "off"
+mode = DEFAULT_MODE
 color = (0, 0, 0)
 lock = threading.RLock()
 running = True
