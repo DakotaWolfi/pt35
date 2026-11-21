@@ -24,7 +24,19 @@ cat > "$HOME/.local/bin/pt35-ledctl" <<EOF
 exec /usr/bin/python3 "$ROOT/tools/pi5_ledctl.py" "\$@"
 EOF
 chmod +x "$HOME/.local/bin/fmi-pt35-tool" "$HOME/.local/bin/pt35-ledctl"
+mkdir -p "$HOME/.local/share/applications"
+cat > "$HOME/.local/share/applications/fmi-tools.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=FMI Tools
+Comment=Open PT35 custom hardware and applications menu
+Exec=pt35ctl menu open fmi
+Icon=applications-science
+Terminal=false
+Categories=Utility;System;
+EOF
 python3 "$ROOT/tools/merge_pi5_launcher.py" "$ROOT"
-echo "FMI launchers installed. Settings > Reload shell (or log out/in)."
+echo "FMI launchers installed; also available as an FMI Tools tile (pin it with Y)."
+echo "Settings > Reload shell (or log out/in)."
 echo "LED controls only work after the optional Pi5 LED daemon is started."
 echo "Wolf choice only works after: bash $ROOT/scripts/patch_wolf_taskbar.sh --install"
