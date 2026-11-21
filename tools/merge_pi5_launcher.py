@@ -75,12 +75,11 @@ m=re.sub(r"(?ms)^[ \t]*# FMI_START\n.*?^[ \t]*# FMI_END\n?","",m)
 m=re.sub(r"(?m)^(\[menu.settings\][ \t]*\n[\s\S]*?^[ \t]*entries\s*=\s*\[)",
          lambda hit: hit.group(1)+f'''
   {prefix}
-  {{ label = "FMI Tools", goto = "fmi", icon = "applications-science", glyph = "FM" }},
-  {{ label = "Wolf menu icon", exec = "{toggle1}", icon = "face-smile", glyph = "WF" }},
-  {{ label = "Normal menu icon", exec = "{toggle2}", icon = "open-menu", glyph = "MN" }},
+  {{ label = "PT35 customization", goto = "fmi_settings", icon = "preferences-desktop-appearance", glyph = "PT" }},
   {suffix}''',m,count=1)
 m=section_remove(m,"menu.fmi")
 m=section_remove(m,"menu.fmi_leds")
+m=section_remove(m,"menu.fmi_settings")
 fmi=[
  ('"Spectral analyser", app = "fmi_spectrum", icon = "utilities-system-monitor"'),
  ('"NFC reader", app = "fmi_nfc", icon = "network-wireless"'),
@@ -96,7 +95,15 @@ entries = [
 led=home/".local/bin/pt35-ledctl"
 for label,args in (("LEDs off","off"),("Idle glow","idle"),("Rainbow","rainbow"),("Battery bar","battery"),("White flash","flash 40 40 40")):
     m+=f'  {{ label = "{label}", exec = "{led} {args}", glyph = "LED" }},\n'
-m+="]\n"
+m+="]\\n"
+m+=f"""
+[menu.fmi_settings]
+title = "PT35 customization"
+entries = [
+  {{ label = "Wolf menu icon", exec = "{toggle1}", icon = "face-smile", glyph = "WF" }},
+  {{ label = "Normal menu icon", exec = "{toggle2}", icon = "open-menu", glyph = "MN" }},
+]
+"""
 menu.write_text(m)
 try:
     import tomllib
