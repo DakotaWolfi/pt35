@@ -34,11 +34,12 @@ def add_app(id,label,glyph,icon,exec_,match=None,scale=None):
 
 bin=home/".local/bin/fmi-pt35-tool"
 s=apps.read_text() if apps.exists() else ""
-for id in ("fmi_spectrum","fmi_nfc","fmi_battery","fmi_remote_eye","fmi_dashboard","fmi_trainer"):
+for id in ("fmi_spectrum","fmi_nfc","fmi_battery","fmi_remote_eye","fmi_dashboard","fmi_trainer","fmi_nfc_legacy"):
     s=section_remove(s,f"app.{id}")
 entries=[
   ("fmi_spectrum","Spectral analyser","SP","utilities-system-monitor",f"foot -a fmi-spectrum {bin} spectrum","fmi-spectrum",None),
   ("fmi_nfc","NFC reader","NF","network-wireless",f"{bin} nfc","PT35NFC",None),
+  ("fmi_nfc_legacy","NFC reader (classic)","NC","network-wireless",f"{bin} nfc-legacy",None,None),
   ("fmi_battery","Battery diagnostics","BT","battery",f"foot -a fmi-battery {bin} battery","fmi-battery",None)]
 for id, label, glyph, icon, cmd, match, scale in entries:
     s=s.rstrip()+"\n\n"+add_app(id,label,glyph,icon,cmd,match,scale)
@@ -83,6 +84,7 @@ m=section_remove(m,"menu.fmi_settings")
 fmi=[
  ('"Spectral analyser", app = "fmi_spectrum", icon = "utilities-system-monitor"'),
  ('"NFC reader", app = "fmi_nfc", icon = "network-wireless"'),
+ ('"NFC reader (classic)", app = "fmi_nfc_legacy", icon = "network-wireless"'),
  ('"Battery diagnostics", app = "fmi_battery", icon = "battery"')]
 fmi += [(f'"{label}", app = "{id}", glyph = "{label[:2]}"') for id,label in installed_extra]
 m=m.rstrip()+"\n\n[menu.fmi]\ntitle = \"FMI Tools\"\nentries = [\n"
