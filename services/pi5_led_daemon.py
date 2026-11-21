@@ -21,7 +21,7 @@ BRIGHTNESS = min(max(float(os.getenv("PT35_LED_BRIGHTNESS", "0.15")), 0.0), 0.30
 PIN = getattr(board, f"D{GPIO}")
 mode = "off"
 color = (0, 0, 0)
-lock = threading.Lock()
+lock = threading.RLock()
 running = True
 
 
@@ -133,7 +133,14 @@ def main():
     path = Path(SOCKET)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        path.unlink()
+        # Never unlink a socket belonging to a running daemon.
+        with socket.socket(socket.AF_UNIX) as probe:
+            probe.settimeout(0.25)
+            try:
+                probe.connect(str(path))
+                raise SystemExit("PT35 LED daemon already running at " + str(path))
+            except (ConnectionRefusedError, FileNotFoundError):
+                path.unlink(missing_ok=True)
     with socket.socket(socket.AF_UNIX) as server:
         server.bind(str(path))
         os.chmod(path, 0o600)
