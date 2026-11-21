@@ -4,7 +4,7 @@ set -Eeuo pipefail
 if [[ "$(id -u)" == 0 ]]; then echo "Run without sudo."; exit 1; fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 command -v pt35ctl >/dev/null || { echo "PocketTerm35-OS not installed"; exit 1; }
-python3 -m py_compile "$ROOT/nfc/pt35_nfc_gui.py" "$ROOT/tools/pt35_tools.py" "$ROOT/tools/merge_pi5_launcher.py"
+python3 -m py_compile "$ROOT/nfc/pt35_nfc_gui.py" "$ROOT/nfc/pt35_nfc_gui_legacy.py" "$ROOT/tools/pt35_tools.py" "$ROOT/tools/merge_pi5_launcher.py"
 if ! /usr/bin/python3 -c "import tkinter" 2>/dev/null; then
   echo "WARNING: NFC GUI needs python3-tk (sudo apt install python3-tk)"
 fi
@@ -19,8 +19,10 @@ case "\$1" in
     fi
     exec python3 "$ROOT/tools/pt35_tools.py" --device as7341 ;;
   nfc) exec /usr/bin/python3 "$ROOT/nfc/pt35_nfc_gui.py" ;;
+  nfc-legacy) exec /usr/bin/python3 "$ROOT/nfc/pt35_nfc_gui_legacy.py" ;;
+  nfc-status) exec /usr/bin/python3 "$ROOT/nfc/pt35_nfc.py" status --backend internal ;;
   battery) exec /usr/bin/python3 "$ROOT/tools/pi5_battery_status.py" ;;
-  *) echo "Usage: fmi-pt35-tool spectrum|nfc|battery"; exit 2 ;;
+  *) echo "Usage: fmi-pt35-tool spectrum|nfc|nfc-legacy|nfc-status|battery"; exit 2 ;;
 esac
 EOF
 cat > "$HOME/.local/bin/pt35-ledctl" <<EOF
