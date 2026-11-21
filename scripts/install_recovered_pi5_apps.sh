@@ -17,12 +17,12 @@ set -e
 export PYTHONPATH="$OLD/nfc:${PYTHONPATH:-}"
 cd "$OLD/nfc"
 # Match the original Pi4 desktop launcher interpreter exactly.
-PY="$HOME/as7341-env/bin/python3"
-if [[ ! -x "$PY" ]]; then
-  echo "Missing original NFC Python environment: $PY" >&2
+PY="\$HOME/as7341-env/bin/python3"
+if [[ ! -x "\$PY" ]]; then
+  echo "Missing original NFC Python environment: \$PY" >&2
   exit 1
 fi
-exec "$PY" "$OLD/nfc/pt35_nfc_gui.py" "$@" 2>> "$HOME/.local/state/pt35/old-nfc-errors.log"
+exec "\$PY" "$OLD/nfc/pt35_nfc_gui.py" "\$@" 2>> "$HOME/.local/state/pt35/old-nfc-errors.log"
 EOF
 cat > "$HOME/.local/bin/pt35-original-spectrum" <<EOF
 #!/usr/bin/env bash
