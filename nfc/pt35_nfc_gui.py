@@ -27,8 +27,13 @@ class NFCWindow(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("PT35 NFC Reader")
-        self.geometry("850x620")
-        self.minsize(620, 440)
+        self.geometry("640x440")
+        self.minsize(480, 320)
+        self.configure(bg="#0a1310")
+        self._style()
+        self.bind("<Escape>", self._escape)
+        self.bind("<Control-q>", lambda _event: self.close())
+        self.bind("<Control-r>", lambda _event: self.refresh_archive())
         self.events = queue.Queue()
         self.proc = None
         self.busy = False
@@ -45,52 +50,105 @@ class NFCWindow(tk.Tk):
         if not BACKEND_SCRIPT.is_file():
             messagebox.showerror("Missing backend", f"Cannot find {BACKEND_SCRIPT}")
 
+    def _style(self):
+        """Dark styling designed around the PT35 640x480 display."""
+        bg, panel, fg, accent = "#0a1310", "#121f1a", "#dcf3e5", "#3ddc97"
+        self.option_add("*Font", "DejaVu Sans 10")
+        self.option_add("*Background", bg)
+        self.option_add("*Foreground", fg)
+        self.option_add("*Text.background", panel)
+        self.option_add("*Text.foreground", fg)
+        self.option_add("*Text.insertBackground", accent)
+        self.option_add("*Listbox.background", panel)
+        self.option_add("*Listbox.foreground", fg)
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.configure(".", background=bg, foreground=fg, fieldbackground=panel)
+        style.configure("TFrame", background=bg)
+        style.configure("TLabelframe", background=bg, foreground=accent, bordercolor="#254236")
+        style.configure("TLabelframe.Label", background=bg, foreground=accent)
+        style.configure("TLabel", background=bg, foreground=fg)
+        style.configure("TButton", background=panel, foreground=fg, padding=(6, 4))
+        style.map("TButton", background=[("active", "#254236"), ("pressed", "#254236")])
+        style.configure("TCheckbutton", background=bg, foreground=fg)
+        style.map("TCheckbutton", background=[("active", bg)])
+        style.configure("TCombobox", fieldbackground=panel, background=panel, foreground=fg)
+        style.map("TCombobox", fieldbackground=[("readonly", panel)], foreground=[("readonly", fg)])
+        style.configure("TSpinbox", fieldbackground=panel, background=panel, foreground=fg)
+        style.configure("Treeview", background=panel, fieldbackground=panel, foreground=fg, rowheight=27)
+        style.configure("Treeview.Heading", background="#254236", foreground=fg)
+        style.map("Treeview", background=[("selected", "#254236")], foreground=[("selected", fg)])
+        style.configure("TNotebook", background=bg, borderwidth=0)
+        style.configure("TNotebook.Tab", background=panel, foreground=fg, padding=(12, 6))
+        style.map("TNotebook.Tab", background=[("selected", "#254236")], foreground=[("selected", accent)])
+
+    def _escape(self, _event):
+        if self.proc is not None and self.proc.poll() is None:
+            self.stop()
+        else:
+            self.close()
+        return "break"
+
     def _build(self):
-        outer = ttk.Frame(self, padding=10)
-        outer.pack(fill="both", expand=True)
-        opts = ttk.LabelFrame(outer, text="Reader", padding=8)
+        # Two tabs prevent the scanner and archive fighting for 446 useful pixels.
+        header = ttk.Frame(self, padding=(8, 5))
+        header.pack(fill="x")
+        ttk.Label(header, text="PT35  /  NFC Reader", font=("DejaVu Sans", 13, "bold")).pack(side="left")
+        ttk.Button(header, text="Close", command=self.close).pack(side="right")
+
+        tabs = ttk.Notebook(self)
+        tabs.pack(fill="both", expand=True, padx=5, pady=(0, 5))
+        scan = ttk.Frame(tabs, padding=7)
+        archive = ttk.Frame(tabs, padding=7)
+        tabs.add(scan, text="SCAN")
+        tabs.add(archive, text="ARCHIVE")
+
+        opts = ttk.Frame(scan)
         opts.pack(fill="x")
-        ttk.Label(opts, text="Backend").grid(row=0, column=0, sticky="w")
-        ttk.Combobox(opts, textvariable=self.backend, state="readonly", width=13,
-                     values=("auto", "internal", "proxmark3")).grid(row=0, column=1, padx=6)
-        ttk.Label(opts, text="Blocks (0 = auto)").grid(row=0, column=2, sticky="w", padx=(10, 0))
-        ttk.Spinbox(opts, from_=0, to=256, textvariable=self.blocks, width=6).grid(row=0, column=3, padx=6)
-        ttk.Checkbutton(opts, text="Auto-save Tonie candidates", variable=self.auto_tonie).grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(9, 0))
-        ttk.Checkbutton(opts, text="Save every tag", variable=self.save_all).grid(
-            row=1, column=2, columnspan=2, sticky="w", pady=(9, 0))
-        ttk.Checkbutton(opts, text="Include built-in ST tag", variable=self.include_st).grid(
-            row=2, column=0, columnspan=3, sticky="w", pady=(5, 0))
-        bar = ttk.Frame(outer)
-        bar.pack(fill="x", pady=8)
-        self.start_button = ttk.Button(bar, text="Start scanning", command=self.start)
+        ttk.Label(opts, text="Reader").grid(row=0, column=0, sticky="w")
+        ttk.Combobox(opts, textvariable=self.backend, state="readonly", width=11,
+                     values=("auto", "internal", "proxmark3")).grid(row=0, column=1, padx=5, sticky="ew")
+        ttk.Label(opts, text="Blocks").grid(row=0, column=2)
+        ttk.Spinbox(opts, from_=0, to=256, textvariable=self.blocks, width=5).grid(row=0, column=3, padx=4)
+        opts.columnconfigure(1, weight=1)
+
+        flags = ttk.Frame(scan)
+        flags.pack(fill="x", pady=(6, 3))
+        ttk.Checkbutton(flags, text="Auto Tonie", variable=self.auto_tonie).pack(side="left")
+        ttk.Checkbutton(flags, text="Save all", variable=self.save_all).pack(side="left", padx=8)
+        ttk.Checkbutton(flags, text="Include ST", variable=self.include_st).pack(side="left")
+
+        buttons = ttk.Frame(scan)
+        buttons.pack(fill="x", pady=4)
+        self.start_button = ttk.Button(buttons, text="Start scan", command=self.start)
         self.start_button.pack(side="left")
-        self.stop_button = ttk.Button(bar, text="Stop", command=self.stop, state="disabled")
-        self.stop_button.pack(side="left", padx=5)
-        ttk.Button(bar, text="Reader status", command=lambda: self.run_once("status")).pack(side="left", padx=5)
-        ttk.Button(bar, text="Identify (PM3)", command=lambda: self.run_once("identify")).pack(side="left", padx=5)
-        ttk.Label(bar, textvariable=self.state).pack(side="right")
-        logbox = ttk.LabelFrame(outer, text="Live scanner output", padding=5)
-        logbox.pack(fill="both", expand=True)
-        self.log = tk.Text(logbox, height=10, wrap="word", state="disabled")
-        log_scroll = ttk.Scrollbar(logbox, command=self.log.yview)
+        self.stop_button = ttk.Button(buttons, text="Stop", command=self.stop, state="disabled")
+        self.stop_button.pack(side="left", padx=4)
+        ttk.Button(buttons, text="Status", command=lambda: self.run_once("status")).pack(side="left")
+        ttk.Button(buttons, text="PM3", command=lambda: self.run_once("identify")).pack(side="left", padx=4)
+        ttk.Label(scan, textvariable=self.state).pack(anchor="w", pady=(2, 3))
+
+        logarea = ttk.Frame(scan)
+        logarea.pack(fill="both", expand=True)
+        self.log = tk.Text(logarea, height=8, wrap="word", state="disabled",
+                           bg="#121f1a", fg="#dcf3e5", insertbackground="#3ddc97",
+                           relief="flat", padx=6, pady=5, font=("DejaVu Sans Mono", 9))
+        log_scroll = ttk.Scrollbar(logarea, command=self.log.yview)
         self.log.configure(yscrollcommand=log_scroll.set)
         self.log.pack(side="left", fill="both", expand=True)
         log_scroll.pack(side="right", fill="y")
-        archivebox = ttk.LabelFrame(outer, text="Saved tags", padding=5)
-        archivebox.pack(fill="both", expand=True, pady=(8, 0))
+
         cols = ("uid", "type", "status", "reader")
-        self.tree = ttk.Treeview(archivebox, columns=cols, show="headings", height=7)
-        for col, width in (("uid", 185), ("type", 170), ("status", 175), ("reader", 90)):
-            self.tree.heading(col, text=col.capitalize())
-            self.tree.column(col, width=width, minwidth=70)
+        self.tree = ttk.Treeview(archive, columns=cols, show="headings", height=8)
+        for col, width in (("uid", 165), ("type", 150), ("status", 120), ("reader", 95)):
+            self.tree.heading(col, text=col.upper())
+            self.tree.column(col, width=width, minwidth=55, stretch=True)
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<Double-1>", lambda _: self.show_selected())
-        bottom = ttk.Frame(outer)
-        bottom.pack(fill="x", pady=(7, 0))
-        ttk.Button(bottom, text="Refresh archive", command=self.refresh_archive).pack(side="left")
-        ttk.Button(bottom, text="View selected tag", command=self.show_selected).pack(side="left", padx=6)
-        ttk.Label(bottom, text=f"Archive: {ARCHIVE}").pack(side="right")
+        actions = ttk.Frame(archive)
+        actions.pack(fill="x", pady=(5, 0))
+        ttk.Button(actions, text="Refresh", command=self.refresh_archive).pack(side="left")
+        ttk.Button(actions, text="View selected", command=self.show_selected).pack(side="left", padx=5)
 
     def _append(self, msg):
         self.log.configure(state="normal")
@@ -229,8 +287,9 @@ class NFCWindow(tk.Tk):
             return
         window = tk.Toplevel(self)
         window.title(f"Tag {uid}")
-        window.geometry("720x520")
-        body = tk.Text(window, wrap="none")
+        window.geometry("600x380")
+        window.configure(bg="#0a1310")
+        body = tk.Text(window, wrap="none", bg="#121f1a", fg="#dcf3e5", insertbackground="#3ddc97", relief="flat")
         body.insert("1.0", content)
         body.configure(state="disabled")
         body.pack(fill="both", expand=True)
