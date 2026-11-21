@@ -95,7 +95,7 @@ entries = [
 led=home/".local/bin/pt35-ledctl"
 for label,args in (("LEDs off","off"),("Idle glow","idle"),("Rainbow","rainbow"),("Battery bar","battery"),("White flash","flash 40 40 40")):
     m+=f'  {{ label = "{label}", exec = "{led} {args}", glyph = "LED" }},\n'
-m+="]\\n"
+m+="]\n"
 m+=f"""
 [menu.fmi_settings]
 title = "PT35 customization"
