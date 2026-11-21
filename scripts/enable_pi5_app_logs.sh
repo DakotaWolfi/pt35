@@ -11,11 +11,20 @@ for app in cp-dashboard cp-petmind-training pt35-eye-control; do
 done
 for pair in 'cp-dashboard collarpet' 'cp-petmind-training trainer' 'pt35-eye-control eye'; do
   read -r app name <<< "$pair"
-  cat > "$APPDIR/pt35-run-$name" <<EOF
+  if [[ "$name" == "collarpet" ]]; then
+    # The Pi4 cp-dashboard launcher detaches the Tk application. The shell
+    # wrapper only sees the parent's exit, not errors from the actual window.
+    # Run the EXACT recovered dashboard.py directly and capture its stderr.
+    cat > "$APPDIR/pt35-run-$name" <<EOF
 #!/usr/bin/env bash
-# Preserve the actual Pi4 executable, log any startup traceback.
+exec /usr/bin/python3 "$HOME/.local/share/collarpet-link/dashboard.py" "\$@" >> "$LOGDIR/$name.log" 2>&1
+EOF
+  else
+    cat > "$APPDIR/pt35-run-$name" <<EOF
+#!/usr/bin/env bash
 exec "$APPDIR/$app" "\$@" >> "$LOGDIR/$name.log" 2>&1
 EOF
+  fi
   chmod 755 "$APPDIR/pt35-run-$name"
 done
 echo "Diagnostic launchers installed. GUI paths:"
