@@ -41,6 +41,21 @@ entries=[
   ("fmi_nfc","NFC reader (classic)","NF","network-wireless",f"{bin} nfc-legacy",None,None),
   ("fmi_nfc_experimental","NFC reader (new/beta)","NB","network-wireless",f"{bin} nfc","PT35NFC",None),
   ("fmi_battery","Battery diagnostics","BT","battery",f"foot --hold -a fmi-battery {bin} battery","fmi-battery",None)]
+# Prefer the genuine recovered Pi4 GUIs when their wrappers are installed.
+original_nfc = home/".local/bin/pt35-original-nfc"
+original_spectrum = home/".local/bin/pt35-original-spectrum"
+if original_nfc.is_file():
+    entries = [
+        (id, "NFC reader (original)", glyph, icon, str(original_nfc), None, None)
+        if id == "fmi_nfc" else (id,label,glyph,icon,cmd,match,scale)
+        for id,label,glyph,icon,cmd,match,scale in entries
+    ]
+if original_spectrum.is_file():
+    entries = [
+        (id, "Spectrum (original)", glyph, icon, str(original_spectrum), None, None)
+        if id == "fmi_spectrum" else (id,label,glyph,icon,cmd,match,scale)
+        for id,label,glyph,icon,cmd,match,scale in entries
+    ]
 for id, label, glyph, icon, cmd, match, scale in entries:
     s=s.rstrip()+"\n\n"+add_app(id,label,glyph,icon,cmd,match,scale)
 extra=[
@@ -82,8 +97,8 @@ m=section_remove(m,"menu.fmi")
 m=section_remove(m,"menu.fmi_leds")
 m=section_remove(m,"menu.fmi_settings")
 fmi=[
- ('"Spectral analyser", app = "fmi_spectrum", icon = "utilities-system-monitor"'),
- ('"NFC reader (classic)", app = "fmi_nfc", icon = "network-wireless"'),
+ (('"Spectrum (original)"' if original_spectrum.is_file() else '"Spectral analyser"') + ', app = "fmi_spectrum", icon = "utilities-system-monitor"'),
+ (('"NFC reader (original)"' if original_nfc.is_file() else '"NFC reader (classic)"') + ', app = "fmi_nfc", icon = "network-wireless"'),
  ('"NFC reader (new/beta)", app = "fmi_nfc_experimental", icon = "network-wireless"'),
  ('"Battery diagnostics", app = "fmi_battery", icon = "battery"')]
 fmi += [(f'"{label}", app = "{id}", glyph = "{label[:2]}"') for id,label in installed_extra]
