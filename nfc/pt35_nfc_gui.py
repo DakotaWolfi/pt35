@@ -25,7 +25,7 @@ POLL_MS = 100
 
 class NFCWindow(tk.Tk):
     def __init__(self):
-        super().__init__()
+        super().__init__(className="PT35NFC")
         self.title("PT35 NFC Reader")
         self.geometry("640x440")
         self.minsize(480, 320)
