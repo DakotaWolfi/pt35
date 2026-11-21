@@ -1,0 +1,37 @@
+#!/bin/bash
+# PT35 login banner, adapted from VisionPi's 10-visionpi MOTD.
+# Uses only standard Linux utilities; battery telemetry can be added later.
+
+CYAN='\033[1;36m'
+BLUE='\033[1;34m'
+MAGENTA='\033[1;35m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+WHITE='\033[1;37m'
+RESET='\033[0m'
+
+HOST="$(hostname)"
+KERNEL="$(uname -r)"
+IPV4="$(hostname -I 2>/dev/null | awk '{print $1}')"
+[ -n "$IPV4" ] || IPV4='not connected'
+TEMP_RAW="$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)"
+if [[ "$TEMP_RAW" =~ ^[0-9]+$ ]]; then
+    TEMP="$(awk "BEGIN {printf \"%.1f°C\", $TEMP_RAW/1000}")"
+else
+    TEMP='unknown'
+fi
+
+printf '%b\n' "${WHITE}               /^._      ${CYAN}██████╗ ████████╗██████╗ ███████╗"
+printf '%b\n' "${WHITE}  ,___,--~~~~--' /'~     ${CYAN}██╔══██╗╚══██╔══╝╚════██╗██╔════╝"
+printf '%b\n' "${WHITE}  \`~--~ )___,)/'   \\     ${BLUE}██████╔╝   ██║    █████╔╝███████╗"
+printf '%b\n' "${WHITE}      (/\\_  (/\\_         ${BLUE}██╔═══╝    ██║    ╚═══██╗╚════██║"
+printf '%b\n' "${MAGENTA}                          ██║        ██║   ██████╔╝███████║"
+printf '%b\n' "${MAGENTA}                          ╚═╝        ╚═╝   ╚═════╝ ╚══════╝${RESET}"
+printf '%b\n' "${YELLOW}              Wolf-powered pocket terminal${RESET}"
+printf '%b\n' "${WHITE}              PT35 • Raspberry Pi 5 • FMI${RESET}"
+printf '\n'
+printf '%b\n' "${GREEN} Host   ${RESET}: ${HOST}"
+printf '%b\n' "${GREEN} Kernel ${RESET}: ${KERNEL}"
+printf '%b\n' "${GREEN} IPv4   ${RESET}: ${IPV4}"
+printf '%b\n' "${GREEN} Temp   ${RESET}: ${TEMP}"
+printf '\n'
