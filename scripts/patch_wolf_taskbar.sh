@@ -42,55 +42,74 @@ pub const WOLF: &[&str] = &[
     ".........#.........",
     "...................",
 ];'''
-# Prepare all three modified sources in memory before writing ANY file.
-# This also supports a partial patch from an earlier failed attempt.
-px=pixel.read_text()
-if 'pub const WOLF:' not in px:
-    anchor="pub const PIN:"
-    if px.count(anchor)!=1:
-        raise SystemExit("Unknown upstream pixel source; no files changed.")
-    px=px.replace(anchor,wolf+"\n\n"+anchor,1)
+# Always start from the untouched upstream version stored in this checkout.
+# Earlier failed installers may have patched one source file but not the others.
+# Importantly, no git reset/checkout modifies any user files.
+import subprocess
+from datetime import datetime
+import shutil
 
-bs=bar.read_text()
-if "pt35_ui::pixel::WOLF" not in bs:
-    anchor='if self.theme.bar.menu_icon == "bars" {'
-    if bs.count(anchor)!=1:
-        raise SystemExit("Unknown upstream bar icon selection; no files changed.")
-    bs=bs.replace(anchor,'''if self.theme.bar.menu_icon == "wolf" {
+def pristine(relative):
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(root), "show", "HEAD:" + relative],
+            text=True)
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(f"Could not read Git baseline for {relative}: {exc}")
+
+pixel_rel="crates/pt35-ui/src/pixel.rs"
+bar_rel="crates/pt35-bar/src/ui.rs"
+menu_rel="crates/pt35-menu/src/ui.rs"
+px=pristine(pixel_rel)
+bs=pristine(bar_rel)
+ms=pristine(menu_rel)
+
+# Refuse unexpected upstream changes before touching any files.
+if px.count("pub const PIN:") != 1 or "pub const WOLF:" in px:
+    raise SystemExit("Unknown upstream pixel baseline; no changes made.")
+if bs.count('if self.theme.bar.menu_icon == "bars" {') != 1:
+    raise SystemExit("Unknown upstream bar baseline; no changes made.")
+
+# Both positions are distinct, but their *original bitmap argument* is the
+# same. Check full original call fragments, then replace the two exact calls.
+tile='''pt35_ui::pixel::draw_centred(
+                    canvas,
+                    pt35_ui::pixel::SKULL,
+                    bx + badge / 2,
+                    by + badge / 2,
+                    2,
+                    theme.color.accent_fg,
+                );'''
+switcher='''pt35_ui::pixel::draw_centred(
+                    canvas,
+                    pt35_ui::pixel::SKULL,
+                    middle,
+                    icon_y,
+                    3,
+                    theme.color.accent,
+                );'''
+if ms.count(tile)!=1 or ms.count(switcher)!=1:
+    raise SystemExit("Upstream launcher skull drawing changed; no files modified.")
+
+px=px.replace("pub const PIN:",wolf+"\n\npub const PIN:",1)
+bs=bs.replace(
+    'if self.theme.bar.menu_icon == "bars" {',
+    '''if self.theme.bar.menu_icon == "wolf" {
             pt35_ui::pixel::draw_centred(canvas, pt35_ui::pixel::WOLF, middle, centre, 1, ink);
-        } else '''+anchor,1)
+        } else if self.theme.bar.menu_icon == "bars" {''',1)
+art='if theme.bar.menu_icon == "wolf" { pt35_ui::pixel::WOLF } else { pt35_ui::pixel::SKULL }'
+ms=ms.replace(tile,tile.replace("pt35_ui::pixel::SKULL,",art+","),1)
+ms=ms.replace(switcher,switcher.replace("pt35_ui::pixel::SKULL,",art+",").replace(
+                    "                    3,\n",
+                    '                    if theme.bar.menu_icon == "wolf" { 2 } else { 3 },\n'),1)
 
-ms=menu.read_text()
-# The tile and switcher use different geometry. Match each draw call by its
-# unique coordinate pair instead of assuming there are exactly two identical
-# SKULL tokens (an older attempt may have already modified one call).
-import re
-
-def replace_draw(source, coords, scale_old, scale_new):
-    pattern=(r'pt35_ui::pixel::draw_centred\(\s*canvas,\s*'
-             r'(?:/\* PT35 FMI wolf or skull \*/\s*)?'
-             r'(?P<art>pt35_ui::pixel::SKULL|'
-             r'if theme\.bar\.menu_icon == "wolf" \{ pt35_ui::pixel::WOLF \} '
-             r'else \{ pt35_ui::pixel::SKULL \})\s*,\s*'
-             + re.escape(coords[0]) + r'\s*,\s*'
-             + re.escape(coords[1]) + r'\s*,\s*'
-             + r'(?P<scale>' + re.escape(str(scale_old)) +
-             r'|if theme\.bar\.menu_icon == "wolf" \{ 2 \} else \{ 3 \})\s*,')
-    hits=list(re.finditer(pattern,source))
-    if len(hits)!=1:
-        raise SystemExit(f"Could not uniquely locate original menu art at {coords}: {len(hits)} matches; no files changed.")
-    hit=hits[0]
-    art='if theme.bar.menu_icon == "wolf" { pt35_ui::pixel::WOLF } else { pt35_ui::pixel::SKULL }'
-    return (source[:hit.start("art")] + art
-            + source[hit.end("art"):hit.start("scale")]
-            + scale_new + source[hit.end("scale"):])
-
-ms=replace_draw(ms,("bx + badge / 2","by + badge / 2"),2,"2")
-ms=replace_draw(ms,("middle","icon_y"),3,
-    'if theme.bar.menu_icon == "wolf" { 2 } else { 3 }')
-# No partial modifications when the original source was unexpected.
+# Source edit only after ALL three independent checks passed. Retain current
+# partially patched copies for manual recovery rather than silently discarding.
+stamp=datetime.now().strftime("%Y%m%d-%H%M%S")
 for path,data in ((pixel,px),(bar,bs),(menu,ms)):
     if path.read_text()!=data:
+        backup=path.with_name(path.name+".fmi-before-wolf-"+stamp+".bak")
+        shutil.copy2(path,backup)
         path.write_text(data)
 print("Wolf artwork patched in pt35-bar and pt35-menu; stock skull preserved.")
 PY
