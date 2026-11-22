@@ -107,7 +107,7 @@ bs=bs.replace(
         } else if self.theme.bar.menu_icon == "bars" {''',1)
 
 tile_wolf=tile.replace(
-    '''                pt35_ui::pixel::draw_centred(''',
+    '''pt35_ui::pixel::draw_centred(''',
     '''                if theme.bar.menu_icon == "wolf" {
                     if let Some(wolf) = self.icons.get("pt35-wolf", 32) {
                         wolf.draw_tinted(canvas, bx + 4, by + 4, theme.color.accent_fg);
@@ -128,7 +128,7 @@ tile_wolf=tile_wolf.replace(
                 }''',1)
 
 switcher_wolf=switcher.replace(
-    '''                pt35_ui::pixel::draw_centred(''',
+    '''pt35_ui::pixel::draw_centred(''',
     '''                if theme.bar.menu_icon == "wolf" {
                     if let Some(wolf) = self.icons.get("pt35-wolf", 40) {
                         wolf.draw_tinted(canvas, middle - 20, icon_y - 20, theme.color.accent);
@@ -147,6 +147,9 @@ switcher_wolf=switcher_wolf.replace(
                     );
                 }''',1)
 
+# Fail closed if either replacement did not introduce the intended branch.
+if 'if theme.bar.menu_icon == "wolf"' not in tile_wolf or 'if theme.bar.menu_icon == "wolf"' not in switcher_wolf:
+    raise SystemExit("Wolf menu rendering replacement did not match; no files modified.")
 ms=ms.replace(tile,tile_wolf,1)
 ms=ms.replace(switcher,switcher_wolf,1)
 
