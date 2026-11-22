@@ -1,20 +1,26 @@
 #!/usr/bin/env bash
-# Change PocketTerm35-OS taskbar menu button to a 19x19 wolf pixel icon.
-# Uses a separate upstream checkout and recompiles pt35-bar only.
-set -euo pipefail
-if [ "$(id -u)" = 0 ]; then echo "Run as your normal user"; exit 1; fi
+# Build/install matching wolf artwork in BOTH PocketTerm35 taskbar and launcher.
+# The Select/Open Tasks launcher card is rendered by pt35-menu, not pt35-bar.
+set -Eeuo pipefail
+[[ "$(id -u)" != 0 ]] || { echo "Run as normal user (no sudo)." >&2; exit 1; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$HOME/pt35-wolf-source"
-if [ ! -d "$SRC/.git" ]; then git clone https://github.com/therezor/PocketTerm35-OS.git "$SRC"; fi
+if [[ ! -d "$SRC/.git" ]]; then
+  git clone https://github.com/therezor/PocketTerm35-OS.git "$SRC"
+fi
 python3 - "$SRC" <<'PY'
 from pathlib import Path
 import sys
-src=Path(sys.argv[1])
-pixel=src/"crates/pt35-ui/src/pixel.rs"
-ui=src/"crates/pt35-bar/src/ui.rs"
-data=pixel.read_text()
-wolf = """
-/// Wolf face: 19x19, sharp ears, narrow eyes and pointed muzzle.
+
+root=Path(sys.argv[1])
+pixel=root/"crates/pt35-ui/src/pixel.rs"
+bar=root/"crates/pt35-bar/src/ui.rs"
+menu=root/"crates/pt35-menu/src/ui.rs"
+for p in (pixel,bar,menu):
+    if not p.is_file():
+        raise SystemExit(f"Missing upstream PocketTerm35 source: {p}")
+
+wolf='''/// Custom FMI PT35 wolf: 19 × 19, shared by bar and task switcher.
 pub const WOLF: &[&str] = &[
     "##...............##",
     "###.............###",
@@ -35,69 +41,99 @@ pub const WOLF: &[&str] = &[
     "........###........",
     ".........#.........",
     "...................",
-];
-"""
-
-if "pub const WOLF:" in data:
-    start=data.index("/// Wolf") if "/// Wolf" in data else data.index("pub const WOLF:")
-    end=data.index("];", data.index("pub const WOLF:", start)) + 2
-    data=data[:start]+wolf.strip()+data[end:]
-else:
+];'''
+# Preserve upstream stock skull; add one independent wolf bitmap.
+s=pixel.read_text()
+if 'pub const WOLF:' not in s:
     anchor="pub const PIN:"
-    if anchor not in data: raise SystemExit("Cannot locate pixel-art insertion point; upstream changed")
-    data=data.replace(anchor,wolf+"\n"+anchor,1)
-pixel.write_text(data)
-data=ui.read_text()
-old='''        if self.theme.bar.menu_icon == "bars" {'''
-new='''        if self.theme.bar.menu_icon == "wolf" {
+    if s.count(anchor)!=1:
+        raise SystemExit("Unknown upstream pixel source; no files modified.")
+    s=s.replace(anchor,wolf+"\n\n"+anchor,1)
+else:
+    a=s.index("pub const WOLF:")
+    a=s.rfind("///",0,a) if "Custom FMI PT35 wolf:" in s[max(0,a-100):a] else a
+    b=s.index("];",s.index("pub const WOLF:",a))+2
+    s=s[:a]+wolf+s[b:]
+pixel.write_text(s)
+
+s=bar.read_text()
+if "pt35_ui::pixel::WOLF" not in s:
+    anchor='if self.theme.bar.menu_icon == "bars" {'
+    if s.count(anchor)!=1:
+        raise SystemExit("Unknown upstream pt35-bar icon selection; no bar changes.")
+    s=s.replace(anchor,'''if self.theme.bar.menu_icon == "wolf" {
             pt35_ui::pixel::draw_centred(canvas, pt35_ui::pixel::WOLF, middle, centre, 1, ink);
-        } else if self.theme.bar.menu_icon == "bars" {'''
-if old in data: data=data.replace(old,new,1); ui.write_text(data)
-elif "pt35_ui::pixel::WOLF" not in data: raise SystemExit("Cannot locate menu icon selection; upstream changed")
-print("Wolf source patch applied.")
+        } else '''+anchor,1)
+    bar.write_text(s)
+
+# Two original PT35 menu render sites: Launcher tile and Select/Open Tasks card.
+# Both should respect the same theme field as the bar.
+s=menu.read_text()
+needle="pt35_ui::pixel::SKULL,"
+if s.count(needle) != 2 and "PT35 FMI wolf or skull" not in s:
+    raise SystemExit(f"Unexpected original menu skull sites ({s.count(needle)}). Refusing patch.")
+if "PT35 FMI wolf or skull" not in s:
+    s=s.replace(needle,
+        '/* PT35 FMI wolf or skull */\n                    if theme.bar.menu_icon == "wolf" { pt35_ui::pixel::WOLF } else { pt35_ui::pixel::SKULL },',
+        1)
+    # The task switcher uses scale 3, which is too wide for 19-pixel wolf.
+    # Scale 2 for the wolf; retain 3 for the original skull.
+    first=s.index("/* PT35 FMI wolf or skull */")
+    pos=s.index(needle,first)
+    s=s[:pos]+s[pos:].replace(needle,
+        '/* PT35 FMI wolf or skull */\n                    if theme.bar.menu_icon == "wolf" { pt35_ui::pixel::WOLF } else { pt35_ui::pixel::SKULL },',1)
+    # replace only the second draw_centred call's scale to avoid clipping
+    pos=s.index("/* PT35 FMI wolf or skull */",first+1)
+    end=s.index("theme.color.accent,",pos)
+    snippet=s[pos:end]
+    if "                    3,\n" in snippet:
+        s=s[:pos]+s[pos:end].replace("                    3,\n",
+            '                    if theme.bar.menu_icon == "wolf" { 2 } else { 3 },\n',1)+s[end:]
+    else:
+        raise SystemExit("Unknown switcher art scale; refusing to write menu.")
+    menu.write_text(s)
+print("Wolf artwork patched in pt35-bar and pt35-menu; stock skull preserved.")
 PY
-# Keep the installed desktop unchanged until a wolf-capable bar is ready.
 if ! command -v cargo >/dev/null; then
-  echo "Wolf source staged, but Rust cargo isn't installed. Existing desktop untouched."
-  exit 0
-fi
-# Verify native dependencies before starting a large Rust compilation.
-if ! command -v pkg-config >/dev/null || ! pkg-config --exists xkbcommon wayland-client; then
-  echo "Missing native build libraries for PocketTerm35-OS."
-  echo "Install with:"
-  echo "  sudo apt install pkg-config libxkbcommon-dev libwayland-dev"
+  echo "Rust cargo not installed; source prepared but no binaries changed."
   exit 1
 fi
-cd "$SRC"
-cargo build --release -p pt35-bar --locked
-echo "Wolf bar compiled. Installed desktop has not been changed."
-if [[ "$#" -eq 0 || "$1" != "--install" ]]; then
-  echo "To install: bash $ROOT/scripts/patch_wolf_taskbar.sh --install"
-  exit 0
+if ! command -v pkg-config >/dev/null || ! pkg-config --exists xkbcommon wayland-client; then
+  echo "Missing build deps: sudo apt install pkg-config libxkbcommon-dev libwayland-dev"
+  exit 1
 fi
-CURRENT="$(command -v pt35-bar)"
-BACKUP="$CURRENT.fmi-before-wolf"
-if [[ ! -f "$BACKUP" ]]; then sudo cp -a "$CURRENT" "$BACKUP"; fi
-sudo install -m755 "$SRC/target/release/pt35-bar" "$CURRENT"
+(
+  cd "$SRC"
+  cargo build --release --locked -p pt35-bar -p pt35-menu
+)
+[[ "$#" -gt 0 && "$1" == "--install" ]] || {
+  echo "Both binaries built successfully; install with:"
+  echo "  bash $ROOT/scripts/patch_wolf_taskbar.sh --install"
+  exit 0
+}
+BAR="$(command -v pt35-bar)"
+MENU="$(command -v pt35-menu)"
+[[ -n "$BAR" && -n "$MENU" ]] || { echo "pt35-bar/menu missing from PATH" >&2; exit 1; }
+BAR="$(readlink -f "$BAR")"
+MENU="$(readlink -f "$MENU")"
+[[ -x "$BAR" && -x "$MENU" ]] || { echo "Existing binaries missing" >&2; exit 1; }
+for pair in "$BAR pt35-bar" "$MENU pt35-menu"; do
+  read -r current name <<<"$pair"
+  if [[ ! -f "$current.fmi-before-wolf" ]]; then
+    sudo cp -a "$current" "$current.fmi-before-wolf"
+  fi
+done
+# Build both first, then replace. Backups are available for recovery.
+sudo install -m755 "$SRC/target/release/pt35-bar" "$BAR"
+sudo install -m755 "$SRC/target/release/pt35-menu" "$MENU"
 CONF="$HOME/.config/pt35/theme.toml"
 mkdir -p "$(dirname "$CONF")"
-[[ -f "$CONF" ]] && cp -a "$CONF" "$CONF.bak.$(date +%Y%m%d-%H%M%S)" || true
-python3 - "$CONF" <<'PY'
-from pathlib import Path
-import re,sys
-p=Path(sys.argv[1]); s=p.read_text() if p.exists() else ""
-m=re.search(r"(?m)^\[bar\][ \t]*$",s)
-if m:
-    a=m.end(); n=re.search(r"(?m)^\[",s[a:]); b=a+n.start() if n else len(s)
-    section=s[a:b]
-    if re.search(r"(?m)^[ \t]*menu_icon[ \t]*=",section):
-        section=re.sub(r"(?m)^[ \t]*menu_icon[ \t]*=.*$",'menu_icon = "wolf"',section)
-    else: section += '\nmenu_icon = "wolf"\n'
-    s=s[:a]+section+s[b:]
-else: s=s.rstrip()+'\n\n[bar]\nmenu_icon = "wolf"\n'
-p.write_text(s)
-PY
+[[ ! -f "$CONF" ]] || cp -a "$CONF" "$CONF.bak.$(date +%Y%m%d-%H%M%S)"
+python3 "$ROOT/tools/pt35_menu_icon.py" bars
 mkdir -p "$HOME/.local/share/pt35"
 touch "$HOME/.local/share/pt35/wolf-bar-installed"
-echo "Wolf installed. The Settings > Wolf / Normal menu entries can now switch the icon."
-echo "Rollback executable: sudo cp -a '$BACKUP' '$CURRENT'"
+python3 "$ROOT/tools/pt35_menu_icon.py" wolf
+echo "Wolf binaries installed (bar + launcher). Log out and back in to load BOTH processes."
+echo "Rollback:"
+echo "  sudo cp -a '$BAR.fmi-before-wolf' '$BAR'"
+echo "  sudo cp -a '$MENU.fmi-before-wolf' '$MENU'"
