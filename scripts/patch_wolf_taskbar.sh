@@ -42,56 +42,55 @@ pub const WOLF: &[&str] = &[
     ".........#.........",
     "...................",
 ];'''
-# Preserve upstream stock skull; add one independent wolf bitmap.
-s=pixel.read_text()
-if 'pub const WOLF:' not in s:
+# Prepare all three modified sources in memory before writing ANY file.
+# This also supports a partial patch from an earlier failed attempt.
+px=pixel.read_text()
+if 'pub const WOLF:' not in px:
     anchor="pub const PIN:"
-    if s.count(anchor)!=1:
-        raise SystemExit("Unknown upstream pixel source; no files modified.")
-    s=s.replace(anchor,wolf+"\n\n"+anchor,1)
-else:
-    a=s.index("pub const WOLF:")
-    a=s.rfind("///",0,a) if "Custom FMI PT35 wolf:" in s[max(0,a-100):a] else a
-    b=s.index("];",s.index("pub const WOLF:",a))+2
-    s=s[:a]+wolf+s[b:]
-pixel.write_text(s)
+    if px.count(anchor)!=1:
+        raise SystemExit("Unknown upstream pixel source; no files changed.")
+    px=px.replace(anchor,wolf+"\n\n"+anchor,1)
 
-s=bar.read_text()
-if "pt35_ui::pixel::WOLF" not in s:
+bs=bar.read_text()
+if "pt35_ui::pixel::WOLF" not in bs:
     anchor='if self.theme.bar.menu_icon == "bars" {'
-    if s.count(anchor)!=1:
-        raise SystemExit("Unknown upstream pt35-bar icon selection; no bar changes.")
-    s=s.replace(anchor,'''if self.theme.bar.menu_icon == "wolf" {
+    if bs.count(anchor)!=1:
+        raise SystemExit("Unknown upstream bar icon selection; no files changed.")
+    bs=bs.replace(anchor,'''if self.theme.bar.menu_icon == "wolf" {
             pt35_ui::pixel::draw_centred(canvas, pt35_ui::pixel::WOLF, middle, centre, 1, ink);
         } else '''+anchor,1)
-    bar.write_text(s)
 
-# Two original PT35 menu render sites: Launcher tile and Select/Open Tasks card.
-# Both should respect the same theme field as the bar.
-s=menu.read_text()
-needle="pt35_ui::pixel::SKULL,"
-if s.count(needle) != 2 and "PT35 FMI wolf or skull" not in s:
-    raise SystemExit(f"Unexpected original menu skull sites ({s.count(needle)}). Refusing patch.")
-if "PT35 FMI wolf or skull" not in s:
-    s=s.replace(needle,
-        '/* PT35 FMI wolf or skull */\n                    if theme.bar.menu_icon == "wolf" { pt35_ui::pixel::WOLF } else { pt35_ui::pixel::SKULL },',
-        1)
-    # The task switcher uses scale 3, which is too wide for 19-pixel wolf.
-    # Scale 2 for the wolf; retain 3 for the original skull.
-    first=s.index("/* PT35 FMI wolf or skull */")
-    pos=s.index(needle,first)
-    s=s[:pos]+s[pos:].replace(needle,
-        '/* PT35 FMI wolf or skull */\n                    if theme.bar.menu_icon == "wolf" { pt35_ui::pixel::WOLF } else { pt35_ui::pixel::SKULL },',1)
-    # replace only the second draw_centred call's scale to avoid clipping
-    pos=s.index("/* PT35 FMI wolf or skull */",first+1)
-    end=s.index("theme.color.accent,",pos)
-    snippet=s[pos:end]
-    if "                    3,\n" in snippet:
-        s=s[:pos]+s[pos:end].replace("                    3,\n",
-            '                    if theme.bar.menu_icon == "wolf" { 2 } else { 3 },\n',1)+s[end:]
-    else:
-        raise SystemExit("Unknown switcher art scale; refusing to write menu.")
-    menu.write_text(s)
+ms=menu.read_text()
+# The tile and switcher use different geometry. Match each draw call by its
+# unique coordinate pair instead of assuming there are exactly two identical
+# SKULL tokens (an older attempt may have already modified one call).
+import re
+
+def replace_draw(source, coords, scale_old, scale_new):
+    pattern=(r'pt35_ui::pixel::draw_centred\(\s*canvas,\s*'
+             r'(?P<art>pt35_ui::pixel::SKULL|'
+             r'if theme\.bar\.menu_icon == "wolf" \{ pt35_ui::pixel::WOLF \} '
+             r'else \{ pt35_ui::pixel::SKULL \})\s*,\s*'
+             + re.escape(coords[0]) + r'\s*,\s*'
+             + re.escape(coords[1]) + r'\s*,\s*'
+             + r'(?P<scale>' + re.escape(str(scale_old)) +
+             r'|if theme\.bar\.menu_icon == "wolf" \{ 2 \} else \{ 3 \})\s*,')
+    hits=list(re.finditer(pattern,source))
+    if len(hits)!=1:
+        raise SystemExit(f"Could not uniquely locate original menu art at {coords}: {len(hits)} matches; no files changed.")
+    hit=hits[0]
+    art='if theme.bar.menu_icon == "wolf" { pt35_ui::pixel::WOLF } else { pt35_ui::pixel::SKULL }'
+    return (source[:hit.start("art")] + art
+            + source[hit.end("art"):hit.start("scale")]
+            + scale_new + source[hit.end("scale"):])
+
+ms=replace_draw(ms,("bx + badge / 2","by + badge / 2"),2,"2")
+ms=replace_draw(ms,("middle","icon_y"),3,
+    'if theme.bar.menu_icon == "wolf" { 2 } else { 3 }')
+# No partial modifications when the original source was unexpected.
+for path,data in ((pixel,px),(bar,bs),(menu,ms)):
+    if path.read_text()!=data:
+        path.write_text(data)
 print("Wolf artwork patched in pt35-bar and pt35-menu; stock skull preserved.")
 PY
 if ! command -v cargo >/dev/null; then
