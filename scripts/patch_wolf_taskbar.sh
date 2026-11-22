@@ -67,7 +67,8 @@ ms=menu.read_text()
 import re
 
 def replace_draw(source, coords, scale_old, scale_new):
-    pattern=(r'pt35_ui::pixel::draw_centred\(\s*canvas,\s*'\n             r'(?:/\* PT35 FMI wolf or skull \*/\s*)?'
+    pattern=(r'pt35_ui::pixel::draw_centred\(\s*canvas,\s*'
+             r'(?:/\* PT35 FMI wolf or skull \*/\s*)?'
              r'(?P<art>pt35_ui::pixel::SKULL|'
              r'if theme\.bar\.menu_icon == "wolf" \{ pt35_ui::pixel::WOLF \} '
              r'else \{ pt35_ui::pixel::SKULL \})\s*,\s*'
