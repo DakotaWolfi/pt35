@@ -92,16 +92,63 @@ if ms.count(tile)!=1 or ms.count(switcher)!=1:
     raise SystemExit("Upstream launcher skull drawing changed; no files modified.")
 
 px=px.replace("pub const PIN:",wolf+"\n\npub const PIN:",1)
+# Use one shared SVG for all UI locations (top bar, launcher tile,
+# and Select/Open Tasks card), with the existing pixel wolf as fallback.
 bs=bs.replace(
     'if self.theme.bar.menu_icon == "bars" {',
     '''if self.theme.bar.menu_icon == "wolf" {
-            pt35_ui::pixel::draw_centred(canvas, pt35_ui::pixel::WOLF, middle, centre, 1, ink);
+            if let Some(wolf) = self.icons.get("pt35-wolf", 22) {
+                wolf.draw_tinted(canvas, middle - 11, centre - 11, ink);
+            } else {
+                pt35_ui::pixel::draw_centred(
+                    canvas, pt35_ui::pixel::WOLF, middle, centre, 1, ink
+                );
+            }
         } else if self.theme.bar.menu_icon == "bars" {''',1)
-art='if theme.bar.menu_icon == "wolf" { pt35_ui::pixel::WOLF } else { pt35_ui::pixel::SKULL }'
-ms=ms.replace(tile,tile.replace("pt35_ui::pixel::SKULL,",art+","),1)
-ms=ms.replace(switcher,switcher.replace("pt35_ui::pixel::SKULL,",art+",").replace(
-                    "                    3,\n",
-                    '                    if theme.bar.menu_icon == "wolf" { 2 } else { 3 },\n'),1)
+
+tile_wolf=tile.replace(
+    '''                pt35_ui::pixel::draw_centred(''',
+    '''                if theme.bar.menu_icon == "wolf" {
+                    if let Some(wolf) = self.icons.get("pt35-wolf", 32) {
+                        wolf.draw_tinted(canvas, bx + 4, by + 4, theme.color.accent_fg);
+                    } else {
+                        pt35_ui::pixel::draw_centred(
+                            canvas, pt35_ui::pixel::WOLF,
+                            bx + badge / 2, by + badge / 2, 2,
+                            theme.color.accent_fg,
+                        );
+                    }
+                } else {
+                    pt35_ui::pixel::draw_centred(''',1)
+tile_wolf=tile_wolf.replace(
+    '''                    theme.color.accent_fg,
+                );''',
+    '''                    theme.color.accent_fg,
+                    );
+                }''',1)
+
+switcher_wolf=switcher.replace(
+    '''                pt35_ui::pixel::draw_centred(''',
+    '''                if theme.bar.menu_icon == "wolf" {
+                    if let Some(wolf) = self.icons.get("pt35-wolf", 40) {
+                        wolf.draw_tinted(canvas, middle - 20, icon_y - 20, theme.color.accent);
+                    } else {
+                        pt35_ui::pixel::draw_centred(
+                            canvas, pt35_ui::pixel::WOLF,
+                            middle, icon_y, 2, theme.color.accent,
+                        );
+                    }
+                } else {
+                    pt35_ui::pixel::draw_centred(''',1)
+switcher_wolf=switcher_wolf.replace(
+    '''                    theme.color.accent,
+                );''',
+    '''                    theme.color.accent,
+                    );
+                }''',1)
+
+ms=ms.replace(tile,tile_wolf,1)
+ms=ms.replace(switcher,switcher_wolf,1)
 
 # Source edit only after ALL three independent checks passed. Retain current
 # partially patched copies for manual recovery rather than silently discarding.
@@ -142,6 +189,10 @@ for pair in "$BAR pt35-bar" "$MENU pt35-menu"; do
     sudo cp -a "$current" "$current.fmi-before-wolf"
   fi
 done
+# Install the shared wolf SVG before installing either executable.
+SVG="$ROOT/assets/pt35-wolf.svg"
+[[ -f "$SVG" ]] || { echo "Missing wolf SVG: $SVG" >&2; exit 1; }
+sudo install -D -m644 "$SVG" /usr/local/share/icons/hicolor/scalable/apps/pt35-wolf.svg
 # Build both first, then replace. Backups are available for recovery.
 sudo install -m755 "$SRC/target/release/pt35-bar" "$BAR"
 sudo install -m755 "$SRC/target/release/pt35-menu" "$MENU"
@@ -152,7 +203,7 @@ python3 "$ROOT/tools/pt35_menu_icon.py" bars
 mkdir -p "$HOME/.local/share/pt35"
 touch "$HOME/.local/share/pt35/wolf-bar-installed"
 python3 "$ROOT/tools/pt35_menu_icon.py" wolf
-echo "Wolf binaries installed (bar + launcher). Log out and back in to load BOTH processes."
+echo "Shared SVG wolf installed for bar, launcher and Open Tasks. Reload the graphical shell to activate."
 echo "Rollback:"
 echo "  sudo cp -a '$BAR.fmi-before-wolf' '$BAR'"
 echo "  sudo cp -a '$MENU.fmi-before-wolf' '$MENU'"
