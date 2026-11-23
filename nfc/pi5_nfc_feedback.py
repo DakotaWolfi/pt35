@@ -23,6 +23,7 @@ class NFCLeds:
         self.previous_mode = None
         self.brightness = 12
         self.last_tag_feedback = 0.0
+        self.tag_read_active = False
         self.thread = threading.Thread(target=self.run, daemon=True, name="pt35-nfc-pi5-led")
         self.thread.start()
 
@@ -46,7 +47,8 @@ class NFCLeds:
             return
         self.active = True
         self.last_tag_feedback = 0.0
-        haptic_signal("start")
+        self.tag_read_active = False
+        haptic_signal("scan_start")
         self._queue(("start", "sweep", brightness))
 
     def detected(self, protocol, rssi=None):
@@ -55,12 +57,18 @@ class NFCLeds:
 
     def reading(self, completed, total):
         if self.active and total:
+            # Only signal once when a tag read actually starts, not on Start.
+            if not self.tag_read_active:
+                self.tag_read_active = True
+                haptic_signal("read_start")
             self._queue(("progress", completed, total))
 
     def result(self, stage):
         if not self.active:
             return
         stage = str(stage).lower()
+        # A result ends this tag's read; the next tag can start another cue.
+        self.tag_read_active = False
         if stage in ("success", "same", "improved", "changed", "uncertain", "partial"):
             now = time.monotonic()
             if now - self.last_tag_feedback > 0.7:
@@ -71,7 +79,8 @@ class NFCLeds:
     def stop(self, fault=False):
         if self.active:
             self.active = False
-            haptic_signal("error" if fault else "interrupted")
+            self.tag_read_active = False
+            haptic_signal("error" if fault else "scan_stop")
             self._queue(("stop", bool(fault)))
 
     def close(self):
