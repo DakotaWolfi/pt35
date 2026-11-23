@@ -82,7 +82,7 @@ def read_type2(chip, uid, details, *, progress, receive, crc_a,
                 chunk = read_four(first_page)
                 last_error = None
                 break
-            except (OSError, TimeoutError, ValueError) as exc:
+            except (OSError, TimeoutError, ValueError, frame_error) as exc:
                 last_error = exc
         if last_error is not None:
             capture["read_errors"].append({"index": first_page, **failure(last_error)})
