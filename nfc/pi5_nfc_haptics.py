@@ -18,9 +18,11 @@ _effects = {"1": "Strong click", "10": "Sharp click", "47": "Soft pulse"}
 _log = logging.getLogger("pt35.nfc.haptics")
 CONFIG_PATH = Path.home() / ".config/pt35/nfc-haptics.json"
 DEFAULT_EVENTS = {
-    "start": {"enabled": True, "effect": 47},
+    # UI Start/Stop button clicks are optional, OFF by default.
+    "scan_start": {"enabled": False, "effect": 47},
+    "read_start": {"enabled": True, "effect": 47},
     "tag": {"enabled": True, "effect": 10},
-    "interrupted": {"enabled": True, "effect": 1},
+    "scan_stop": {"enabled": False, "effect": 1},
     "error": {"enabled": True, "effect": 1},
 }
 EFFECT_LABELS = {1: "Strong click", 10: "Sharp click", 47: "Soft pulse"}
