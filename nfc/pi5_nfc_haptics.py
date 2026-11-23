@@ -76,48 +76,44 @@ def save_settings(data):
 
 
 def _play(event, effect):
-    """Serialize DRV2605L effects, including the time the motor is active.
-
-    lra_ctl play returns immediately after writing GO=1. Launching another
-    lra_ctl before GO clears can reconfigure an effect mid-playback.
-    """
+    """Serialize up to two haptic requests; never reconfigure mid-playback."""
     ctl = shutil.which("lra_ctl") or "/usr/local/bin/lra_ctl"
     if not os.path.isfile(ctl) or not os.access(ctl, os.X_OK):
         _log.warning("NFC haptic unavailable: %s missing or not executable", ctl)
         return False
 
-    # At most one playing plus one pending. Do not block the NFC GUI.
     if not _playback_slots.acquire(blocking=False):
-        _log.debug("NFC haptic %s skipped: two effects already queued", event)
+        _log.debug("NFC haptic %s skipped: playback queue busy", event)
         return False
 
     def work():
         try:
-          with _playback_lock:
-            result = subprocess.run(
-                [ctl, "play", str(effect)], stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, timeout=2, check=False,
-            )
-            if result.returncode:
-                _log.warning("NFC haptic %s failed (%s): %s", event,
-                             result.returncode,
-                             (result.stderr or result.stdout).strip()[-250:])
-                return
+            with _playback_lock:
+                result = subprocess.run(
+                    [ctl, "play", str(effect)], stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, timeout=2, check=False,
+                )
+                if result.returncode:
+                    _log.warning("NFC haptic %s failed (%s): %s", event,
+                                 result.returncode,
+                                 (result.stderr or result.stdout).strip()[-250:])
+                    return
 
-            # Poll the GO bit only while holding the playback lock.
-            try:
-                from smbus2 import SMBus
-                with SMBus(1) as bus:
-                    deadline = time.monotonic() + 1.0
-                    while time.monotonic() < deadline:
-                        if not bus.read_byte_data(0x5A, 0x0C) & 1:
-                            break
-                        time.sleep(0.015)
-            except (OSError, ImportError) as exc:
-                _log.debug("DRV2605L GO polling unavailable: %s", exc)
-                time.sleep(0.45)
-            time.sleep(0.06)
+                # GO=1 during effect playback and clears when finished.
+                # Poll it read-only before starting a second effect.
+                try:
+                    from smbus2 import SMBus
+                    with SMBus(1) as bus:
+                        deadline = time.monotonic() + 1.0
+                        while time.monotonic() < deadline:
+                            if not bus.read_byte_data(0x5A, 0x0C) & 1:
+                                break
+                            time.sleep(0.015)
+                except (OSError, ImportError) as exc:
+                    _log.debug("DRV2605L GO polling unavailable: %s", exc)
+                    time.sleep(0.45)
+                time.sleep(0.06)
         except (OSError, subprocess.TimeoutExpired) as exc:
             _log.warning("NFC haptic %s failed: %s", event, exc)
         finally:
