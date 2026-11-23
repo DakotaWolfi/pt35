@@ -176,7 +176,7 @@ def ethernet_toggle():
     # Never allow a remote web client to change the PT35 network configuration.
     if request.remote_addr not in ('127.0.0.1', '::1'):
         abort(403, description='Ethernet DHCP changes require the PT35 local browser.')
-    if not hmac.compare_digest(request.form.get('csrf', ''), session.get('csrf', '')):
+    if not session.get('csrf') or not hmac.compare_digest(request.form.get('csrf', ''), session['csrf']):
         abort(403, description='Invalid form token')
     action = request.form.get('action', '')
     if action not in ('on', 'off'):
