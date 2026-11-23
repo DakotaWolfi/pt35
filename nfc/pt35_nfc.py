@@ -212,17 +212,30 @@ def get_v_memory_size(reader, uid, verbose=False):
 
 
 def internal_dump(reader, uid, blocks, verbose):
+    """Read the reported NFC-V memory, retrying occasional RF failures.
+
+    Stop after a persistently unreadable block: some tags have protected or
+    inaccessible regions. Preserve every successfully read block in JSON.
+    """
     got, errors = [], []
     for i in range(blocks):
-        try:
-            block = reader.read_single(uid, i, verbose=verbose)
-            if not block:
-                raise ValueError('empty response')
-            got.append(dict(index=i, hex=block.hex().upper(), size=len(block)))
-            print(f'  Block {i:03}: {block.hex(" ").upper()}', flush=True)
-        except (OSError, TimeoutError, ValueError) as exc:
-            print(f'  Block {i:03}: {exc}', flush=True)
-            errors.append(dict(index=i, error=str(exc)))
+        last_error = None
+        for attempt in range(3):
+            try:
+                block = reader.read_single(uid, i, verbose=verbose)
+                if not block:
+                    raise ValueError('empty response')
+                got.append(dict(index=i, hex=block.hex().upper(), size=len(block)))
+                print(f'  Block {i:03}: {block.hex(" ").upper()}', flush=True)
+                last_error = None
+                break
+            except (OSError, TimeoutError, ValueError) as exc:
+                last_error = str(exc)
+                if attempt < 2:
+                    time.sleep(0.06)
+        if last_error is not None:
+            print(f'  Block {i:03}: failed after 3 attempts: {last_error}', flush=True)
+            errors.append(dict(index=i, error=last_error, attempts=3))
             break
     return got, errors
 
@@ -245,9 +258,11 @@ def handle_tag(root, uid, backend, dsfid, save, auto_tonie, blocks, verbose, rea
     known = is_known_tonie(uid, root)
     manufacturer, tagclass = classify(uid)
     print(f'FOUND {uid}  ({manufacturer})  via {backend}', flush=True)
+    # Archive all supported NFC-V tags in watch mode. The caller controls
+    # the save policy; an unfamiliar UID must not be silently discarded.
     should_save = save or (auto_tonie and (known or candidate))
     if not should_save:
-        print('  Not archived. Use --save or --auto-tonie to store it.', flush=True)
+        print('  Identified only (enable Save all tags to archive).', flush=True)
         return False
     existing = record_path(root, uid)
     if auto_tonie and not save and existing.is_file():
@@ -359,7 +374,7 @@ def main():
     p.add_argument('--port', help='Proxmark3 serial device, e.g. /dev/ttyACM0')
     p.add_argument('--bus', type=int, default=1)
     p.add_argument('--archive', type=Path, default=DEFAULT_ARCHIVE)
-    p.add_argument('--save', action='store_true', help='save every scanned tag')
+    p.add_argument('--save', action='store_true', help='save every scanned tag (automatic in watch mode)')
     p.add_argument('--auto-tonie', action='store_true', help='archive NXP NFC-V Tonie candidates')
     p.add_argument('--include-st', action='store_true', help='also detect internal ST25DV tags')
     p.add_argument('--blocks', type=int, default=0, help='ISO15693 block count; 0=auto from system info, fallback 8')
@@ -369,6 +384,10 @@ def main():
     p.add_argument('--verbose', action='store_true')
     args = p.parse_args()
     args.watch = args.action == 'watch'
+    # The interactive NFC watch app should archive ordinary NFC-V tags too.
+    # One-shot scans retain explicit --save / --auto-tonie behavior.
+    if args.watch:
+        args.save = True
     args.archive = args.archive.expanduser().resolve()
     if not 0 <= args.blocks <= 256:
         p.error('--blocks must be 0..256')
