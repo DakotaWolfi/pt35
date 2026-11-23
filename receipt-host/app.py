@@ -3,13 +3,14 @@
 import hmac
 import io
 import os
+import secrets
 import subprocess
 import threading
 from collections import deque
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, abort, flash, redirect, render_template, request, url_for
+from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 app = Flask(__name__)
@@ -22,6 +23,7 @@ DOTS = max(200, min(1024, int(os.environ.get('PT35_WIDTH_DOTS', '576'))))
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 JOBS = deque(maxlen=40)
 JOBS_LOCK = threading.Lock()
+ETHERNET_HELPER = '/usr/local/sbin/pt35-printer-ethernet'
 FONT_FILES = [
     '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
     '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
@@ -157,13 +159,50 @@ def health():
     return {'status': 'ok'}
 
 
+def ethernet_status():
+    try:
+        result = subprocess.run(
+            [ETHERNET_HELPER, 'status'], capture_output=True, text=True, timeout=5
+        )
+        if result.returncode:
+            return 'unavailable'
+        return result.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return 'unavailable'
+
+
+@app.post('/ethernet')
+def ethernet_toggle():
+    # Never allow a remote web client to change the PT35 network configuration.
+    if request.remote_addr not in ('127.0.0.1', '::1'):
+        abort(403, description='Ethernet DHCP changes require the PT35 local browser.')
+    if not hmac.compare_digest(request.form.get('csrf', ''), session.get('csrf', '')):
+        abort(403, description='Invalid form token')
+    action = request.form.get('action', '')
+    if action not in ('on', 'off'):
+        abort(400)
+    try:
+        result = subprocess.run(
+            ['sudo', '-n', ETHERNET_HELPER, action],
+            capture_output=True, text=True, timeout=25
+        )
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip() or 'NetworkManager operation failed')
+        flash(result.stdout.strip() or 'Ethernet DHCP updated', 'success')
+    except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+        flash(str(exc), 'error')
+    return redirect(url_for('index'))
+
+
 @app.get('/')
 def index():
+    if 'csrf' not in session:
+        session['csrf'] = secrets.token_urlsafe(32)
     printers = cups_printers()
     current = DEFAULT_PRINTER if DEFAULT_PRINTER in printers else (printers[0] if printers else '')
     with JOBS_LOCK:
         jobs = list(JOBS)
-    return render_template('index.html', printers=printers, selected=current, jobs=jobs, dots=DOTS)
+    return render_template('index.html', printers=printers, selected=current, jobs=jobs, dots=DOTS, ethernet=ethernet_status(), csrf=session['csrf'], local=request.remote_addr in ('127.0.0.1', '::1'))
 
 
 @app.post('/print')
