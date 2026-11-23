@@ -5,11 +5,12 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GUI="$HOME/pt35-old-recovery/pt35-nfc-bench/nfc/pt35_nfc_gui.py"
 [[ -f "$GUI" ]] || { echo "Recovered NFC GUI not found: $GUI" >&2; exit 1; }
-python3 -m py_compile "$ROOT/services/pi5_led_daemon.py" "$ROOT/nfc/pi5_nfc_feedback.py" "$ROOT/nfc/pi5_nfc_haptics.py"
+python3 -m py_compile "$ROOT/services/pi5_led_daemon.py" "$ROOT/nfc/pi5_nfc_feedback.py" "$ROOT/nfc/pi5_nfc_haptics.py" "$ROOT/nfc/pi5_nfc_haptic_settings.py" "$ROOT/scripts/patch_pi5_nfc_haptic_settings.py"
 if ! grep -q 'PT35_PI5_NFC_FEEDBACK_V1' "$GUI"; then
   echo "Recovered GUI is not yet patched. Attempting SHA-checked Pi5 patch..."
   python3 "$ROOT/scripts/patch_recovered_pi5_nfc.py"
 fi
+python3 "$ROOT/scripts/patch_pi5_nfc_haptic_settings.py"
 grep -q 'from pi5_nfc_feedback import NFCLeds' "$GUI" || {
   echo "NFC GUI does not import Pi5 LED adapter; not making changes." >&2; exit 1; }
 python3 -m py_compile "$GUI"
@@ -34,5 +35,5 @@ elif [[ -x /usr/local/bin/lra_ctl ]]; then
 else
   echo "WARNING: lra_ctl not found; NFC haptics cannot play. Check DRV2605L installation."
 fi
-echo "Feedback: start=soft pulse, tag=sharp click, stop/interrupted=strong click."
+echo "Haptic cues are configurable in NFC Reader > Settings > Configure NFC vibrations."
 echo "New cyan fill mode: pt35-ledctl nfc ; restore with pt35-ledctl idle"
