@@ -61,7 +61,7 @@ def open_settings(parent):
         row=7, column=0, columnspan=4, sticky="w", pady=(12, 2)
     )
     ttk.Label(frame, text=f"Saved in {CONFIG_PATH}", wraplength=485).grid(
-        row=7, column=0, columnspan=4, sticky="w", pady=(0, 10)
+        row=8, column=0, columnspan=4, sticky="w", pady=(0, 10)
     )
 
     def save():
@@ -77,7 +77,7 @@ def open_settings(parent):
         window.destroy()
 
     buttons = ttk.Frame(frame)
-    buttons.grid(row=8, column=0, columnspan=4, sticky="e", pady=6)
+    buttons.grid(row=9, column=0, columnspan=4, sticky="e", pady=6)
     ttk.Button(buttons, text="Cancel", command=window.destroy).pack(side="right", padx=(8, 0))
     ttk.Button(buttons, text="Save", command=save).pack(side="right")
     frame.columnconfigure(0, weight=1)
