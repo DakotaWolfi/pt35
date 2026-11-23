@@ -2,7 +2,9 @@
 
 Uses the existing lra_ctl utility. Avoids I2C access and subprocess waits on Tk.
 """
+import os
 import shutil
+import logging
 import subprocess
 import threading
 import time
@@ -11,6 +13,7 @@ _lock = threading.Lock()
 _last_time = 0.0
 _last_uid = None
 _effects = {"1": "Strong click", "10": "Sharp click", "47": "Soft pulse"}
+_log = logging.getLogger("pt35.nfc.haptics")
 
 
 def new_scan():
@@ -30,16 +33,22 @@ def notify(uid, enabled=False, effect="47"):
             return False
         _last_time, _last_uid = now, uid
     ctl = shutil.which("lra_ctl") or "/usr/local/bin/lra_ctl"
-    if not __import__("os").path.isfile(ctl):
+    if not os.path.isfile(ctl) or not os.access(ctl, os.X_OK):
+        _log.warning("NFC haptic unavailable: %s is missing or not executable", ctl)
         return False
 
     def work():
         try:
-            subprocess.run([ctl, "play", effect], stdin=subprocess.DEVNULL,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=2, check=False)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+            result = subprocess.run(
+                [ctl, "play", effect], stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, timeout=2, check=False
+            )
+            if result.returncode:
+                _log.warning("NFC haptic failed (exit %s): %s",
+                             result.returncode, (result.stderr or result.stdout).strip()[-250:])
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            _log.warning("NFC haptic failed: %s", exc)
 
     threading.Thread(target=work, daemon=True, name="pt35-nfc-haptic").start()
     return True
