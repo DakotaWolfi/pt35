@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PT35 Receipt Host</title>
+<style>
+:root{color-scheme:dark}body{font:16px system-ui,sans-serif;background:#101820;color:#e8f4f4;max-width:760px;margin:0 auto;padding:20px}h1{margin-bottom:3px}p.sub{color:#a9c6cb;margin-top:0}main{background:#1b2a33;padding:22px;border-radius:16px}label{display:block;font-weight:600;margin:16px 0 5px}input,textarea,select{box-sizing:border-box;width:100%;padding:12px;border:1px solid #617780;border-radius:8px;background:#101820;color:white;font:inherit}textarea{min-height:180px}button{background:#60d0b0;color:#0d2422;border:none;border-radius:9px;padding:14px 20px;font-weight:700;font-size:17px;cursor:pointer;margin-top:20px}.message{padding:10px;border-radius:8px;margin:12px 0;background:#385b51}.error{background:#682c36}table{width:100%;border-collapse:collapse;margin-top:12px}td,th{text-align:left;padding:8px;border-bottom:1px solid #364c55;overflow-wrap:anywhere}small{color:#b3d0d2}input[type=file]{padding:9px}
+</style></head><body><h1>🧾 PT35 Receipt Host</h1><p class="sub">Portable print station · {{ dots }} dots wide · CUPS backend</p>
+{% for category,message in get_flashed_messages(with_categories=true) %}<p class="message {{ category }}">{{message}}</p>{% endfor %}
+<main><form method="post" action="{{url_for('print_receipt')}}" enctype="multipart/form-data">
+<label for="printer">Printer</label><select name="printer" id="printer" required>{% for p in printers %}<option value="{{p}}" {% if p==selected %}selected{% endif %}>{{p}}</option>{% endfor %}</select>
+{% if not printers %}<p class="message error">No printer found in CUPS. Configure a printer with <code>sudo lpadmin</code> or the CUPS administration interface first.</p>{% endif %}
+<label for="title">Receipt heading</label><input name="title" id="title" maxlength="100" placeholder="FMI / PT35">
+<label for="body">Text</label><textarea name="body" id="body" maxlength="5000" placeholder="Write your receipt here..."></textarea>
+<label for="image">Optional picture (PNG, JPEG, etc., max 5 MB)</label><input type="file" id="image" name="image" accept="image/*">
+<button type="submit" {% if not printers %}disabled{% endif %}>Print receipt</button>
+</form></main>
+<h2>Recent submissions</h2><small>Queue acknowledgements, not confirmation that paper physically came out.</small>
+<table><tr><th>Time</th><th>Printer</th><th>Heading / CUPS response</th></tr>{% for job in jobs %}<tr><td>{{job.time}}</td><td>{{job.printer}}</td><td>{{job.title}}<br><small>{{job.result}}</small></td></tr>{% endfor %}</table>
+</body></html>
