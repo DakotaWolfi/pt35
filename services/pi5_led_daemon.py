@@ -59,15 +59,17 @@ def gradient(phase):
 
 
 def nfc_sweep(phase):
-    """A small moving cyan bar across the full 24-pixel scanner strip.
+    """Loop an eight-pixel cyan window continuously around the LED strip.
 
-    The brightness cap remains applied by send(); no extra GPIO owners.
+    Unlike the old filling bar, the active pixels never disappear at the
+    wraparound: the window spans both ends of the strip seamlessly.
+    The global brightness limit is still enforced by send().
     """
-    # Repeated filling progress bar; an obvious indication that RF is active.
-    count = 1 + int((phase / (2 * math.pi)) * COUNT) % COUNT
-    send([(0, 80, 110) if i < count else (0, 0, 0)
+    width = min(8, COUNT)
+    head = int((phase / (2 * math.pi)) * COUNT) % COUNT
+    active = {(head - offset) % COUNT for offset in range(width)}
+    send([(0, 80, 110) if i in active else (0, 0, 0)
           for i in range(COUNT)])
-
 
 def nfc_read_progress(completed, total):
     count = max(0, min(COUNT, round(COUNT * completed / max(1, total))))
