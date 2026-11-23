@@ -12,6 +12,7 @@ import threading
 import time
 
 _lock = threading.Lock()
+_playback_lock = threading.Lock()
 _last_time = 0.0
 _last_uid = None
 _effects = {"1": "Strong click", "10": "Sharp click", "47": "Soft pulse"}
@@ -74,23 +75,54 @@ def save_settings(data):
 
 
 def _play(event, effect):
+    """Serialize DRV2605L effects, including the time the motor is active.
+
+    lra_ctl play returns immediately after writing GO=1. Launching another
+    lra_ctl before GO clears can reconfigure an effect mid-playback.
+    """
     ctl = shutil.which("lra_ctl") or "/usr/local/bin/lra_ctl"
     if not os.path.isfile(ctl) or not os.access(ctl, os.X_OK):
         _log.warning("NFC haptic unavailable: %s missing or not executable", ctl)
         return False
+
+    # Prevent a queue of old notifications from vibrating long after a scan.
+    if not _playback_lock.acquire(blocking=False):
+        _log.debug("NFC haptic %s skipped: another effect is playing", event)
+        return False
+
     def work():
         try:
             result = subprocess.run(
                 [ctl, "play", str(effect)], stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, timeout=2, check=False
+                text=True, timeout=2, check=False,
             )
             if result.returncode:
-                _log.warning("NFC haptic %s failed (%s): %s",
-                             event, result.returncode,
+                _log.warning("NFC haptic %s failed (%s): %s", event,
+                             result.returncode,
                              (result.stderr or result.stdout).strip()[-250:])
+                return
+
+            # Poll the controller's GO bit, which clears when effect playback
+            # finishes. It is read-only; no further motor configuration writes.
+            try:
+                from smbus2 import SMBus
+                with SMBus(1) as bus:
+                    deadline = time.monotonic() + 1.0
+                    while time.monotonic() < deadline:
+                        if not bus.read_byte_data(0x5A, 0x0C) & 1:
+                            break
+                        time.sleep(0.015)
+            except (OSError, ImportError) as exc:
+                _log.debug("DRV2605L GO polling unavailable: %s", exc)
+                time.sleep(0.45)
+            # Allow the LRA to settle so adjacent effects do not blend.
+            time.sleep(0.06)
         except (OSError, subprocess.TimeoutExpired) as exc:
             _log.warning("NFC haptic %s failed: %s", event, exc)
+        finally:
+            _playback_lock.release()
+
     threading.Thread(target=work, daemon=True,
                      name="pt35-nfc-haptic-" + event).start()
     return True
