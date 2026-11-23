@@ -10,9 +10,10 @@ from pi5_nfc_haptics import (
 )
 
 TITLES = {
-    "start": "Scan started",
+    "scan_start": "Start button pressed",
+    "read_start": "Tag reading begins",
     "tag": "Tag successfully read",
-    "interrupted": "Scan stopped / interrupted",
+    "scan_stop": "Stop / interrupt button",
     "error": "Scanner error",
 }
 
@@ -21,8 +22,8 @@ def open_settings(parent):
     """Open a modal settings panel from the recovered NFC GUI Settings page."""
     window = tk.Toplevel(parent)
     window.title("NFC vibration settings")
-    window.geometry("520x355")
-    window.minsize(440, 315)
+    window.geometry("550x395")
+    window.minsize(460, 350)
     window.transient(parent)
     window.grab_set()
 
@@ -57,7 +58,7 @@ def open_settings(parent):
         ttk.Button(frame, text="Test", command=test_this).grid(row=row, column=3)
 
     ttk.Label(frame, text="Known effects: 1 = Strong click, 10 = Sharp click, 47 = Soft pulse").grid(
-        row=6, column=0, columnspan=4, sticky="w", pady=(12, 2)
+        row=7, column=0, columnspan=4, sticky="w", pady=(12, 2)
     )
     ttk.Label(frame, text=f"Saved in {CONFIG_PATH}", wraplength=485).grid(
         row=7, column=0, columnspan=4, sticky="w", pady=(0, 10)
