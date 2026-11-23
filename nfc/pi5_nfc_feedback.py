@@ -47,7 +47,8 @@ class NFCLeds:
         pass
 
     def reading(self, completed, total):
-        # Keep the existing scanning animation, without blocking the RF worker.
+        # The daemon animates continuously while scanning/reading; leave the
+        # moving bar running rather than flashing after every block.
         pass
 
     def result(self, stage):
@@ -78,7 +79,7 @@ class NFCLeds:
     def _restore(self):
         mode = self.previous_mode
         self.previous_mode = None
-        if mode in ("idle", "rainbow", "off"):
+        if mode in ("idle", "rainbow", "off", "nfc"):
             self._send(mode)
         # Unknown/solid modes cannot be reconstructed safely: leave LED off.
         elif mode is None:
@@ -98,7 +99,7 @@ class NFCLeds:
                         self.previous_mode = status.split("mode=", 1)[1].split()[0]
                     style, brightness = operation[1], operation[2]
                     self.brightness = max(1, min(32, int(brightness)))
-                    self._send({"sweep": "rainbow", "pulse": "idle", "minimal": "off"}.get(style, "idle"))
+                    self._send({"sweep": "nfc", "pulse": "idle", "minimal": "off"}.get(style, "nfc"))
                     self.status = "NFC scan LED active"
                 elif operation[0] == "result":
                     rgb = {
