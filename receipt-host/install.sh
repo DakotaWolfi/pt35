@@ -4,9 +4,10 @@ if [[ $(id -u) != 0 ]]; then echo 'Run with sudo bash install.sh'; exit 1; fi
 SRC="$(cd "$(dirname "$0")" && pwd)"
 OWNER="${SUDO_USER:-$(logname 2>/dev/null || echo pi)}"
 apt-get update
-apt-get install -y cups cups-client cups-filters python3-venv python3-pip fonts-dejavu-core
+apt-get install -y cups cups-client cups-filters python3-venv python3-pip fonts-dejavu-core dnsmasq-base sudo
 install -d -m755 /opt/pt35-receipt-host/templates
 install -m644 "$SRC/app.py" "$SRC/requirements.txt" /opt/pt35-receipt-host/
+install -o root -g root -m755 "$SRC/printer-ethernet.sh" /usr/local/sbin/pt35-printer-ethernet
 install -m644 "$SRC/templates/index.html" /opt/pt35-receipt-host/templates/
 python3 -m venv /opt/pt35-receipt-host/.venv
 /opt/pt35-receipt-host/.venv/bin/pip install -r /opt/pt35-receipt-host/requirements.txt
@@ -23,6 +24,14 @@ CONF
 fi
 # Install per-user system service; do not touch existing PT35 services.
 sed "s/^User=%i$/User=$OWNER/" "$SRC/systemd/pt35-receipt-host.service" >/etc/systemd/system/pt35-receipt-host.service
+# Permit the web service user to run only these two predefined root operations.
+# The helper itself has no arbitrary command arguments.
+printf '%s\\n' \\
+  "$OWNER ALL=(root) NOPASSWD: /usr/local/sbin/pt35-printer-ethernet on, /usr/local/sbin/pt35-printer-ethernet off" \\
+  >/tmp/pt35-receipt-sudoers.$
+visudo -cf /tmp/pt35-receipt-sudoers.$
+install -o root -g root -m440 /tmp/pt35-receipt-sudoers.$ /etc/sudoers.d/pt35-receipt-host
+rm -f /tmp/pt35-receipt-sudoers.$
 systemctl daemon-reload
 systemctl enable --now cups.service
 systemctl enable --now pt35-receipt-host.service
