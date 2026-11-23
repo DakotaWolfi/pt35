@@ -8,6 +8,8 @@ import socket
 import threading
 import time
 
+from pi5_nfc_haptics import signal as haptic_signal
+
 
 class NFCLeds:
     """Implements the original GUI's NFCLeds interface via Pi5 LED IPC."""
@@ -20,6 +22,7 @@ class NFCLeds:
         self.active = False
         self.previous_mode = None
         self.brightness = 12
+        self.last_tag_feedback = 0.0
         self.thread = threading.Thread(target=self.run, daemon=True, name="pt35-nfc-pi5-led")
         self.thread.start()
 
@@ -39,26 +42,37 @@ class NFCLeds:
             pass
 
     def start(self, style, brightness):
+        if self.active:
+            return
         self.active = True
-        self._queue(("start", style, brightness))
+        self.last_tag_feedback = 0.0
+        haptic_signal("start")
+        self._queue(("start", "sweep", brightness))
 
     def detected(self, protocol, rssi=None):
         # Detection may fire many times in one scan; don't flash on every poll.
         pass
 
     def reading(self, completed, total):
-        # The daemon animates continuously while scanning/reading; leave the
-        # moving bar running rather than flashing after every block.
-        pass
+        if self.active and total:
+            self._queue(("progress", completed, total))
 
     def result(self, stage):
-        if self.active:
-            self._queue(("result", stage))
+        if not self.active:
+            return
+        stage = str(stage).lower()
+        if stage in ("success", "same", "improved", "changed", "uncertain", "partial"):
+            now = time.monotonic()
+            if now - self.last_tag_feedback > 0.7:
+                haptic_signal("tag")
+                self.last_tag_feedback = now
+        self._queue(("result", stage))
 
     def stop(self, fault=False):
         if self.active:
             self.active = False
-            self._queue(("result", "error") if fault else ("restore",))
+            haptic_signal("error" if fault else "interrupted")
+            self._queue(("stop", bool(fault)))
 
     def close(self):
         self.closed = True
@@ -99,8 +113,19 @@ class NFCLeds:
                         self.previous_mode = status.split("mode=", 1)[1].split()[0]
                     style, brightness = operation[1], operation[2]
                     self.brightness = max(1, min(32, int(brightness)))
-                    self._send({"sweep": "nfc", "pulse": "idle", "minimal": "off"}.get(style, "nfc"))
+                    self._send("nfc")
                     self.status = "NFC scan LED active"
+                elif operation[0] == "progress":
+                    try:
+                        completed, total = int(operation[1]), int(operation[2])
+                        if total > 0:
+                            self._send(f"nfc-progress {completed} {total}")
+                    except (TypeError, ValueError):
+                        pass
+                elif operation[0] == "stop":
+                    self._send("flash 90 32 0" if not operation[1] else "flash 110 0 0")
+                    self._restore()
+                    self.status = ""
                 elif operation[0] == "result":
                     rgb = {
                         "success": "0 100 20", "same": "0 60 100",
