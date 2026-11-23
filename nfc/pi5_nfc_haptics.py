@@ -13,6 +13,7 @@ import time
 
 _lock = threading.Lock()
 _playback_lock = threading.Lock()
+_playback_slots = threading.BoundedSemaphore(2)
 _last_time = 0.0
 _last_uid = None
 _effects = {"1": "Strong click", "10": "Sharp click", "47": "Soft pulse"}
@@ -85,13 +86,14 @@ def _play(event, effect):
         _log.warning("NFC haptic unavailable: %s missing or not executable", ctl)
         return False
 
-    # Prevent a queue of old notifications from vibrating long after a scan.
-    if not _playback_lock.acquire(blocking=False):
-        _log.debug("NFC haptic %s skipped: another effect is playing", event)
+    # At most one playing plus one pending. Do not block the NFC GUI.
+    if not _playback_slots.acquire(blocking=False):
+        _log.debug("NFC haptic %s skipped: two effects already queued", event)
         return False
 
     def work():
         try:
+          with _playback_lock:
             result = subprocess.run(
                 [ctl, "play", str(effect)], stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -103,8 +105,7 @@ def _play(event, effect):
                              (result.stderr or result.stdout).strip()[-250:])
                 return
 
-            # Poll the controller's GO bit, which clears when effect playback
-            # finishes. It is read-only; no further motor configuration writes.
+            # Poll the GO bit only while holding the playback lock.
             try:
                 from smbus2 import SMBus
                 with SMBus(1) as bus:
@@ -116,12 +117,11 @@ def _play(event, effect):
             except (OSError, ImportError) as exc:
                 _log.debug("DRV2605L GO polling unavailable: %s", exc)
                 time.sleep(0.45)
-            # Allow the LRA to settle so adjacent effects do not blend.
             time.sleep(0.06)
         except (OSError, subprocess.TimeoutExpired) as exc:
             _log.warning("NFC haptic %s failed: %s", event, exc)
         finally:
-            _playback_lock.release()
+            _playback_slots.release()
 
     threading.Thread(target=work, daemon=True,
                      name="pt35-nfc-haptic-" + event).start()
