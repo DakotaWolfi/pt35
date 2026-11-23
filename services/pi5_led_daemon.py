@@ -27,6 +27,7 @@ if DEFAULT_MODE not in ("off", "idle", "rainbow"):
     DEFAULT_MODE = "off"
 mode = DEFAULT_MODE
 color = (0, 0, 0)
+nfc_progress = (0, 1)
 lock = threading.RLock()
 running = True
 
@@ -62,11 +63,16 @@ def nfc_sweep(phase):
 
     The brightness cap remains applied by send(); no extra GPIO owners.
     """
-    head = int((phase / (2 * math.pi)) * COUNT) % COUNT
-    pixels = [(0, 0, 0)] * COUNT
-    for step, level in enumerate((115, 75, 38, 15)):
-        pixels[(head - step) % COUNT] = (0, level, level)
-    send(pixels)
+    # Repeated filling progress bar; an obvious indication that RF is active.
+    count = 1 + int((phase / (2 * math.pi)) * COUNT) % COUNT
+    send([(0, 80, 110) if i < count else (0, 0, 0)
+          for i in range(COUNT)])
+
+
+def nfc_read_progress(completed, total):
+    count = max(0, min(COUNT, round(COUNT * completed / max(1, total))))
+    send([(0, 110, 35) if i < count else (0, 8, 10)
+          for i in range(COUNT)])
 
 
 def battery():
@@ -100,6 +106,8 @@ def animate():
             gradient(phase)
         elif current == "nfc":
             nfc_sweep(phase)
+        elif current == "nfc_progress":
+            nfc_read_progress(*nfc_progress)
         elif current == "solid":
             if last != (current, current_color):
                 solid(current_color)
@@ -111,7 +119,7 @@ def animate():
 
 
 def command(line):
-    global mode, color
+    global mode, color, nfc_progress
     parts = line.strip().split()
     if not parts:
         return "ERR empty command"
@@ -120,6 +128,16 @@ def command(line):
         if cmd in ("off", "idle", "rainbow", "nfc") and len(parts) == 1:
             mode = cmd
             return f"OK {mode}"
+        if cmd == "nfc-progress" and len(parts) == 3:
+            try:
+                completed, total = (int(parts[1]), int(parts[2]))
+                if total <= 0:
+                    return "ERR total must be positive"
+            except ValueError:
+                return "ERR expected nfc-progress COMPLETED TOTAL"
+            nfc_progress = (max(0, completed), total)
+            mode = "nfc_progress"
+            return f"OK nfc-progress {completed}/{total}"
         if cmd == "status":
             return f"OK mode={mode} count={COUNT} gpio={GPIO} brightness={BRIGHTNESS}"
         if cmd == "pixel" and len(parts) == 5:
