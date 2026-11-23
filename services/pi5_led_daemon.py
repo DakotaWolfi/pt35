@@ -2,7 +2,7 @@
 """PT35 Pi 5 NeoPixel daemon; Adafruit RP1 PIO, configurable LEDs on BCM GPIO18.
 Only start after verifying hardware wiring and /dev/pio0. Default output OFF.
 Unix socket protocol compatible with the old PT35 LED controls:
-off, idle, rainbow, battery, color R G B, flash R G B, status.
+off, idle, rainbow, nfc, battery, color R G B, flash R G B, status.
 """
 import math
 import os
@@ -57,6 +57,18 @@ def gradient(phase):
     send(out)
 
 
+def nfc_sweep(phase):
+    """A small moving cyan bar across the full 24-pixel scanner strip.
+
+    The brightness cap remains applied by send(); no extra GPIO owners.
+    """
+    head = int((phase / (2 * math.pi)) * COUNT) % COUNT
+    pixels = [(0, 0, 0)] * COUNT
+    for step, level in enumerate((115, 75, 38, 15)):
+        pixels[(head - step) % COUNT] = (0, level, level)
+    send(pixels)
+
+
 def battery():
     for supply in Path("/sys/class/power_supply").glob("*"):
         try:
@@ -86,14 +98,16 @@ def animate():
                   for i in range(COUNT)])
         elif current == "rainbow":
             gradient(phase)
+        elif current == "nfc":
+            nfc_sweep(phase)
         elif current == "solid":
             if last != (current, current_color):
                 solid(current_color)
         elif current == "off" and last != (current, current_color):
             solid((0,0,0))
         last = (current, current_color)
-        phase = (phase + (0.08 if current == "idle" else 0.004)) % (2 * math.pi)
-        time.sleep(.05 if current == "idle" else .04)
+        phase = (phase + (0.25 if current == "nfc" else 0.08 if current == "idle" else 0.004)) % (2 * math.pi)
+        time.sleep(.05 if current in ("idle", "nfc") else .04)
 
 
 def command(line):
@@ -103,7 +117,7 @@ def command(line):
         return "ERR empty command"
     cmd = parts[0].lower()
     with lock:
-        if cmd in ("off", "idle", "rainbow") and len(parts) == 1:
+        if cmd in ("off", "idle", "rainbow", "nfc") and len(parts) == 1:
             mode = cmd
             return f"OK {mode}"
         if cmd == "status":
