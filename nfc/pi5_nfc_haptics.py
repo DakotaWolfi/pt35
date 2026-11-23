@@ -22,6 +22,34 @@ def new_scan():
         _last_uid = None
 
 
+def signal(event):
+    """One non-blocking tactile cue for each scanner lifecycle event."""
+    ctl = shutil.which("lra_ctl") or "/usr/local/bin/lra_ctl"
+    if not os.path.isfile(ctl) or not os.access(ctl, os.X_OK):
+        _log.warning("NFC haptic unavailable: %s missing", ctl)
+        return False
+    effect = {"start": "47", "tag": "10", "interrupted": "1", "error": "1"}.get(event)
+    if effect is None:
+        return False
+
+    def work():
+        try:
+            result = subprocess.run(
+                [ctl, "play", effect], stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, timeout=2, check=False
+            )
+            if result.returncode:
+                _log.warning("NFC haptic %s failed (%s): %s",
+                             event, result.returncode,
+                             (result.stderr or result.stdout).strip()[-250:])
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            _log.warning("NFC haptic %s failed: %s", event, exc)
+
+    threading.Thread(target=work, daemon=True, name="pt35-nfc-haptic-" + event).start()
+    return True
+
+
 def notify(uid, enabled=False, effect="47"):
     global _last_time, _last_uid
     if not enabled or effect not in _effects or not uid:
