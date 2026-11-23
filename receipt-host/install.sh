@@ -26,12 +26,11 @@ fi
 sed "s/^User=%i$/User=$OWNER/" "$SRC/systemd/pt35-receipt-host.service" >/etc/systemd/system/pt35-receipt-host.service
 # Permit the web service user to run only these two predefined root operations.
 # The helper itself has no arbitrary command arguments.
-printf '%s\\n' \\
-  "$OWNER ALL=(root) NOPASSWD: /usr/local/sbin/pt35-printer-ethernet on, /usr/local/sbin/pt35-printer-ethernet off" \\
-  >/tmp/pt35-receipt-sudoers.$
-visudo -cf /tmp/pt35-receipt-sudoers.$
-install -o root -g root -m440 /tmp/pt35-receipt-sudoers.$ /etc/sudoers.d/pt35-receipt-host
-rm -f /tmp/pt35-receipt-sudoers.$
+SUDOERS_TMP="$(mktemp)"
+printf '%s\n' "$OWNER ALL=(root) NOPASSWD: /usr/local/sbin/pt35-printer-ethernet on, /usr/local/sbin/pt35-printer-ethernet off" > "$SUDOERS_TMP"
+visudo -cf "$SUDOERS_TMP"
+install -o root -g root -m440 "$SUDOERS_TMP" /etc/sudoers.d/pt35-receipt-host
+rm -f "$SUDOERS_TMP"
 systemctl daemon-reload
 systemctl enable --now cups.service
 systemctl enable --now pt35-receipt-host.service
