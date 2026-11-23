@@ -31,7 +31,7 @@ def read_type2(chip, uid, details, *, progress, receive, crc_a,
     # Validate UID stored in manufacturer pages and the Capability Container.
     try:
         first = read_four(0)
-    except (OSError, TimeoutError, ValueError) as exc:
+    except (OSError, TimeoutError, ValueError, frame_error) as exc:
         capture["read_errors"].append({"index": 0, **failure(exc)})
         capture["dump_status"] = "failed"
         return capture
@@ -55,6 +55,10 @@ def read_type2(chip, uid, details, *, progress, receive, crc_a,
     count = cc[2] * 2  # CC memory-size field: 8-byte units, two 4-byte pages.
     # Limit one pass; larger cards get a bounded partial capture.
     limit = min(count, 256)
+    if limit < 4:
+        capture["read_capability"] = "unsupported_small_type2_area"
+        capture["dump_status"] = "not_requested"
+        return capture
     capture["read_capability"] = "nfc_forum_type2_user_memory"
     geometry = {
         "start": 4, "blocks": count, "size": 4,
