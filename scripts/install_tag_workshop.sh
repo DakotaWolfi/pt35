@@ -30,4 +30,18 @@ EOF
 echo "Tag Workshop desktop application installed (write mode disabled)."
 echo "Experimental writing starts OFF. In the GUI, choose Enable writing and confirm."
 echo "Use only cheap test tags you own; physical WRITE/ACK handling is not yet hardware-verified."
-echo "To add the app to FMI Tools, run: python3 tools/merge_pi5_launcher.py \"$ROOT\""
+# Register the app profile and menu entry together.
+python3 "$ROOT/tools/merge_pi5_launcher.py" "$ROOT"
+python3 - <<'PY'
+from pathlib import Path
+import tomllib
+p = Path.home() / ".config/pt35"
+apps = tomllib.loads((p / "apps.toml").read_text())
+menu = tomllib.loads((p / "menu.toml").read_text())
+assert "fmi_tag_workshop" in apps.get("app", {}), "Missing workshop app profile"
+entries = menu.get("menu", {}).get("fmi", {}).get("entries", [])
+assert any(e.get("app") == "fmi_tag_workshop" for e in entries), "Missing workshop menu entry"
+assert (Path.home() / ".local/bin/pt35-tag-workshop").is_file()
+print("PASS: Workshop profile, menu entry and executable installed.")
+PY
+echo "Reload the PT35 shell from Settings > Reload shell."
