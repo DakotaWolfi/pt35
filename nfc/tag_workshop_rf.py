@@ -78,7 +78,7 @@ def read_all(chip, poll_a, receive, crc_a, FrameError):
         raise ValueError(f"Unsupported Type 2 CC capacity: {capacity} bytes")
     if cc[3] != 0:
         raise ValueError("Capability Container indicates restricted access; refusing write")
-    if head[10:12] != b"\\x00\\x00":
+    if head[10:12] != bytes((0, 0)):
         raise ValueError("Static lock bits are set; refusing write")
     data = bytearray()
     for page in range(4, 4 + capacity // 4, 4):
