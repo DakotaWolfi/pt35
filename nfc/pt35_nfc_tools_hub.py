@@ -39,18 +39,25 @@ class ToolsHub:
         area = tk.Frame(root, bg="#151d27")
         area.pack(fill="both", expand=True, padx=14, pady=11)
         descriptions = {
-            "Scanner": "Auto NFC-A / B / F / V discovery and tag archive",
-            "Tag Workshop": "Inspect, edit, save, copy and verify",
-            "Copy tag": "Copy source data to a destination tag",
-            "Infinite copy": "Automated roll writing — empty-only or overwrite",
-            "Erase NDEF": "Format NDEF data as empty; no lock/UID changes",
+            "Scanner": "Read and identify tags",
+            "Tag Workshop": "Edit, inspect and save",
+            "Copy tag": "Copy to one other tag",
+            "Infinite copy": "Write a roll of tags",
+            "Erase NDEF": "Clear NDEF content",
         }
         for i, (name, command) in enumerate(tool_commands().items()):
-            b = tk.Button(area, text=name + "\n" + descriptions[name],
-                          command=lambda n=name, c=command: self.launch(n, c),
-                          font=("DejaVu Sans", 12), justify="left",
-                          bg=("#136d79" if i == 0 else "#263849"),
-                          fg="white", relief="flat")
+            b = tk.Button(
+                area, text=name + "\n" + descriptions[name],
+                command=lambda n=name, c=command: self.launch(n, c),
+                font=("DejaVu Sans", 11), justify="left", anchor="w",
+                padx=14, pady=8, wraplength=285,
+                bg=("#136d79" if i == 0 else "#263849"),
+                fg="white", relief="flat",
+                activebackground="#187c8a", activeforeground="white")
+            # Match text wrap width to the actual tile, including on
+            # smaller PT35 display sizes or after window resizing.
+            b.bind("<Configure>", lambda event, button=b:
+                   button.configure(wraplength=max(100, event.width - 42)))
             b.grid(row=i // 2, column=i % 2, padx=5, pady=5, sticky="nsew")
         for i in range(2):
             area.columnconfigure(i, weight=1)
