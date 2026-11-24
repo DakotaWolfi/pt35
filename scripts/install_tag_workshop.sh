@@ -6,11 +6,12 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PY="$HOME/as7341-env/bin/python3"
 [[ -x "$PY" ]] || PY=/usr/bin/python3
-"$PY" -m py_compile "$ROOT/nfc/tag_workshop_ndef.py" "$ROOT/nfc/tag_workshop_raw.py" "$ROOT/nfc/tag_workshop_rf.py" "$ROOT/nfc/tag_workshop_library.py" "$ROOT/nfc/tag_workshop_gui.py"
+"$PY" -m py_compile "$ROOT/nfc/tag_workshop_ndef.py" "$ROOT/nfc/tag_workshop_raw.py" "$ROOT/nfc/tag_workshop_access.py" "$ROOT/nfc/tag_workshop_rf.py" "$ROOT/nfc/tag_workshop_library.py" "$ROOT/nfc/tag_workshop_gui.py"
 "$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_ndef.py' -v
 "$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_library.py' -v
 "$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_raw.py' -v
 "$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_rf.py' -v
+"$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_access.py' -v
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$HOME/.local/state/pt35"
 cat > "$HOME/.local/bin/pt35-tag-workshop" <<EOF
 #!/usr/bin/env bash
