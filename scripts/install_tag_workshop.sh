@@ -10,6 +10,7 @@ PY="$HOME/as7341-env/bin/python3"
 "$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_ndef.py' -v
 "$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_library.py' -v
 "$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_raw.py' -v
+"$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_rf.py' -v
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$HOME/.local/state/pt35"
 cat > "$HOME/.local/bin/pt35-tag-workshop" <<EOF
 #!/usr/bin/env bash
