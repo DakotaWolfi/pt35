@@ -30,14 +30,43 @@ def driver():
 
 
 def read_all(chip, poll_a, receive, crc_a, FrameError):
-    uid, info = poll_a(chip)
+    """Read only verified Type 2 user memory with bounded read-only retries.
+
+    An RF CRC failure is not successful data. Always report the exact stage
+    and page; the recovered driver's transceive cleans up failed exchanges.
+    """
+    def stage_error(stage, exc, tries):
+        state = getattr(chip, "rf_state", {}) or {}
+        flags = ", ".join(
+            f"{key}={state[key]}" for key in
+            ("irq_main", "irq_error", "fifo_status", "fifo_size", "rssi_am")
+            if key in state)
+        return RuntimeError(
+            f"{stage}: {exc} (attempts={tries}"
+            + (f"; {flags}" if flags else "")
+            + "). Try moving the tag slightly or checking antenna wiring.")
+
+    def retry(stage, operation, attempts=3):
+        error = None
+        for _ in range(attempts):
+            try:
+                return operation()
+            except (FrameError, TimeoutError, OSError) as exc:
+                error = exc
+        raise stage_error(stage, error, attempts) from error
+
+    uid, info = retry("NFC-A anticollision/selection", lambda: poll_a(chip))
     if len(uid) != 14 or info["sak"] != 0:
         raise ValueError("Not a supported seven-byte ISO14443-A Type 2 tag")
+
     def read4(n):
-        result = receive(chip, bytes((0x30, n)), checksum=crc_a)
-        if len(result) != 16:
-            raise FrameError("size", "Type 2 READ did not return 16 bytes")
-        return result
+        def once():
+            result = receive(chip, bytes((0x30, n)), checksum=crc_a)
+            if len(result) != 16:
+                raise FrameError("size", "Type 2 READ did not return 16 bytes")
+            return result
+        return retry(f"Type 2 READ page {n}", once)
+
     head = read4(0)
     if (head[:3] + head[4:8]).hex().upper() != uid:
         raise ValueError("Tag UID does not match manufacturer pages")
@@ -49,7 +78,7 @@ def read_all(chip, poll_a, receive, crc_a, FrameError):
         raise ValueError(f"Unsupported Type 2 CC capacity: {capacity} bytes")
     if cc[3] != 0:
         raise ValueError("Capability Container indicates restricted access; refusing write")
-    if head[10:12] != b"\x00\x00":
+    if head[10:12] != b"\\x00\\x00":
         raise ValueError("Static lock bits are set; refusing write")
     data = bytearray()
     for page in range(4, 4 + capacity // 4, 4):
