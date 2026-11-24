@@ -22,7 +22,9 @@ code = (
     "import nfcv_scan; from nfcv_scan import FrameError; "
     "print('NFC FrameError imported from', nfcv_scan.__file__)"
 )
-proc = subprocess.run([sys.executable, "-c", code], cwd=directory, env=env,
+py = Path.home() / "as7341-env/bin/python3"
+interpreter = str(py) if py.is_file() else sys.executable
+proc = subprocess.run([interpreter, "-c", code], cwd=directory, env=env,
                       text=True, capture_output=True)
 if proc.returncode != 0:
     print(proc.stderr, file=sys.stderr)
