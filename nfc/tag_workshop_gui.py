@@ -15,6 +15,7 @@ from tag_workshop_rf import perform, save_backup
 from tag_workshop_library import (save_preset, list_presets, load_preset,
                                   list_archive, archive_entry, load_archive_ndef, load_archive_raw)
 from tag_workshop_raw import transfer_plan, describe_raw
+from tag_workshop_access import access_rows, summarize
 
 
 class Workshop:
@@ -74,6 +75,7 @@ class Workshop:
         for text, action, color in [
             ("Read tag", self.read, "#147b85"),
             ("Preview", self.preview, "#29364b"),
+            ("Access matrix", self.show_access_matrix, "#29364b"),
             ("Copy NDEF", self.copy_content, "#29364b"),
             ("Paste NDEF", self.paste_content, "#29364b"),
             ("Save template", self.save_template, "#29364b"),
@@ -174,6 +176,55 @@ class Workshop:
                                      f"{self.snapshot['capacity']} available · UID unchanged")
         except ValueError as exc:
             self.preview_var.set("Cannot write: " + str(exc))
+
+    def show_access_matrix(self):
+        if not self.snapshot:
+            messagebox.showinfo("Access matrix", "Read a tag first.")
+            return
+        snap = self.snapshot
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Type 2 access matrix · read only")
+        dialog.geometry("780x465")
+        dialog.minsize(570, 350)
+        dialog.transient(self.root)
+        dialog.configure(bg="#171c25")
+        title = tk.Label(dialog, text="Memory & access matrix (read only)",
+                         font=("DejaVu Sans", 14, "bold"),
+                         bg="#171c25", fg="white")
+        title.pack(anchor="w", padx=12, pady=(8, 3))
+        tk.Label(dialog, text="   ·   ".join(summarize(snap)[:4]),
+                 wraplength=730, anchor="w", justify="left",
+                 bg="#171c25", fg="#cbd9ec",
+                 font=("DejaVu Sans", 9)).pack(fill="x", padx=12)
+        tk.Label(dialog, text="   ·   ".join(summarize(snap)[4:6]),
+                 wraplength=730, anchor="w",
+                 bg="#171c25", fg="#cbd9ec",
+                 font=("DejaVu Sans", 9)).pack(fill="x", padx=12, pady=2)
+        frame = tk.Frame(dialog, bg="#171c25")
+        frame.pack(fill="both", expand=True, padx=10, pady=5)
+        columns = ("page", "region", "hex", "access")
+        tree = ttk.Treeview(frame, columns=columns, show="headings",
+                            selectmode="browse")
+        for col, title, width in [
+            ("page", "Page", 95), ("region", "Region", 170),
+            ("hex", "Bytes (hex)", 125), ("access", "Access", 220),
+        ]:
+            tree.heading(col, text=title)
+            tree.column(col, width=width, anchor="w", stretch=col != "page")
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        for page, name, region, value, access in access_rows(snap):
+            tree.insert("", "end", values=(name, region, value, access))
+        tk.Label(dialog, text="Writable* = lock bits appear clear; not a live write test. "
+                 "Unknown means the relevant status could not be verified. No writes performed.",
+                 wraplength=730, justify="left", anchor="w",
+                 bg="#171c25", fg="#cbd9ec").pack(fill="x", padx=12, pady=3)
+        tk.Button(dialog, text="Close", command=dialog.destroy,
+                  bg="#147b85", fg="white", height=2,
+                  font=("DejaVu Sans", 11)).pack(fill="x", padx=12, pady=(2, 8))
+        dialog.bind("<Escape>", lambda _: dialog.destroy())
 
     def copy_content(self):
         if not self.snapshot:
