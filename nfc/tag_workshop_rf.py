@@ -142,7 +142,12 @@ def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
             if result["data"] == new_data:
                 return {**result, "written": 0}
             def verify_header():
-                fresh = receive(chip, b"\x30\x00", checksum=crc_a)
+                try:
+                    fresh = receive(chip, bytes((0x30, 0x00)), checksum=crc_a)
+                except (FrameError, TimeoutError, OSError) as exc:
+                    raise RuntimeError(
+                        f"WRITE preflight UID recheck failed: {exc}. "
+                        "Cannot verify destination tag.") from exc
                 if (fresh[:3] + fresh[4:8]).hex().upper() != expected_uid:
                     raise RuntimeError("Tag swapped during write; aborting")
             def write_page(page, payload):
@@ -180,7 +185,10 @@ def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
                         f"WRITE page {page}: unexpected ACK raw={raw.hex()} "
                         f"fifo=0x{fifo_status:02X} bits={last_bits}. "
                         "Tag may have changed; read and inspect it before retrying.")
-                verify = receive(chip, bytes((0x30, page)), checksum=crc_a)
+                try:
+                    verify = receive(chip, bytes((0x30, page)), checksum=crc_a)
+                except (FrameError, TimeoutError, OSError) as exc:
+                    raise RuntimeError(f"WRITE page {page} read-back failed: {exc}") from exc
                 if verify[:4] != payload:
                     raise RuntimeError(f"WRITE page {page}: read-back mismatch")
             # Make TLV appear empty during the multi-page rewrite. This does
@@ -200,7 +208,10 @@ def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
             # anticollision cycle after WRITE.
             verified = bytearray()
             for page in range(4, 4 + result["capacity"] // 4, 4):
-                verified.extend(receive(chip, bytes((0x30, page)), checksum=crc_a))
+                try:
+                    verified.extend(receive(chip, bytes((0x30, page)), checksum=crc_a))
+                except (FrameError, TimeoutError, OSError) as exc:
+                    raise RuntimeError(f"WRITE final verification READ page {page} failed: {exc}") from exc
             verified = bytes(verified[:result["capacity"]])
             if verified != new_data:
                 raise RuntimeError("Final byte-for-byte verification failed; tag may be partially written")
