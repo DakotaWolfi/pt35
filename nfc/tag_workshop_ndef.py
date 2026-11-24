@@ -33,8 +33,10 @@ def message(kind, value):
 
 
 def tlv(kind, value, capacity):
-    if not 16 <= capacity <= 144:
-        raise ValueError("Workshop write support is limited to Type 2 areas of 16-144 bytes")
+    # NFC Forum Type 2 CC capacity is encoded in eight-byte units.
+    # Page addressing and tag-specific write protection are validated by RF.
+    if not isinstance(capacity, int) or not 16 <= capacity <= 1008 or capacity % 8:
+        raise ValueError("Invalid Type 2 CC user-memory capacity")
     payload = message(kind, value)
     # Even an empty tag keeps an empty NDEF TLV, so other NFC tools can see it.
     length_field = bytes((len(payload),)) if len(payload) < 255 else (
