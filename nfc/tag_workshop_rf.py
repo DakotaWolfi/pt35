@@ -115,7 +115,9 @@ def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
             try:
                 version = receive(chip, bytes((0x60,)), checksum=crc_a)
             except (OSError, TimeoutError, FrameError) as exc:
-                raise RuntimeError("Cannot confirm NTAG geometry for safe writing") from exc
+                raise RuntimeError(
+                    f"WRITE preflight GET_VERSION (0x60) failed: {exc}. "
+                    "No pages were written.") from exc
             supported = {0x0F: ("NTAG213", 144),
                          0x11: ("NTAG215", 496),
                          0x13: ("NTAG216", 872)}
@@ -149,11 +151,35 @@ def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
                 verify_header()
                 # ST25R3916 direct command C4 generates CRC-A automatically.
                 # NTAG A2 WRITE returns a four-bit ACK=0xA without CRC.
-                raw, fifo_status, _ = chip.transceive(
-                    bytes((0xA2, page)) + payload, .045,
-                    tx_command=0xC4, check_errors=True, max_rx=4)
-                if len(raw) != 1 or (raw[0] & 0x0F) != 0x0A:
-                    raise RuntimeError(f"WRITE page {page}: missing 4-bit ACK ({raw.hex()})")
+                # NTAG WRITE acknowledges with four bits and NO CRC.
+                # ST25R3916 defaults to checking RX CRC, which raises error
+                # IRQ 0x80 for these legitimate short responses.
+                # Set no_crc_rx only for this exchange and always restore it.
+                original_aux = chip.rd(0x0A)
+                try:
+                    chip.wr(0x0A, original_aux | 0x80)
+                    try:
+                        raw, fifo_status, irq_errors = chip.transceive(
+                            bytes((0xA2, page)) + payload, .045,
+                            tx_command=0xC4, check_errors=True, max_rx=4)
+                    except (FrameError, TimeoutError, OSError) as exc:
+                        raise RuntimeError(
+                            f"WRITE page {page} RF response failed: {exc}. "
+                            "The tag may already have changed; check before retrying."
+                        ) from exc
+                finally:
+                    chip.wr(0x0A, original_aux)
+                # Four-bit ACK (1010b). Different receiver FIFO alignment
+                # may represent it in low or high nibble; require 4 valid bits
+                # and the expected nibble, never silently accept an unknown reply.
+                last_bits = (fifo_status >> 1) & 0x07
+                if len(raw) != 1 or last_bits != 4 or (
+                    raw[0] & 0x0F != 0x0A and raw[0] >> 4 != 0x0A
+                ):
+                    raise RuntimeError(
+                        f"WRITE page {page}: unexpected ACK raw={raw.hex()} "
+                        f"fifo=0x{fifo_status:02X} bits={last_bits}. "
+                        "Tag may have changed; read and inspect it before retrying.")
                 verify = receive(chip, bytes((0x30, page)), checksum=crc_a)
                 if verify[:4] != payload:
                     raise RuntimeError(f"WRITE page {page}: read-back mismatch")
