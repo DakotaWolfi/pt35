@@ -7,11 +7,13 @@ lock/configuration bits. NFC-B smart cards and ISO15693 remain read-only here.
 import queue
 import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 from pathlib import Path
 
 from tag_workshop_ndef import parse, tlv, plan
 from tag_workshop_rf import perform, save_backup
+from tag_workshop_library import (save_preset, list_presets, load_preset,
+                                  list_archive, archive_entry, load_archive_ndef)
 
 
 class Workshop:
@@ -54,7 +56,7 @@ class Workshop:
         selector.bind("<<ComboboxSelected>>", lambda _: self.preview())
         tk.Label(row, text="Content", bg="#171c25", fg="white").pack(side="left", padx=9)
 
-        self.edit = tk.Text(root, height=5, font=("DejaVu Sans", 12), wrap="word",
+        self.edit = tk.Text(root, height=3, font=("DejaVu Sans", 12), wrap="word",
                             bg="#252f3c", fg="white", insertbackground="white",
                             undo=True)
         self.edit.pack(fill="both", expand=True, padx=12, pady=3)
@@ -71,7 +73,10 @@ class Workshop:
             ("Preview", self.preview, "#29364b"),
             ("Copy NDEF", self.copy_content, "#29364b"),
             ("Paste NDEF", self.paste_content, "#29364b"),
-            ("Save backup", self.save, "#29364b"),
+            ("Save template", self.save_template, "#29364b"),
+            ("Load template", self.load_template, "#29364b"),
+            ("From archive", self.from_archive, "#29364b"),
+            ("Save tag backup", self.save, "#29364b"),
             ("Write & verify", self.write, "#315e3c"),
         ]:
             button = tk.Button(commands, text=text, command=action, bg=color, fg="white",
@@ -183,6 +188,102 @@ class Workshop:
         self.edit.insert("1.0", content)
         self.preview()
         self.status.set("NDEF content pasted. Destination UID unchanged. Preview then Write & verify.")
+
+    def set_editor(self, kind, content, note):
+        """Update draft only; never replace a scanned destination snapshot."""
+        self.kind.set(kind)
+        self.edit.delete("1.0", "end")
+        self.edit.insert("1.0", content)
+        self.status.set(note)
+        self.preview()
+
+    def choose_file(self, title, paths, labels):
+        """Touch/keyboard-friendly chooser; archive and presets never execute."""
+        if not paths:
+            messagebox.showinfo(title, "No saved items found.")
+            return None
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.geometry("700x370")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.configure(bg="#171c25")
+        tk.Label(dialog, text=title, bg="#171c25", fg="white",
+                 font=("DejaVu Sans", 14, "bold")).pack(fill="x", padx=10, pady=8)
+        frame = tk.Frame(dialog)
+        frame.pack(fill="both", expand=True, padx=10)
+        listbox = tk.Listbox(frame, font=("DejaVu Sans", 11),
+                             selectmode="browse", activestyle="dotbox",
+                             exportselection=False, bg="#252f3c", fg="white",
+                             selectbackground="#157e95", selectforeground="white")
+        scroll = tk.Scrollbar(frame, command=listbox.yview, width=24)
+        listbox.configure(yscrollcommand=scroll.set)
+        listbox.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        for label in labels:
+            listbox.insert("end", label)
+        listbox.selection_set(0)
+        result = {"index": None}
+
+        def finish(accept):
+            if accept and listbox.curselection():
+                result["index"] = listbox.curselection()[0]
+            dialog.destroy()
+        buttons = tk.Frame(dialog, bg="#171c25")
+        buttons.pack(fill="x", padx=10, pady=8)
+        tk.Button(buttons, text="Load selected", command=lambda: finish(True),
+                  font=("DejaVu Sans", 12), height=2,
+                  bg="#147b85", fg="white").pack(side="left", fill="x", expand=True, padx=4)
+        tk.Button(buttons, text="Cancel", command=lambda: finish(False),
+                  font=("DejaVu Sans", 12), height=2,
+                  bg="#29364b", fg="white").pack(side="left", fill="x", expand=True, padx=4)
+        listbox.bind("<Double-Button-1>", lambda _: finish(True))
+        listbox.bind("<Return>", lambda _: finish(True))
+        dialog.bind("<Escape>", lambda _: finish(False))
+        dialog.protocol("WM_DELETE_WINDOW", lambda: finish(False))
+        self.root.wait_window(dialog)
+        return paths[result["index"]] if result["index"] is not None else None
+
+    def save_template(self):
+        name = simpledialog.askstring("Save NDEF template", "Template name:",
+                                      parent=self.root)
+        if name is None:
+            return
+        try:
+            path = save_preset(name, self.kind.get(), self.content())
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Template not saved", str(exc))
+            return
+        self.status.set(f"Saved editable template: {path.name}")
+
+    def load_template(self):
+        paths = list_presets()
+        choice = self.choose_file("Load prepared NDEF template", paths,
+                                  [p.stem for p in paths])
+        if choice is None:
+            return
+        try:
+            kind, content = load_preset(choice)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Template cannot be loaded", str(exc))
+            return
+        self.set_editor(kind, content, f"Loaded template: {choice.stem}. Destination UID unchanged.")
+
+    def from_archive(self):
+        paths = list_archive()
+        choice = self.choose_file("Import NDEF from previous scans", paths,
+                                  [archive_entry(p) for p in paths])
+        if choice is None:
+            return
+        try:
+            kind, content = load_archive_ndef(choice)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            messagebox.showerror(
+                "No editable NDEF in this capture",
+                str(exc) + "\\n\\nThe archive remains unchanged. Select a complete verified NDEF scan.")
+            return
+        self.set_editor(kind, content,
+                        f"Imported {kind} from archive {choice.parent.name}. Destination UID unchanged.")
 
     def save(self):
         if not self.snapshot:
