@@ -6,8 +6,12 @@ payment-card application, or exact chip from an ISO14443-B PUPI/ATQB.
 
 
 def describe(record):
+    if not isinstance(record, dict):
+        return []
     protocol = record.get("protocol", "")
     discovery = record.get("discovery") or {}
+    if not isinstance(discovery, dict):
+        discovery = {}
     result = []
     if protocol == "NFC-B":
         result.append("Technology: ISO/IEC 14443-B (NFC-B)")
@@ -42,8 +46,8 @@ def describe(record):
                     result.append("ISO-DEP (ISO14443-4) support indicated by SAK")
                 elif sak == 0:
                     result.append("Type 2-compatible anticollision profile (not a chip ID)")
-        uid = record.get("uid", "")
-        if len(uid) == 8 and uid.upper().startswith("08"):
+        uid = record.get("uid") or ""
+        if isinstance(uid, str) and len(uid) == 8 and uid.upper().startswith("08"):
             result.append("Identifier: possible random ID (RID); can vary between scans")
         if record.get("cc"):
             result.append("Type 2 capability container: " + str(record["cc"]))
