@@ -56,6 +56,8 @@ def main():
         raise RuntimeError(f"Recovered NFC GUI missing: {TARGET}")
     original = TARGET.read_text(encoding="utf-8")
     if MARKER_V2 in original:
+        if "sys.path.insert(0, " in original and "from pi5_tag_info import describe" in original:
+            raise RuntimeError("Unexpected mixed V1/V2 imports. No changes made.")
         print("NFC tag-info v2 already installed. No changes.")
         return
 
@@ -73,7 +75,7 @@ def main():
     # The original GUI imports sys already. Add a controlled helper path for
     # the regular launcher AND the direct 'python3 pt35_nfc_gui.py' case.
     import_path = repr(str(Path(__file__).resolve().parents[1] / "nfc"))
-    block = ("sys.path.insert(0, " + import_path + ")\n" + IMPORT_V2)
+    # Append, NEVER prepend: nfcv_scan in the recovered Pi4 directory must\n    # win over the unrelated simplified migration copy.\n    block = ("sys.path.append(" + import_path + ")\n" + IMPORT_V2)
     source = exactly_once(source, IMPORT_ANCHOR, IMPORT_ANCHOR + block, "GUI imports")
     source = exactly_once(source, SUMMARY_ANCHOR,
         SUMMARY_V1 + SUMMARY_ANCHOR, "GUI summary")
