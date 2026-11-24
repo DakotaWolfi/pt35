@@ -72,8 +72,6 @@ def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
                 return result
             if action != "write":
                 raise ValueError("Unknown workshop action")
-            if os.getenv("PT35_TAG_WORKSHOP_WRITE") != "YES":
-                raise RuntimeError("Physical writing is experimental; launch with PT35_TAG_WORKSHOP_WRITE=YES")
             if result["uid"] != expected_uid:
                 raise RuntimeError("Different tag detected. No changes made.")
             if result["data"] != expected_data:
