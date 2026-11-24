@@ -28,6 +28,6 @@ Categories=Utility;System;
 StartupNotify=true
 EOF
 echo "Tag Workshop desktop application installed (write mode disabled)."
-echo "You can enable optional experimental writing for one launch with:"
-echo "PT35_TAG_WORKSHOP_WRITE=YES ~/.local/bin/pt35-tag-workshop"
+echo "Experimental writing starts OFF. In the GUI, choose Enable writing and confirm."
+echo "Use only cheap test tags you own; physical WRITE/ACK handling is not yet hardware-verified."
 echo "To add the app to FMI Tools, run: python3 tools/merge_pi5_launcher.py \"$ROOT\""
