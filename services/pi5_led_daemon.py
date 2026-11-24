@@ -28,6 +28,7 @@ if DEFAULT_MODE not in ("off", "idle", "rainbow"):
 mode = DEFAULT_MODE
 color = (0, 0, 0)
 nfc_progress = (0, 1)
+nfc_cue_until = 0.0
 lock = threading.RLock()
 running = True
 
@@ -68,12 +69,12 @@ def nfc_sweep(phase):
     width = min(8, COUNT)
     head = int((phase / (2 * math.pi)) * COUNT) % COUNT
     active = {(head - offset) % COUNT for offset in range(width)}
-    send([(0, 80, 110) if i in active else (0, 0, 0)
+    send([(0, 24, 175) if i in active else (0, 0, 0)
           for i in range(COUNT)])
 
 def nfc_read_progress(completed, total):
     count = max(0, min(COUNT, round(COUNT * completed / max(1, total))))
-    send([(0, 110, 35) if i < count else (0, 8, 10)
+    send([(0, 175, 125) if i < count else (0, 13, 22)
           for i in range(COUNT)])
 
 
@@ -96,7 +97,10 @@ def animate():
     phase = 0.0
     last = None
     while running:
+        global mode
         with lock:
+            if mode in ('nfc_success', 'nfc_fail') and time.monotonic() >= nfc_cue_until:
+                mode = 'nfc'
             current = mode
             current_color = color
         if current == "idle":
@@ -110,6 +114,10 @@ def animate():
             nfc_sweep(phase)
         elif current == "nfc_progress":
             nfc_read_progress(*nfc_progress)
+        elif current == "nfc_success":
+            solid((0, 220, 0))
+        elif current == "nfc_fail":
+            solid((200, 0, 0))
         elif current == "solid":
             if last != (current, current_color):
                 solid(current_color)
@@ -121,7 +129,7 @@ def animate():
 
 
 def command(line):
-    global mode, color, nfc_progress
+    global mode, color, nfc_progress, nfc_cue_until
     parts = line.strip().split()
     if not parts:
         return "ERR empty command"
@@ -130,6 +138,10 @@ def command(line):
         if cmd in ("off", "idle", "rainbow", "nfc") and len(parts) == 1:
             mode = cmd
             return f"OK {mode}"
+        if cmd in ("nfc-success", "nfc-fail") and len(parts) == 1:
+            mode = "nfc_success" if cmd == "nfc-success" else "nfc_fail"
+            nfc_cue_until = time.monotonic() + (0.9 if cmd == "nfc-success" else 0.7)
+            return f"OK {cmd}"
         if cmd == "nfc-progress" and len(parts) == 3:
             try:
                 completed, total = (int(parts[1]), int(parts[2]))
