@@ -19,7 +19,7 @@ def tool_commands():
         "Tag Workshop": [py, str(ROOT / "tag_workshop_gui.py")],
         "Copy tag": [py, str(ROOT / "tag_workshop_batch_gui.py"), "--once"],
         "Infinite copy": [py, str(ROOT / "tag_workshop_batch_gui.py")],
-        "Erase NDEF": [py, str(ROOT / "tag_workshop_gui.py"), "--empty"],
+        "Erase NDEF": [py, str(ROOT / "tag_workshop_erase_gui.py")],
     }
 
 
