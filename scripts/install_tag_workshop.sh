@@ -6,7 +6,7 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PY="$HOME/as7341-env/bin/python3"
 [[ -x "$PY" ]] || PY=/usr/bin/python3
-"$PY" -m py_compile "$ROOT/nfc/tag_workshop_ndef.py" "$ROOT/nfc/tag_workshop_raw.py" "$ROOT/nfc/tag_workshop_access.py" "$ROOT/nfc/tag_workshop_rf.py" "$ROOT/nfc/tag_workshop_library.py" "$ROOT/nfc/tag_workshop_gui.py" "$ROOT/nfc/tag_workshop_batch.py" "$ROOT/nfc/tag_workshop_batch_gui.py" "$ROOT/nfc/pt35_nfc_tools_hub.py"
+"$PY" -m py_compile "$ROOT/nfc/tag_workshop_ndef.py" "$ROOT/nfc/tag_workshop_raw.py" "$ROOT/nfc/tag_workshop_access.py" "$ROOT/nfc/tag_workshop_rf.py" "$ROOT/nfc/tag_workshop_library.py" "$ROOT/nfc/tag_workshop_gui.py" "$ROOT/nfc/tag_workshop_batch.py" "$ROOT/nfc/tag_workshop_batch_gui.py" "$ROOT/nfc/tag_workshop_erase_gui.py" "$ROOT/nfc/pt35_nfc_tools_hub.py"
 "$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_ndef.py' -v
 "$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_library.py' -v
 "$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_raw.py' -v
