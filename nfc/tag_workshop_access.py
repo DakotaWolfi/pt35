@@ -41,11 +41,14 @@ def _lock_status(page, static, dynamic, model):
         # groups, 124..129 in smaller groups. Byte 2 contains
         # block-lock bits, not page lock bits.
         groups = [(16, 31), (32, 47), (48, 63), (64, 79),
-                  (80, 95), (96, 111), (112, 123),
-                  (124, 129)]
+                  (80, 95), (124, 125), (126, 127),
+                  (128, 129)]
         for index, (first, last) in enumerate(groups):
             if first <= page <= last:
                 return "Locked" if dynamic[0] & (1 << index) else "Writable*"
+        # 96..123 require additional lock block interpretation. Avoid
+        # reporting writable when any dynamic lock bit is set.
+        return "Writable*" if dynamic == bytes((0, 0, 0)) else "Locked / check"
     # For other chips, do not guess individual dynamic bit maps.
     return "Writable*" if dynamic == bytes((0, 0, 0)) else "Locked / check"
 
