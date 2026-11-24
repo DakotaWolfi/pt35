@@ -145,3 +145,28 @@ def load_archive_ndef(path, root=None):
             raise ValueError("Archived NFC-V NDEF area incomplete")
         return parse(area[offset:offset+count])
     raise ValueError(f"{protocol} is discovery-only or has no supported editable NDEF memory")
+
+
+def load_archive_raw(path, root=None):
+    """Return a verified Type 2 *user-area* image, never manufacturer pages.
+
+    Other protocols cannot be byte-for-byte mapped to Type 2 page addresses.
+    """
+    folder = (Path(root) if root is not None else ARCHIVE).resolve()
+    p = Path(path).resolve()
+    if p.parent.parent != folder or p.name != "record.json":
+        raise ValueError("Select a record inside the NFC archive")
+    if p.stat().st_size > 250000:
+        raise ValueError("Archive record is too large")
+    obj = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(obj, dict) or obj.get("protocol") != "NFC-A":
+        raise ValueError("Raw copy currently supports only verified NFC-A Type 2 user memory")
+    from tag_workshop_raw import checked_image
+    data, start = _verified_range(obj)
+    cc = bytes.fromhex(obj.get("cc") or "")
+    capacity = cc[2] * 8 if len(cc) == 4 and cc[0] == 0xE1 and cc[1] >> 4 == 1 else None
+    if start != 4 or capacity is None or len(data) != capacity:
+        raise ValueError("Archive does not contain the full verified Type 2 user area")
+    checked_image(data, capacity)
+    return {"uid": str(obj.get("uid", "")), "capacity": capacity,
+            "data": data, "cc": cc.hex().upper(), "source": "archive"}
