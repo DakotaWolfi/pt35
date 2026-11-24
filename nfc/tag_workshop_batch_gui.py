@@ -326,6 +326,9 @@ class BatchApp:
                         "write", result["uid"],
                         f"Verified {result['written']} page writes; backup: {original_backup.name}")))
                     if once:
+                        # Let the user see the verified-green cue before
+                        # ending the batch and restoring the normal LED mode.
+                        time.sleep(1.0)
                         self.stop_event.set()
                 except Exception as exc:
                     led("nfc-fail")
