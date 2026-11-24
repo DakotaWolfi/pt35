@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Register the optional standalone Tag Workshop without touching the NFC GUI
-# or changing any existing reader driver. Write mode is OFF by default.
+# or changing any existing reader driver. Writes require tag-specific confirmation.
 set -Eeuo pipefail
 [[ $(id -u) != 0 ]] || { echo "Run without sudo" >&2; exit 1; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -27,8 +27,7 @@ Terminal=false
 Categories=Utility;System;
 StartupNotify=true
 EOF
-echo "Tag Workshop desktop application installed (write mode disabled)."
-echo "Experimental writing starts OFF. In the GUI, choose Enable writing and confirm."
+echo "Tag Workshop desktop application installed. Writing requires confirmation per tag."
 echo "Use only cheap test tags you own; physical WRITE/ACK handling is not yet hardware-verified."
 # Register the app profile and menu entry together.
 python3 "$ROOT/tools/merge_pi5_launcher.py" "$ROOT"
