@@ -129,7 +129,7 @@ def read_all(chip, poll_a, receive, crc_a, FrameError):
 
 
 def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
-            backup_file=None, raw_transfer=False):
+            backup_file=None, raw_transfer=False, progress=None):
     from smbus2 import SMBus
     configure, poll_a, crc_a, receive, Reader, reader_lock, FrameError = driver()
     with reader_lock("i2c-1"), SMBus(1) as bus:
@@ -257,15 +257,28 @@ def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
             # NOT make writing atomic; power loss can still partially modify it.
             # Page 4 is always committed LAST, after the remaining pages.
             old = result["data"]
-            stage = b"\x03\x00\xFE\x00"
+            changed_tail = [
+                offset for offset in range(4, len(new_data), 4)
+                if old[offset:offset+4] != new_data[offset:offset+4]
+            ]
+            total_writes = len(changed_tail) + 2
+            def report():
+                if progress is not None:
+                    try:
+                        progress(writes, total_writes)
+                    except (OSError, RuntimeError, TimeoutError):
+                        pass  # LED failure must not interrupt a physical tag write.
+            stage = bytes((0x03, 0x00, 0xFE, 0x00))
             write_page(4, stage)
             writes = 1
-            for offset in range(4, len(new_data), 4):
-                if old[offset:offset+4] != new_data[offset:offset+4]:
-                    write_page(4 + offset // 4, new_data[offset:offset+4])
-                    writes += 1
+            report()
+            for offset in changed_tail:
+                write_page(4 + offset // 4, new_data[offset:offset+4])
+                writes += 1
+                report()
             write_page(4, new_data[:4])
             writes += 1
+            report()
             # Keep the selected tag active; do not rely on an unverified
             # anticollision cycle after WRITE.
             verified = bytearray()
