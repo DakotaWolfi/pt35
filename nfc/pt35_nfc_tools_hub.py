@@ -17,8 +17,7 @@ def tool_commands():
     return {
         "Scanner": [str(HOME / ".local/bin/pt35-nfc-gui")],
         "Tag Workshop": [py, str(ROOT / "tag_workshop_gui.py")],
-        "Copy tag": [py, str(ROOT / "tag_workshop_batch_gui.py"), "--once"],
-        "Infinite copy": [py, str(ROOT / "tag_workshop_batch_gui.py")],
+        "Copy tag": [py, str(ROOT / "tag_workshop_batch_gui.py")],
         "Erase NDEF": [py, str(ROOT / "tag_workshop_erase_gui.py")],
     }
 
@@ -41,8 +40,7 @@ class ToolsHub:
         descriptions = {
             "Scanner": "Read and identify tags",
             "Tag Workshop": "Edit, inspect and save",
-            "Copy tag": "Copy to one other tag",
-            "Infinite copy": "Write a roll of tags",
+            "Copy tag": "One tag or a whole roll",
             "Erase NDEF": "Clear NDEF content",
         }
         for i, (name, command) in enumerate(tool_commands().items()):
