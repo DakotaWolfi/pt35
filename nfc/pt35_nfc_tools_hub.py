@@ -17,7 +17,7 @@ def tool_commands():
     return {
         "Scanner": [str(HOME / ".local/bin/pt35-nfc-gui")],
         "Tag Workshop": [py, str(ROOT / "tag_workshop_gui.py")],
-        "Copy tag": [py, str(ROOT / "tag_workshop_batch_gui.py")],
+        "Copy tag": [py, str(ROOT / "tag_workshop_batch_gui.py"), "--once"],
         "Infinite copy": [py, str(ROOT / "tag_workshop_batch_gui.py")],
         "Erase NDEF": [py, str(ROOT / "tag_workshop_gui.py"), "--empty"],
     }
