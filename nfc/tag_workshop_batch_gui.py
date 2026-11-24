@@ -21,27 +21,20 @@ from tag_workshop_rf import perform, save_backup
 
 
 def led(*words):
-    cli = shutil.which("pt35-ledctl")
-    if not cli:
-        return
+    """Use the same user LED daemon socket for every NFC copy effect."""
+    path = os.environ.get("PT35_LED_SOCKET", f"/run/user/{os.getuid()}/pt35-led.sock")
     try:
-        subprocess.run([cli, *map(str, words)], timeout=2,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.settimeout(.25)
+            sock.connect(path)
+            sock.sendall((" ".join(map(str, words)) + "\n").encode("ascii"))
+            return sock.recv(128).decode("ascii", "replace").strip()
+    except (OSError, TimeoutError):
+        return None
 
 
 def led_progress(done, total):
-    """Fast IPC to Pi5 LED daemon; never block tag writes on LEDs."""
-    sockpath = f"/run/user/{os.getuid()}/pt35-led.sock"
-    try:
-        with socket.socket(socket.AF_UNIX) as sock:
-            sock.settimeout(.12)
-            sock.connect(sockpath)
-            sock.sendall(f"nfc-progress {done} {total}\n".encode("ascii"))
-            sock.recv(64)
-    except (OSError, TimeoutError):
-        pass
+    led("nfc-progress", done, total)
 
 
 def presence():
@@ -69,7 +62,7 @@ class BatchApp:
     def __init__(self, root, *, once=False):
         self.root = root
         self.once = once
-        root.title("PT35 · NFC Copy" if once else "PT35 · NFC Infinite Copy")
+        root.title("PT35 · NFC Copy")
         root.geometry("800x480")
         root.minsize(620, 400)
         root.configure(bg="#151e29")
@@ -84,11 +77,12 @@ class BatchApp:
         self.fails = 0
         self.mode = tk.StringVar(value="NDEF")
         self.policy = tk.StringVar(value="empty")
+        self.quantity = tk.StringVar(value="continuous")
         self.allow_rewrite = tk.BooleanVar(value=False)
         self.state = tk.StringVar(value="1. Scan a source sticker to capture its data.")
         self.source_label = tk.StringVar(value="Source: not selected")
         self.counter = tk.StringVar(value="Written: 0    Skipped: 0    Failed: 0")
-        tk.Label(root, text="NFC Copy" if once else "NFC Infinite Copy", bg="#151e29", fg="white",
+        tk.Label(root, text="NFC Copy", bg="#151e29", fg="white",
                  font=("DejaVu Sans", 21, "bold")).pack(anchor="w", padx=15, pady=(9, 3))
         tk.Label(root, textvariable=self.state, bg="#151e29", fg="#6ce0d0",
                  font=("DejaVu Sans", 12), wraplength=750, justify="left",
@@ -118,6 +112,14 @@ class BatchApp:
             selectcolor="#263847", activebackground="#151e29",
             activeforeground="white", anchor="w"
         ).pack(fill="x", padx=16, pady=(4, 0))
+        run_row = tk.Frame(root, bg="#151e29")
+        run_row.pack(fill="x", padx=12, pady=(2, 0))
+        tk.Label(run_row, text="Run:", bg="#151e29", fg="white").pack(side="left")
+        for label, value in (("One tag", "one"), ("Continuous", "continuous")):
+            tk.Radiobutton(run_row, text=label, value=value, variable=self.quantity,
+                           bg="#151e29", fg="white", selectcolor="#263847",
+                           activebackground="#151e29", activeforeground="white"
+                           ).pack(side="left", padx=8)
         self.details = tk.Text(root, bg="#263847", fg="#eef7ff", wrap="word",
                                height=5, font=("DejaVu Sans", 11))
         self.details.pack(fill="both", expand=True, padx=15, pady=6)
@@ -226,6 +228,7 @@ class BatchApp:
         copy_mode = self.mode.get().lower()
         policy = self.policy.get()
         allow_rewrite = self.allow_rewrite.get()
+        once = self.quantity.get() == "one"
         try:
             image_for(self.source, self.source, copy_mode)
         except (ValueError, KeyError) as exc:
@@ -245,11 +248,11 @@ class BatchApp:
         self.read_button.config(state="disabled")
         self.start_button.config(state="disabled")
         source = {**self.source, "data": bytes(self.source["data"])}
-        self.thread = threading.Thread(target=self.loop, args=(source, copy_mode, policy, allow_rewrite),
+        self.thread = threading.Thread(target=self.loop, args=(source, copy_mode, policy, allow_rewrite, once),
                                        daemon=True)
         self.thread.start()
 
-    def loop(self, source, mode, policy, allow_rewrite):
+    def loop(self, source, mode, policy, allow_rewrite, once):
         led("nfc")
         # Source was just scanned. Require physical removal to arm batch.
         self.events.put(("state", "REMOVE source tag. Waiting for clear antenna..."))
@@ -318,18 +321,18 @@ class BatchApp:
                         raw_transfer=True, progress=led_progress)
                     self.seen.add(result["uid"])
                     self.attempted.discard(result["uid"])
-                    led("flash", "0", "100", "25")
+                    led("nfc-success")
                     self.events.put(("result", (
                         "write", result["uid"],
                         f"Verified {result['written']} page writes; backup: {original_backup.name}")))
-                    if self.once:
+                    if once:
                         self.stop_event.set()
                 except Exception as exc:
-                    led("flash", "100", "0", "0")
+                    led("nfc-fail")
                     self.events.put(("result", ("error", uid, str(exc))))
                     self.events.put(("state", "ERROR · Remove tag and inspect it before another attempt."))
                 finally:
-                    led("nfc")
+                    # The daemon restores blue after the longer result cue.
                     self.events.put(("state", "Remove tag, then present the next one."))
                 self.stop_event.wait(.35)
         except Exception as exc:
@@ -353,7 +356,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true", help="Stop after first verified write")
     args = parser.parse_args()
-    BatchApp(root, once=args.once)
+    window = BatchApp(root, once=args.once)
+    if args.once:
+        window.quantity.set("one")
     root.mainloop()
 
 
