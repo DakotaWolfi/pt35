@@ -38,7 +38,7 @@ def led_progress(done, total):
         with socket.socket(socket.AF_UNIX) as sock:
             sock.settimeout(.12)
             sock.connect(sockpath)
-            sock.sendall(f"nfc-progress {done} {total}\\n".encode("ascii"))
+            sock.sendall(f"nfc-progress {done} {total}\n".encode("ascii"))
             sock.recv(64)
     except (OSError, TimeoutError):
         pass
