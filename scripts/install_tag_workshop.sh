@@ -6,12 +6,13 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PY="$HOME/as7341-env/bin/python3"
 [[ -x "$PY" ]] || PY=/usr/bin/python3
-"$PY" -m py_compile "$ROOT/nfc/tag_workshop_ndef.py" "$ROOT/nfc/tag_workshop_raw.py" "$ROOT/nfc/tag_workshop_access.py" "$ROOT/nfc/tag_workshop_rf.py" "$ROOT/nfc/tag_workshop_library.py" "$ROOT/nfc/tag_workshop_gui.py"
+"$PY" -m py_compile "$ROOT/nfc/tag_workshop_ndef.py" "$ROOT/nfc/tag_workshop_raw.py" "$ROOT/nfc/tag_workshop_access.py" "$ROOT/nfc/tag_workshop_rf.py" "$ROOT/nfc/tag_workshop_library.py" "$ROOT/nfc/tag_workshop_gui.py" "$ROOT/nfc/tag_workshop_batch.py" "$ROOT/nfc/tag_workshop_batch_gui.py" "$ROOT/nfc/pt35_nfc_tools_hub.py"
 "$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_ndef.py' -v
 "$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_library.py' -v
 "$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_raw.py' -v
 "$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_rf.py' -v
 "$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_access.py' -v
+"$PY" -m unittest discover -s "$ROOT/tests" -p 'test_tag_workshop_batch.py' -v
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$HOME/.local/state/pt35"
 cat > "$HOME/.local/bin/pt35-tag-workshop" <<EOF
 #!/usr/bin/env bash
@@ -20,6 +21,26 @@ export PYTHONPATH="$ROOT/nfc:${PYTHONPATH:-}"
 exec "$PY" "$ROOT/nfc/tag_workshop_gui.py" "\$@" 2>> "\$HOME/.local/state/pt35/tag-workshop-errors.log"
 EOF
 chmod +x "$HOME/.local/bin/pt35-tag-workshop"
+cat > "$HOME/.local/bin/pt35-nfc-tools" <<EOF
+#!/usr/bin/env bash
+set -e
+exec "$PY" "$ROOT/nfc/pt35_nfc_tools_hub.py" "\$@" 2>> "\$HOME/.local/state/pt35/nfc-tools-errors.log"
+EOF
+cat > "$HOME/.local/bin/pt35-nfc-infinite-copy" <<EOF
+#!/usr/bin/env bash
+set -e
+exec "$PY" "$ROOT/nfc/tag_workshop_batch_gui.py" "\$@" 2>> "\$HOME/.local/state/pt35/nfc-copy-errors.log"
+EOF
+chmod +x "$HOME/.local/bin/pt35-nfc-tools" "$HOME/.local/bin/pt35-nfc-infinite-copy"
+cat > "$HOME/.local/share/applications/pt35-nfc-tools.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=PT35 NFC Tools
+Exec=$HOME/.local/bin/pt35-nfc-tools
+Icon=applications-science
+Terminal=false
+Categories=Utility;System;
+EOF
 cat > "$HOME/.local/share/applications/pt35-tag-workshop.desktop" <<EOF
 [Desktop Entry]
 Type=Application
