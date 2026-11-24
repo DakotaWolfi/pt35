@@ -101,10 +101,12 @@ m=re.sub(r"(?m)^(\[menu.settings\][ \t]*\n[\s\S]*?^[ \t]*entries\s*=\s*\[)",
          lambda hit: hit.group(1)+f'''
   {prefix}
   {{ label = "PT35 customization", goto = "fmi_settings", icon = "preferences-desktop-appearance", glyph = "PT" }},
+  {{ label = "Ethernet / IP", goto = "fmi_network", icon = "network-wired", glyph = "ETH" }},
   {suffix}''',m,count=1)
 m=section_remove(m,"menu.fmi")
 m=section_remove(m,"menu.fmi_leds")
 m=section_remove(m,"menu.fmi_settings")
+m=section_remove(m,"menu.fmi_network")
 fmi=[
  (('"Spectrum (original)"' if original_spectrum.is_file() else '"Spectral analyser"') + ', app = "fmi_spectrum", icon = "utilities-system-monitor"'),
  ('"PT35 NFC Reader", app = "fmi_nfc", icon = "network-wireless"'),
@@ -127,6 +129,17 @@ title = "PT35 customization"
 entries = [
   {{ label = "Wolf menu icon", exec = "{toggle1}", icon = "face-smile", glyph = "WF" }},
   {{ label = "Normal menu icon", exec = "{toggle2}", icon = "open-menu", glyph = "MN" }},
+]
+"""
+# Ethernet diagnostics are available directly from Settings without
+# replacing the stock overlay or changing network state.
+ethernet = root/"tools/pi5_ethernet.py"
+m += f"""
+[menu.fmi_network]
+title = "Ethernet / IP"
+entries = [
+  {{ label = "Ethernet status and IP", exec = "foot --hold -a pt35-ethernet-status /usr/bin/python3 {ethernet} status", icon = "network-wired", glyph = "IP" }},
+  {{ label = "Configure network", exec = "foot -a pt35-ethernet-config /usr/bin/python3 {ethernet} configure", icon = "preferences-system-network", glyph = "CFG" }},
 ]
 """
 try:
