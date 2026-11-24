@@ -1,7 +1,7 @@
 """Experimental type-2 NFC tag I/O, isolated from the recovered reader GUI.
 
 No command can modify UID, CC, static/dynamic lock, password or config pages.
-Writes are restricted to 144-byte-or-smaller NDEF user areas and always
+Writes are restricted to CC-advertised Type 2 user memory and always
 require pre-read, UID match, a saved backup, and per-page readback.
 """
 import json
@@ -45,8 +45,8 @@ def read_all(chip, poll_a, receive, crc_a, FrameError):
     if cc[0] != 0xE1 or cc[1] >> 4 != 1 or not cc[2]:
         raise ValueError("No supported NFC Forum Type 2 capability container")
     capacity = cc[2] * 8
-    if capacity > 144 or capacity < 16 or capacity % 4:
-        raise ValueError(f"User area {capacity} bytes: write support limited to 16-144")
+    if capacity < 16 or capacity > 1008 or capacity % 8 or (4 + capacity // 4) > 256:
+        raise ValueError(f"Unsupported Type 2 CC capacity: {capacity} bytes")
     if cc[3] != 0:
         raise ValueError("Capability Container indicates restricted access; refusing write")
     if head[10:12] != b"\x00\x00":
@@ -80,6 +80,25 @@ def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
                 raise ValueError("Replacement image does not match tag capacity")
             if not backup_file or not Path(backup_file).is_file():
                 raise RuntimeError("Original backup missing; no changes made")
+            # CC size alone does not establish the location of lock and
+            # configuration bytes. Only enable physical writes for precisely
+            # identified NXP NTAG21x geometry; unfamiliar tags stay readable.
+            try:
+                version = receive(chip, b"\\x60", checksum=crc_a)
+            except (OSError, TimeoutError, FrameError) as exc:
+                raise RuntimeError("Cannot confirm NTAG geometry for safe writing") from exc
+            supported = {0x0F: ("NTAG213", 144),
+                         0x11: ("NTAG215", 496),
+                         0x13: ("NTAG216", 872)}
+            if (len(version) != 8 or
+                version[:6] != bytes.fromhex("000404020100") or
+                version[7] != 0x03 or
+                version[6] not in supported):
+                raise RuntimeError("Unknown Type 2 chip: user memory can be read, but writing is not yet verified safe")
+            chip_name, known_capacity = supported[version[6]]
+            if result["capacity"] != known_capacity:
+                raise RuntimeError(
+                    f"{chip_name} CC says {result['capacity']} bytes, expected {known_capacity}; write refused")
             # Known standard Type 2 NDEF TLV only. Writing arbitrary bytes,
             # UID pages, lock pages and card emulation aren't supported.
             from tag_workshop_ndef import parse
