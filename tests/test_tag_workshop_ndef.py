@@ -34,6 +34,26 @@ class WorkshopNDEFTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             tlv("Text", "A" * 144, 144)
 
+    def test_496_byte_ntag215_blank_and_text(self):
+        area = bytes(496)
+        self.assertEqual(parse(area), ("Empty", ""))
+        changes = plan(area, "Text", "Hello from PT35")
+        self.assertTrue(changes)
+        self.assertTrue(all(4 <= page <= 127 for page, _ in changes))
+        self.assertEqual(parse(tlv("Text", "Hello from PT35", 496)),
+                         ("Text", "Hello from PT35"))
+
+    def test_496_byte_long_ndef_extended_tlv(self):
+        content = "X" * 300
+        data = tlv("Text", content, 496)
+        self.assertEqual(data[0:2], bytes((3, 255)))
+        self.assertEqual(parse(data), ("Text", content))
+
+    def test_872_byte_ntag216_area(self):
+        data = tlv("URL", "https://example.org", 872)
+        self.assertEqual(len(data), 872)
+        self.assertEqual(parse(data), ("URL", "https://example.org"))
+
     def test_unknown_protocol_refused(self):
         with self.assertRaises(ValueError):
             message("Raw", "00")
