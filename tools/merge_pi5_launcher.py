@@ -34,12 +34,13 @@ def add_app(id,label,glyph,icon,exec_,match=None,scale=None):
 
 bin=home/".local/bin/fmi-pt35-tool"
 s=apps.read_text() if apps.exists() else ""
-for id in ("fmi_spectrum","fmi_nfc","fmi_battery","fmi_remote_eye","fmi_dashboard","fmi_trainer","fmi_nfc_legacy","fmi_nfc_experimental","fmi_tag_workshop"):
+for id in ("fmi_spectrum","fmi_nfc","fmi_battery","fmi_remote_eye","fmi_dashboard","fmi_trainer","fmi_nfc_legacy","fmi_nfc_experimental","fmi_tag_workshop","fmi_nfc_tools"):
     s=section_remove(s,f"app.{id}")
 entries=[
   ("fmi_spectrum","Spectral analyser","SP","utilities-system-monitor",f"foot -a fmi-spectrum {bin} spectrum","fmi-spectrum",None),
   ("fmi_nfc","PT35 NFC Reader","NF","network-wireless",str(home/".local/bin/pt35-nfc-gui"),None,None),
   ("fmi_tag_workshop","Tag Workshop","TW","applications-science",str(home/".local/bin/pt35-tag-workshop"),None,None),
+  ("fmi_nfc_tools","NFC Tools","NT","applications-science",str(home/".local/bin/pt35-nfc-tools"),None,None),
   ("fmi_battery","Battery diagnostics","BT","battery",f"foot --hold -a fmi-battery {bin} battery","fmi-battery",None)]
 # Prefer the genuine recovered Pi4 GUIs when their wrappers are installed.
 original_nfc = home/".local/bin/pt35-nfc-gui"
@@ -110,9 +111,9 @@ m=section_remove(m,"menu.fmi_settings")
 m=section_remove(m,"menu.fmi_network")
 fmi=[
  (('"Spectrum (original)"' if original_spectrum.is_file() else '"Spectral analyser"') + ', app = "fmi_spectrum", icon = "utilities-system-monitor"'),
- ('"PT35 NFC Reader", app = "fmi_nfc", icon = "network-wireless"'),
+ ('"NFC Tools", app = "fmi_nfc_tools", icon = "applications-science"'),
  ('"Battery diagnostics", app = "fmi_battery", icon = "battery"'),
- ('"Tag Workshop", app = "fmi_tag_workshop", icon = "applications-science"')]
+ ]
 fmi += [(f'"{label}", app = "{id}", glyph = "{label[:2]}"') for id,label in installed_extra]
 m=m.rstrip()+"\n\n[menu.fmi]\ntitle = \"FMI Tools\"\nentries = [\n"
 m+="".join(f"  {{ label = {item} }},\n" for item in fmi)
