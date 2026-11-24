@@ -25,6 +25,7 @@ class Workshop:
         self.events = queue.Queue()
         self.snapshot = None
         self.backup = None
+        self.copied = None
         self.busy = False
         self.kind = tk.StringVar(value="Text")
         self.uid = tk.StringVar(value="No tag scanned")
@@ -70,6 +71,8 @@ class Workshop:
         for text, action, color in [
             ("Read tag", self.read, "#147b85"),
             ("Preview", self.preview, "#29364b"),
+            ("Copy NDEF", self.copy_content, "#29364b"),
+            ("Paste NDEF", self.paste_content, "#29364b"),
             ("Save backup", self.save, "#29364b"),
             ("Write & verify", self.write, "#315e3c"),
         ]:
@@ -147,6 +150,38 @@ class Workshop:
                                  f"{self.snapshot['capacity']} available · UID unchanged")
         except ValueError as exc:
             self.preview_var.set("Cannot write: " + str(exc))
+
+    def copy_content(self):
+        if not self.snapshot:
+            messagebox.showinfo("Copy", "Read a source tag first.")
+            return
+        try:
+            parse(self.snapshot["data"])
+            plan(self.snapshot["data"], self.kind.get(), self.content())
+        except ValueError as exc:
+            messagebox.showerror("Copy refused", str(exc))
+            return
+        self.copied = (self.kind.get(), self.content())
+        self.status.set("NDEF content copied locally. Now read the destination tag, then press Paste NDEF.")
+
+    def paste_content(self):
+        if not self.copied:
+            messagebox.showinfo("Paste", "Copy NDEF from a source tag first.")
+            return
+        if not self.snapshot:
+            messagebox.showinfo("Paste", "Read the destination tag first.")
+            return
+        try:
+            plan(self.snapshot["data"], *self.copied)
+        except ValueError as exc:
+            messagebox.showerror("Paste refused", str(exc))
+            return
+        kind, content = self.copied
+        self.kind.set(kind)
+        self.edit.delete("1.0", "end")
+        self.edit.insert("1.0", content)
+        self.preview()
+        self.status.set("NDEF content pasted. Destination UID unchanged. Preview then Write & verify.")
 
     def save(self):
         if not self.snapshot:
