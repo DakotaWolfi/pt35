@@ -53,7 +53,7 @@ Categories=Utility;System;
 StartupNotify=true
 EOF
 echo "Tag Workshop desktop application installed. Writing requires confirmation per tag."
-echo "Use only cheap test tags you own; physical WRITE/ACK handling is not yet hardware-verified."
+echo "Batch writing uses source UID checks, readback verification and per-tag backup."
 # Register the app profile and menu entry together.
 python3 "$ROOT/tools/merge_pi5_launcher.py" "$ROOT"
 python3 - <<'PY'
@@ -62,10 +62,11 @@ import tomllib
 p = Path.home() / ".config/pt35"
 apps = tomllib.loads((p / "apps.toml").read_text())
 menu = tomllib.loads((p / "menu.toml").read_text())
-assert "fmi_tag_workshop" in apps.get("app", {}), "Missing workshop app profile"
+assert "fmi_nfc_tools" in apps.get("app", {}), "Missing NFC Tools app profile"
 entries = menu.get("menu", {}).get("fmi", {}).get("entries", [])
-assert any(e.get("app") == "fmi_tag_workshop" for e in entries), "Missing workshop menu entry"
+assert any(e.get("app") == "fmi_nfc_tools" for e in entries), "Missing NFC Tools menu entry"
 assert (Path.home() / ".local/bin/pt35-tag-workshop").is_file()
-print("PASS: Workshop profile, menu entry and executable installed.")
+assert (Path.home() / ".local/bin/pt35-nfc-tools").is_file()
+print("PASS: NFC Tools hub, Workshop, batch copy and FMI menu profile installed.")
 PY
 echo "Reload the PT35 shell from Settings > Reload shell."
