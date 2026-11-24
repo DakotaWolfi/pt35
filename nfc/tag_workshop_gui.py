@@ -280,7 +280,7 @@ class Workshop:
         except (OSError, ValueError, TypeError, KeyError) as exc:
             messagebox.showerror(
                 "No editable NDEF in this capture",
-                str(exc) + "\\n\\nThe archive remains unchanged. Select a complete verified NDEF scan.")
+                str(exc) + "\n\nThe archive remains unchanged. Select a complete verified NDEF scan.")
             return
         self.set_editor(kind, content,
                         f"Imported {kind} from archive {choice.parent.name}. Destination UID unchanged.")
