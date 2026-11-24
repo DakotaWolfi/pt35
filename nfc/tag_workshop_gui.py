@@ -4,6 +4,7 @@
 Writing requires a per-tag confirmation. Never changes a UID or
 lock/configuration bits. NFC-B smart cards and ISO15693 remain read-only here.
 """
+import argparse
 import queue
 import threading
 import tkinter as tk
@@ -461,8 +462,16 @@ class Workshop:
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--empty", action="store_true",
+                        help="Open editor preconfigured for empty NDEF formatting")
+    args = parser.parse_args()
     app = tk.Tk()
-    Workshop(app)
+    window = Workshop(app)
+    if args.empty:
+        window.kind.set("Empty")
+        window.edit.delete("1.0", "end")
+        window.status.set("Erase tool: read a compatible tag, choose Empty, then Write & verify.")
     app.mainloop()
 
 
