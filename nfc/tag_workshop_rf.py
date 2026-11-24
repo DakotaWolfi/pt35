@@ -78,14 +78,53 @@ def read_all(chip, poll_a, receive, crc_a, FrameError):
         raise ValueError(f"Unsupported Type 2 CC capacity: {capacity} bytes")
     if cc[3] != 0:
         raise ValueError("Capability Container indicates restricted access; refusing write")
-    if head[10:12] != bytes((0, 0)):
-        raise ValueError("Static lock bits are set; refusing write")
+    # A locked tag is still worth inspecting. Lock status is enforced in
+    # the write path instead of refusing read-only inspection.
+    static_lock_bytes = bytes(head[10:12])
     data = bytearray()
     for page in range(4, 4 + capacity // 4, 4):
         data.extend(read4(page))
+    # Optional extras: GET_VERSION and single-page FAST_READ. These are
+    # purely read-only; never fetch password or PACK pages.
+    version = None
+    config_pages = {}
+    dynamic_lock_bytes = None
+    try:
+        candidate = receive(chip, bytes((0x60,)), checksum=crc_a)
+        if len(candidate) == 8:
+            version = candidate
+    except (FrameError, TimeoutError, OSError):
+        pass
+    from tag_workshop_access import MODELS, model_for
+    candidate_snapshot = {"capacity": capacity, "version": version}
+    if model_for(candidate_snapshot):
+        dyn, auth_page, access_page = MODELS[capacity][1:4]
+
+        def read_one_page(n):
+            # FAST_READ 0x3A, start=end=n, returns exactly four bytes;
+            # avoids reading neighboring password/PACK pages.
+            try:
+                answer = receive(chip, bytes((0x3A, n, n)), checksum=crc_a)
+                return answer if len(answer) == 4 else None
+            except (FrameError, TimeoutError, OSError):
+                return None
+
+        lock_page = read_one_page(dyn)
+        if lock_page is not None:
+            dynamic_lock_bytes = lock_page[:3]
+        cfg_one = read_one_page(auth_page)
+        if cfg_one is not None:
+            config_pages["auth0"] = cfg_one[3]
+        cfg_two = read_one_page(access_page)
+        if cfg_two is not None:
+            config_pages["access"] = cfg_two[0]
     return {"uid": uid, "atqa": info.get("atqa"), "sak": info["sak"],
             "cc": cc.hex().upper(), "capacity": capacity,
-            "data": bytes(data[:capacity]), "static_locks": head[10:12].hex().upper()}
+            "data": bytes(data[:capacity]),
+            "static_locks": static_lock_bytes.hex().upper(),
+            "static_lock_bytes": static_lock_bytes,
+            "dynamic_lock_bytes": dynamic_lock_bytes,
+            "config_pages": config_pages, "version": version}
 
 
 def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
@@ -109,6 +148,19 @@ def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
                 raise ValueError("Replacement image does not match tag capacity")
             if not backup_file or not Path(backup_file).is_file():
                 raise RuntimeError("Original backup missing; no changes made")
+            # Inspect locks/protection BEFORE any physical write. If we
+            # cannot read the status, fail closed rather than guess.
+            if (result.get("static_lock_bytes") != bytes((0, 0))
+                    or result.get("dynamic_lock_bytes") != bytes((0, 0, 0))):
+                raise RuntimeError(
+                    "Tag lock bits are set or unavailable. Inspect Access Matrix; no write attempted.")
+            cfg = result.get("config_pages") or {}
+            if cfg.get("auth0") is None or cfg.get("access") is None:
+                raise RuntimeError(
+                    "Protection configuration could not be read. No write attempted.")
+            if cfg["auth0"] != 0xFF and cfg["auth0"] < 4 + result["capacity"] // 4:
+                raise RuntimeError(
+                    f"Tag user memory may be password protected from page {cfg['auth0']}. No write attempted.")
             # CC size alone does not establish the location of lock and
             # configuration bytes. Only enable physical writes for precisely
             # identified NXP NTAG21x geometry; unfamiliar tags stay readable.
