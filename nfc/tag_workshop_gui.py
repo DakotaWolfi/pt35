@@ -13,7 +13,8 @@ from pathlib import Path
 from tag_workshop_ndef import parse, tlv, plan
 from tag_workshop_rf import perform, save_backup
 from tag_workshop_library import (save_preset, list_presets, load_preset,
-                                  list_archive, archive_entry, load_archive_ndef)
+                                  list_archive, archive_entry, load_archive_ndef, load_archive_raw)
+from tag_workshop_raw import transfer_plan, describe_raw
 
 
 class Workshop:
@@ -27,6 +28,8 @@ class Workshop:
         self.snapshot = None
         self.backup = None
         self.copied = None
+        self.raw_copy = None
+        self.raw_pending = None
         self.busy = False
         self.kind = tk.StringVar(value="Text")
         self.uid = tk.StringVar(value="No tag scanned")
@@ -53,14 +56,14 @@ class Workshop:
         selector = ttk.Combobox(row, textvariable=self.kind, values=["Text", "URL", "Empty"],
                                 state="readonly", width=12)
         selector.pack(side="left", padx=10)
-        selector.bind("<<ComboboxSelected>>", lambda _: self.preview())
+        selector.bind("<<ComboboxSelected>>", lambda _: self.editor_changed())
         tk.Label(row, text="Content", bg="#171c25", fg="white").pack(side="left", padx=9)
 
         self.edit = tk.Text(root, height=3, font=("DejaVu Sans", 12), wrap="word",
                             bg="#252f3c", fg="white", insertbackground="white",
                             undo=True)
         self.edit.pack(fill="both", expand=True, padx=12, pady=3)
-        self.edit.bind("<KeyRelease>", lambda _: self.preview())
+        self.edit.bind("<KeyRelease>", lambda _: self.editor_changed())
 
         self.preview_var = tk.StringVar(value="No tag loaded")
         tk.Label(root, textvariable=self.preview_var, bg="#171c25", fg="#c1cad6",
@@ -76,6 +79,9 @@ class Workshop:
             ("Save template", self.save_template, "#29364b"),
             ("Load template", self.load_template, "#29364b"),
             ("From archive", self.from_archive, "#29364b"),
+            ("Copy RAW", self.copy_raw, "#29364b"),
+            ("Paste RAW", self.paste_raw, "#29364b"),
+            ("Archive RAW", self.from_archive_raw, "#29364b"),
             ("Save tag backup", self.save, "#29364b"),
             ("Write & verify", self.write, "#315e3c"),
         ]:
@@ -130,6 +136,7 @@ class Workshop:
     def loaded(self, snapshot):
         self.snapshot = snapshot
         self.backup = None
+        self.raw_pending = None
         self.uid.set("UID: " + snapshot["uid"])
         self.detail.set(f"Type 2 · {snapshot['capacity']} bytes · CC {snapshot['cc']} · "
                         "UID/lock pages protected by workshop")
@@ -145,15 +152,26 @@ class Workshop:
             self.status.set("Read complete · unsupported existing data; writing disabled: " + str(exc))
         self.preview()
 
+    def editor_changed(self):
+        # Editing NDEF explicitly switches away from a queued raw transfer.
+        self.raw_pending = None
+        self.preview()
+
     def preview(self):
         if not self.snapshot:
             self.preview_var.set("Read a Type 2 tag first")
             return
         try:
-            diff = plan(self.snapshot["data"], self.kind.get(), self.content())
-            image = tlv(self.kind.get(), self.content(), self.snapshot["capacity"])
-            self.preview_var.set(f"{len(diff)} changed pages · {len(image)} bytes of "
-                                 f"{self.snapshot['capacity']} available · UID unchanged")
+            if self.raw_pending is not None:
+                diff = transfer_plan(self.snapshot["data"], self.raw_pending)
+                self.preview_var.set(
+                    f"RAW COPY · {len(diff)} changed pages · "
+                    f"{len(self.raw_pending)} user bytes · UID unchanged")
+            else:
+                diff = plan(self.snapshot["data"], self.kind.get(), self.content())
+                image = tlv(self.kind.get(), self.content(), self.snapshot["capacity"])
+                self.preview_var.set(f"{len(diff)} changed pages · {len(image)} bytes of "
+                                     f"{self.snapshot['capacity']} available · UID unchanged")
         except ValueError as exc:
             self.preview_var.set("Cannot write: " + str(exc))
 
@@ -189,8 +207,54 @@ class Workshop:
         self.preview()
         self.status.set("NDEF content pasted. Destination UID unchanged. Preview then Write & verify.")
 
+    def copy_raw(self):
+        if not self.snapshot:
+            messagebox.showinfo("Copy raw", "Read a source NFC-A Type 2 tag first.")
+            return
+        self.raw_copy = {
+            "uid": self.snapshot["uid"],
+            "capacity": self.snapshot["capacity"],
+            "data": bytes(self.snapshot["data"]),
+            "cc": self.snapshot["cc"],
+        }
+        self.status.set("Copied " + describe_raw(self.raw_copy) +
+                        ". Read a destination tag, then select Paste RAW.")
+
+    def paste_raw(self):
+        if not self.raw_copy:
+            messagebox.showinfo("Paste raw", "Copy RAW from a tag or archive first.")
+            return
+        if not self.snapshot:
+            messagebox.showinfo("Paste raw", "Read the destination tag first.")
+            return
+        try:
+            transfer_plan(self.snapshot["data"], self.raw_copy["data"])
+        except ValueError as exc:
+            messagebox.showerror("Incompatible tags", str(exc))
+            return
+        self.raw_pending = bytes(self.raw_copy["data"])
+        self.status.set(
+            f"RAW user data queued from {self.raw_copy['uid']} to "
+            f"{self.snapshot['uid']}. Destination UID and manufacturer pages are preserved.")
+        self.preview()
+
+    def from_archive_raw(self):
+        paths = list_archive()
+        choice = self.choose_file("Copy raw Type 2 user data from archive", paths,
+                                  [archive_entry(p) for p in paths])
+        if choice is None:
+            return
+        try:
+            self.raw_copy = load_archive_raw(choice)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            messagebox.showerror("No verified raw user memory", str(exc))
+            return
+        self.status.set("Copied " + describe_raw(self.raw_copy) +
+                        " from archive. Read destination tag, then Paste RAW.")
+
     def set_editor(self, kind, content, note):
         """Update draft only; never replace a scanned destination snapshot."""
+        self.raw_pending = None
         self.kind.set(kind)
         self.edit.delete("1.0", "end")
         self.edit.insert("1.0", content)
@@ -299,9 +363,14 @@ class Workshop:
         if not self.snapshot:
             messagebox.showinfo("Write", "Read a tag first.")
             return
+        raw_transfer = self.raw_pending is not None
         try:
-            changes = plan(self.snapshot["data"], self.kind.get(), self.content())
-            image = tlv(self.kind.get(), self.content(), self.snapshot["capacity"])
+            if raw_transfer:
+                image = self.raw_pending
+                changes = transfer_plan(self.snapshot["data"], image)
+            else:
+                changes = plan(self.snapshot["data"], self.kind.get(), self.content())
+                image = tlv(self.kind.get(), self.content(), self.snapshot["capacity"])
         except ValueError as exc:
             messagebox.showerror("Write refused", str(exc))
             return
@@ -325,12 +394,13 @@ class Workshop:
         self.execute(
             lambda: perform("write", expected_uid=snap["uid"],
                             expected_data=snap["data"], new_data=image,
-                            backup_file=backup),
+                            backup_file=backup, raw_transfer=raw_transfer),
             self.written)
 
     def written(self, result):
         self.snapshot = result
         self.backup = None
+        self.raw_pending = None
         self.status.set(f"WRITE VERIFIED · {result['written']} page writes · UID {result['uid']}")
         self.preview()
 
