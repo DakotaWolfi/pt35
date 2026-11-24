@@ -289,7 +289,8 @@ def save_backup(snapshot):
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     path = root / f"{stamp}-{snapshot['uid']}.json"
-    payload = {k: v for k, v in snapshot.items() if k != "data"}
+    payload = {k: (v.hex().upper() if isinstance(v, bytes) else v)
+               for k, v in snapshot.items() if k != "data"}
     payload["memory_hex"] = snapshot["data"].hex().upper()
     with path.open("x", encoding="utf-8") as handle:
         os.chmod(path, 0o600)
