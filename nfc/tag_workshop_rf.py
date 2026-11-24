@@ -120,6 +120,7 @@ def read_all(chip, poll_a, receive, crc_a, FrameError):
             config_pages["access"] = cfg_two[0]
     return {"uid": uid, "atqa": info.get("atqa"), "sak": info["sak"],
             "cc": cc.hex().upper(), "capacity": capacity,
+            "header": bytes(head),
             "data": bytes(data[:capacity]),
             "static_locks": static_lock_bytes.hex().upper(),
             "static_lock_bytes": static_lock_bytes,
