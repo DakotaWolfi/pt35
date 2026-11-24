@@ -154,43 +154,52 @@ def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
                 if not 4 <= page < 4 + result["capacity"] // 4 or len(payload) != 4:
                     raise RuntimeError("Protected/out-of-range write refused")
                 verify_header()
-                # ST25R3916 direct command C4 generates CRC-A automatically.
-                # NTAG A2 WRITE returns a four-bit ACK=0xA without CRC.
-                # NTAG WRITE acknowledges with four bits and NO CRC.
-                # ST25R3916 defaults to checking RX CRC, which raises error
-                # IRQ 0x80 for these legitimate short responses.
-                # Set no_crc_rx only for this exchange and always restore it.
+                # WRITE returns a 4-bit ACK with no CRC. Depending on the
+                # ST25R3916 receiver, the CRC IRQ can still be asserted despite
+                # disabling no_crc_rx. Do not retry a possibly completed write.
                 original_aux = chip.rd(0x0A)
+                rf_error = None
+                raw = b""
+                fifo_status = 0
                 try:
                     chip.wr(0x0A, original_aux | 0x80)
                     try:
-                        raw, fifo_status, irq_errors = chip.transceive(
+                        raw, fifo_status, _ = chip.transceive(
                             bytes((0xA2, page)) + payload, .045,
                             tx_command=0xC4, check_errors=True, max_rx=4)
                     except (FrameError, TimeoutError, OSError) as exc:
-                        raise RuntimeError(
-                            f"WRITE page {page} RF response failed: {exc}. "
-                            "The tag may already have changed; check before retrying."
-                        ) from exc
+                        rf_error = exc
                 finally:
                     chip.wr(0x0A, original_aux)
-                # Four-bit ACK (1010b). Different receiver FIFO alignment
-                # may represent it in low or high nibble; require 4 valid bits
-                # and the expected nibble, never silently accept an unknown reply.
-                last_bits = (fifo_status >> 1) & 0x07
-                if len(raw) != 1 or last_bits != 4 or (
-                    raw[0] & 0x0F != 0x0A and raw[0] >> 4 != 0x0A
-                ):
-                    raise RuntimeError(
-                        f"WRITE page {page}: unexpected ACK raw={raw.hex()} "
-                        f"fifo=0x{fifo_status:02X} bits={last_bits}. "
-                        "Tag may have changed; read and inspect it before retrying.")
+                # Crucially, validate actual memory AFTER an ambiguous RF
+                # response. Receiving a bad ACK does not mean the write failed.
+                # Never issue the same write a second time automatically.
                 try:
                     verify = receive(chip, bytes((0x30, page)), checksum=crc_a)
                 except (FrameError, TimeoutError, OSError) as exc:
-                    raise RuntimeError(f"WRITE page {page} read-back failed: {exc}") from exc
+                    reason = str(rf_error) if rf_error else f"unexpected ACK raw={raw.hex()}"
+                    raise RuntimeError(
+                        f"WRITE page {page}: {reason}; subsequent read-back failed: {exc}. "
+                        "Page state is UNKNOWN. Stop and re-read the tag before retrying."
+                    ) from exc
+                if len(verify) != 16:
+                    raise RuntimeError(
+                        f"WRITE page {page}: invalid read-back length {len(verify)}; "
+                        "page state is UNKNOWN. Stop and re-read before retrying.")
                 if verify[:4] != payload:
-                    raise RuntimeError(f"WRITE page {page}: read-back mismatch")
+                    reason = str(rf_error) if rf_error else (
+                        f"unexpected ACK raw={raw.hex()} fifo=0x{fifo_status:02X}")
+                    raise RuntimeError(
+                        f"WRITE page {page}: {reason}; read-back differs. "
+                        f"Expected {payload.hex().upper()}, got {verify[:4].hex().upper()}. "
+                        "No automatic retry was made.")
+                if rf_error:
+                    # The four bytes now match exactly. Do not let a CRC-less
+                    # ACK failure incorrectly report that the write did not
+                    # happen; the following pages still undergo verification.
+                    print(f"WRITE page {page}: RF ACK error ({rf_error}), "
+                          "but page read-back matched; proceeding.", flush=True)
+                return True
             # Make TLV appear empty during the multi-page rewrite. This does
             # NOT make writing atomic; power loss can still partially modify it.
             # Page 4 is always committed LAST, after the remaining pages.
