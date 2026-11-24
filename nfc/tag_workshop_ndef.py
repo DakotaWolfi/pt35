@@ -68,6 +68,12 @@ def parse(area):
     end = pos + size
     if end > len(area):
         raise ValueError("Incomplete NDEF payload")
+    # Do not overwrite additional TLVs hidden behind the NDEF message.
+    tail = area[end:]
+    if tail.startswith(b"\\xFE"):
+        tail = tail[1:]
+    if any(byte != 0 for byte in tail):
+        raise ValueError("Additional TLV/data after NDEF; refusing automatic rewrite")
     raw = area[pos:end]
     if not raw:
         return ("Empty", "")
