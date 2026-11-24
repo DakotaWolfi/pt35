@@ -84,7 +84,7 @@ def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
             # configuration bytes. Only enable physical writes for precisely
             # identified NXP NTAG21x geometry; unfamiliar tags stay readable.
             try:
-                version = receive(chip, b"\\x60", checksum=crc_a)
+                version = receive(chip, bytes((0x60,)), checksum=crc_a)
             except (OSError, TimeoutError, FrameError) as exc:
                 raise RuntimeError("Cannot confirm NTAG geometry for safe writing") from exc
             supported = {0x0F: ("NTAG213", 144),
