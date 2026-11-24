@@ -1,54 +1,35 @@
 #!/usr/bin/env bash
-# Display verified NFC polling metadata in recovered PT35 GUI.
-# Read-only UI patch: no changes to RF commands, I2C, or archive records.
+# Safe, idempotent V2 NFC tag-information installer.
+# Never prepends migration/nfc to sys.path: doing so shadows the recovered RF reader.
 set -Eeuo pipefail
-[[ $(id -u) != 0 ]] || { echo "Run without sudo" >&2; exit 1; }
+[[ "$(id -u)" != 0 ]] || { echo "Run as normal user (not sudo)" >&2; exit 1; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GUI="$HOME/pt35-old-recovery/pt35-nfc-bench/nfc/pt35_nfc_gui.py"
-HELPER="$ROOT/nfc/pi5_tag_info.py"
-[[ -f "$GUI" && -f "$HELPER" ]] || { echo "Recovered GUI or helper not found" >&2; exit 1; }
-python3 -m py_compile "$HELPER"
-GUI="$GUI" HELPER_DIR="$ROOT/nfc" python3 - <<'PY'
-import ast
-import os
-from pathlib import Path
-p = Path(os.environ["GUI"])
-s = p.read_text(encoding="utf-8")
-marker = "# PT35_PI5_NFC_TAG_INFO_V1"
-if marker in s:
-    print("NFC tag info GUI patch already installed")
-    raise SystemExit(0)
-needle = "from nfc_ndef import decode_message, extract_message, ndef_area\n"
-if s.count(needle) != 1:
-    raise SystemExit("Cannot find recovered GUI import anchor; no changes made")
-replacement = (
-    needle
-    + "sys.path.insert(0, " + repr(os.environ["HELPER_DIR"]) + ")\n"
-    + "from pi5_tag_info import describe as describe_nfc_tag\n"
-    + marker + "\n"
-)
-s = s.replace(needle, replacement, 1)
-summary_anchor = "    result.append('Classification: ' + str(record.get('classification', 'unknown')))\n"
-if s.count(summary_anchor) != 1:
-    raise SystemExit("Cannot identify summary anchor; no changes made")
-s = s.replace(summary_anchor, "    result.extend(describe_nfc_tag(record))\n" + summary_anchor, 1)
-# Make technology visible immediately in the live scan status, as well as
-# in the existing tag details/summary panel.
-status_anchor = "            self.status.set((comparison.replace('_', ' ') + ' · ' if comparison else '') + coverage(self.newest))\n"
-if s.count(status_anchor) != 1:
-    raise SystemExit("Cannot identify status anchor; no changes made")
-s = s.replace(status_anchor,
-    "            tag_info = describe_nfc_tag(self.newest)\n"
-    "            heading = tag_info[0] + ' · ' if tag_info else ''\n"
-    "            self.status.set(heading + (comparison.replace('_', ' ') + ' · ' if comparison else '') + coverage(self.newest))\n",
-    1)
-ast.parse(s, filename=str(p))
-backup = p.with_name("pt35_nfc_gui.py.pre-tag-info.bak")
-if backup.exists():
-    raise SystemExit(f"Backup already exists at {backup}; no changes made")
-backup.write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
-p.write_text(s, encoding="utf-8")
-print("Updated NFC GUI; backup:", backup)
-PY
+[[ -f "$GUI" ]] || { echo "Recovered NFC GUI missing: $GUI" >&2; exit 1; }
+python3 -m py_compile "$ROOT/nfc/pi5_tag_info.py" "$ROOT/scripts/repair_pi5_nfc_tag_info.py"
+python3 "$ROOT/scripts/repair_pi5_nfc_tag_info.py"
 python3 -m py_compile "$GUI"
-echo "Restart the NFC GUI to see NFC-B PUPI / ATQB data and other protocol details."
+# Check RF module resolution as the launcher would see it, without creating a GUI.
+NFC_GUI_DIR="$(dirname "$GUI")" ROOT="$ROOT" python3 - <<'PY'
+import os
+import subprocess
+import sys
+from pathlib import Path
+directory = os.environ["NFC_GUI_DIR"]
+env = dict(os.environ)
+env["PYTHONPATH"] = directory + os.pathsep + str(Path(os.environ["ROOT"]) / "nfc")
+code = (
+    "import nfcv_scan; from nfcv_scan import FrameError; "
+    "print('NFC FrameError imported from', nfcv_scan.__file__)"
+)
+proc = subprocess.run([sys.executable, "-c", code], cwd=directory, env=env,
+                      text=True, capture_output=True)
+if proc.returncode != 0:
+    print(proc.stderr, file=sys.stderr)
+    raise SystemExit("Recovered NFC import preflight FAILED; do not launch GUI")
+if not str(Path(directory).resolve()) in proc.stdout:
+    raise SystemExit("Unexpected NFC driver import path: " + proc.stdout)
+print(proc.stdout.strip())
+print("Import preflight passed.")
+PY
+echo "NFC tag info V2 installed, safe to reopen graphical PT35 NFC Reader."
