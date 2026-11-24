@@ -60,7 +60,7 @@ def read_all(chip, poll_a, receive, crc_a, FrameError):
 
 
 def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
-            backup_file=None):
+            backup_file=None, raw_transfer=False):
     from smbus2 import SMBus
     configure, poll_a, crc_a, receive, Reader, reader_lock, FrameError = driver()
     with reader_lock("i2c-1"), SMBus(1) as bus:
@@ -101,9 +101,13 @@ def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
                     f"{chip_name} CC says {result['capacity']} bytes, expected {known_capacity}; write refused")
             # Known standard Type 2 NDEF TLV only. Writing arbitrary bytes,
             # UID pages, lock pages and card emulation aren't supported.
-            from tag_workshop_ndef import parse
-            parse(result["data"])
-            parse(new_data)
+            if raw_transfer:
+                from tag_workshop_raw import transfer_plan
+                transfer_plan(result["data"], new_data)
+            else:
+                from tag_workshop_ndef import parse
+                parse(result["data"])
+                parse(new_data)
             if result["data"] == new_data:
                 return {**result, "written": 0}
             def verify_header():
