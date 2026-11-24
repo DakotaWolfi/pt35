@@ -8,7 +8,7 @@ import os
 import queue
 import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 from pathlib import Path
 
 from tag_workshop_ndef import parse, tlv, plan
@@ -39,6 +39,11 @@ class Workshop:
                  font=("DejaVu Sans", 18, "bold")).pack(side="left")
         tk.Button(top, text="Exit", command=root.destroy, font=("DejaVu Sans", 12),
                   bg="#29364b", fg="white").pack(side="right")
+        self.enable_button = tk.Button(top,
+            text="Writing ON" if self.write_enabled else "Enable writing",
+            command=self.enable_writing, font=("DejaVu Sans", 10),
+            bg="#4b3c2b", fg="white")
+        self.enable_button.pack(side="right", padx=8)
         tk.Label(root, textvariable=self.status, fg="#56cbbf", bg="#171c25",
                  wraplength=750, anchor="w", justify="left",
                  font=("DejaVu Sans", 11)).pack(fill="x", padx=12)
@@ -85,6 +90,20 @@ class Workshop:
             commands.grid_columnconfigure(i, weight=1)
         self.root.bind("<Escape>", lambda _: self.root.destroy() if not self.busy else None)
         self.root.after(100, self.poll)
+
+    def enable_writing(self):
+        if self.write_enabled:
+            self.status.set("Experimental writing is already enabled for this session.")
+            return
+        answer = simpledialog.askstring(
+            "Enable experimental Type 2 writing",
+            "Only use inexpensive tags you own. UID and lock operations are NOT available.\n"
+            "Writes are not atomic and have NOT been verified on your hardware.\n\n"
+            "Type ENABLE WRITE to continue:", parent=self.root)
+        if answer == "ENABLE WRITE":
+            self.write_enabled = True
+            self.enable_button.config(text="Writing ON", bg="#315e3c")
+            self.status.set("Experimental Type 2 writing enabled for this session only.")
 
     def content(self):
         return self.edit.get("1.0", "end-1c")
