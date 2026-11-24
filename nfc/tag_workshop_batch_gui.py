@@ -51,9 +51,10 @@ def presence():
 
 
 class BatchApp:
-    def __init__(self, root):
+    def __init__(self, root, *, once=False):
         self.root = root
-        root.title("PT35 · NFC Infinite Copy")
+        self.once = once
+        root.title("PT35 · NFC Copy" if once else "PT35 · NFC Infinite Copy")
         root.geometry("800x480")
         root.minsize(620, 400)
         root.configure(bg="#151e29")
@@ -70,7 +71,7 @@ class BatchApp:
         self.state = tk.StringVar(value="1. Scan a source sticker to capture its data.")
         self.source_label = tk.StringVar(value="Source: not selected")
         self.counter = tk.StringVar(value="Written: 0    Skipped: 0    Failed: 0")
-        tk.Label(root, text="NFC Infinite Copy", bg="#151e29", fg="white",
+        tk.Label(root, text="NFC Copy" if once else "NFC Infinite Copy", bg="#151e29", fg="white",
                  font=("DejaVu Sans", 21, "bold")).pack(anchor="w", padx=15, pady=(9, 3))
         tk.Label(root, textvariable=self.state, bg="#151e29", fg="#6ce0d0",
                  font=("DejaVu Sans", 12), wraplength=750, justify="left",
@@ -290,6 +291,8 @@ class BatchApp:
                     self.events.put(("result", (
                         "write", result["uid"],
                         f"Verified {result['written']} page writes; backup: {original_backup.name}")))
+                    if self.once:
+                        self.stop_event.set()
                 except Exception as exc:
                     led("flash", "100", "0", "0")
                     self.events.put(("result", ("error", uid, str(exc))))
@@ -316,7 +319,10 @@ class BatchApp:
 
 def main():
     root = tk.Tk()
-    BatchApp(root)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--once", action="store_true", help="Stop after first verified write")
+    args = parser.parse_args()
+    BatchApp(root, once=args.once)
     root.mainloop()
 
 
