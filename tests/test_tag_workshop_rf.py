@@ -28,6 +28,22 @@ def simulate(page_failures=None, poll_failures=0):
             raise RFError("crc", "RF receive error 0x80")
         return "530B82D0330001", {"sak": 0, "atqa": "0044"}
     def receive(chip, command, *, checksum):
+        opcode = command[0]
+        if opcode == 0x60:  # GET_VERSION has no page-number byte
+            return bytes.fromhex("0004040201000F03")
+        if opcode == 0x3A:  # FAST_READ start/end page; inspection only
+            if len(command) != 3 or command[1] != command[2]:
+                raise AssertionError("Expected a single-page FAST_READ")
+            page = command[1]
+            if page == 40:  # NTAG213 dynamic locks
+                return bytes(4)
+            if page == 41:  # AUTH0 at fourth byte
+                return bytes((0, 0, 0, 0xFF))
+            if page == 42:  # ACCESS at first byte
+                return bytes(4)
+            raise AssertionError(f"Unexpected FAST_READ page {page}")
+        if opcode != 0x30 or len(command) != 2:
+            raise AssertionError(f"Unexpected RF command: {command.hex()}")
         page = command[1]
         calls.append(page)
         if failures.get(page, 0):
