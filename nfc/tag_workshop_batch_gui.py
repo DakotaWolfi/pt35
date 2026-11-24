@@ -7,6 +7,8 @@ is verified; source removal is mandatory before the batch can begin.
 import argparse
 import queue
 import shutil
+import socket
+import os
 import subprocess
 import threading
 import time
@@ -26,6 +28,19 @@ def led(*words):
         subprocess.run([cli, *map(str, words)], timeout=2,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def led_progress(done, total):
+    """Fast IPC to Pi5 LED daemon; never block tag writes on LEDs."""
+    sockpath = f"/run/user/{os.getuid()}/pt35-led.sock"
+    try:
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.settimeout(.12)
+            sock.connect(sockpath)
+            sock.sendall(f"nfc-progress {done} {total}\\n".encode("ascii"))
+            sock.recv(64)
+    except (OSError, TimeoutError):
         pass
 
 
@@ -63,6 +78,7 @@ class BatchApp:
         self.thread = None
         self.source = None
         self.seen = set()
+        self.attempted = set()
         self.count = 0
         self.skips = 0
         self.fails = 0
@@ -269,7 +285,7 @@ class BatchApp:
                 try:
                     destination = perform("read")
                     decision, detail = destination_decision(
-                        source, destination, mode, policy, self.seen)
+                        source, destination, mode, policy, self.seen | self.attempted)
                     if decision == "skip":
                         self.events.put(("result", ("skip", uid, detail)))
                         continue
@@ -277,6 +293,7 @@ class BatchApp:
                         self.events.put(("result", ("skip", uid, "Already matches source.")))
                         continue
                     image = detail
+                    self.attempted.add(destination["uid"])  # never auto-repeat after ambiguous failure
                     original_backup = save_backup(destination)
                     # The RF writer will scan and match UID + all original
                     # bytes a second time, and verify the completed write.
@@ -285,7 +302,7 @@ class BatchApp:
                         "write", expected_uid=destination["uid"],
                         expected_data=destination["data"],
                         new_data=image, backup_file=original_backup,
-                        raw_transfer=(mode == "raw"))
+                        raw_transfer=True, progress=led_progress)
                     self.seen.add(result["uid"])
                     led("flash", "0", "100", "25")
                     self.events.put(("result", (
