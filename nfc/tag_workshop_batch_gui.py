@@ -84,6 +84,7 @@ class BatchApp:
         self.fails = 0
         self.mode = tk.StringVar(value="NDEF")
         self.policy = tk.StringVar(value="empty")
+        self.allow_rewrite = tk.BooleanVar(value=False)
         self.state = tk.StringVar(value="1. Scan a source sticker to capture its data.")
         self.source_label = tk.StringVar(value="Source: not selected")
         self.counter = tk.StringVar(value="Written: 0    Skipped: 0    Failed: 0")
@@ -111,6 +112,12 @@ class BatchApp:
                            bg="#151e29", fg="white", selectcolor="#263847",
                            activebackground="#151e29", activeforeground="white"
                            ).pack(side="left", padx=4)
+        tk.Checkbutton(
+            root, text="Allow rewriting a tag handled earlier in this batch (after removal)",
+            variable=self.allow_rewrite, bg="#151e29", fg="white",
+            selectcolor="#263847", activebackground="#151e29",
+            activeforeground="white", anchor="w"
+        ).pack(fill="x", padx=16, pady=(4, 0))
         self.details = tk.Text(root, bg="#263847", fg="#eef7ff", wrap="word",
                                height=5, font=("DejaVu Sans", 11))
         self.details.pack(fill="both", expand=True, padx=15, pady=6)
@@ -218,6 +225,7 @@ class BatchApp:
             return
         copy_mode = self.mode.get().lower()
         policy = self.policy.get()
+        allow_rewrite = self.allow_rewrite.get()
         try:
             image_for(self.source, self.source, copy_mode)
         except (ValueError, KeyError) as exc:
@@ -227,7 +235,8 @@ class BatchApp:
             "Start automatic tag copying",
             f"Source: {self.source['uid']}\n"
             f"Mode: {copy_mode.upper()}\n"
-            f"Destination policy: {'Empty tags only' if policy == 'empty' else 'OVERWRITE existing data'}\n\n"
+            f"Destination policy: {'Empty tags only' if policy == 'empty' else 'OVERWRITE existing data'}\n"
+            f"Reuse previously written UID: {'YES (after removal)' if allow_rewrite else 'NO'}\n\n"
             "Every different compatible tag presented will be backed up, written, "
             "and verified automatically. Keep the source away.\n"
             "Stop can take effect after the current tag operation. Proceed?"):
@@ -236,11 +245,11 @@ class BatchApp:
         self.read_button.config(state="disabled")
         self.start_button.config(state="disabled")
         source = {**self.source, "data": bytes(self.source["data"])}
-        self.thread = threading.Thread(target=self.loop, args=(source, copy_mode, policy),
+        self.thread = threading.Thread(target=self.loop, args=(source, copy_mode, policy, allow_rewrite),
                                        daemon=True)
         self.thread.start()
 
-    def loop(self, source, mode, policy):
+    def loop(self, source, mode, policy, allow_rewrite):
         led("nfc")
         # Source was just scanned. Require physical removal to arm batch.
         self.events.put(("state", "REMOVE source tag. Waiting for clear antenna..."))
@@ -284,8 +293,12 @@ class BatchApp:
                 self.events.put(("state", "Reading " + uid + " for compatibility / protection..."))
                 try:
                     destination = perform("read")
+                    # A previously handled UID is reusable only after complete
+                    # antenna removal AND explicit user opt-in; failed writes
+                    # require manual inspection before another automatic attempt.
+                    guarded = self.attempted | (set() if allow_rewrite else self.seen)
                     decision, detail = destination_decision(
-                        source, destination, mode, policy, self.seen | self.attempted)
+                        source, destination, mode, policy, guarded)
                     if decision == "skip":
                         self.events.put(("result", ("skip", uid, detail)))
                         continue
@@ -304,6 +317,7 @@ class BatchApp:
                         new_data=image, backup_file=original_backup,
                         raw_transfer=True, progress=led_progress)
                     self.seen.add(result["uid"])
+                    self.attempted.discard(result["uid"])
                     led("flash", "0", "100", "25")
                     self.events.put(("result", (
                         "write", result["uid"],
