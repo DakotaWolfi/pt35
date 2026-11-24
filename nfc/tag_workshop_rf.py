@@ -261,7 +261,7 @@ def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
                 offset for offset in range(4, len(new_data), 4)
                 if old[offset:offset+4] != new_data[offset:offset+4]
             ]
-            total_writes = len(changed_tail) + 2
+            total_writes = len(changed_tail) + 3  # final memory readback counts too
             def report():
                 if progress is not None:
                     try:
@@ -290,6 +290,11 @@ def perform(action, *, expected_uid=None, expected_data=None, new_data=None,
             verified = bytes(verified[:result["capacity"]])
             if verified != new_data:
                 raise RuntimeError("Final byte-for-byte verification failed; tag may be partially written")
+            if progress is not None:
+                try:
+                    progress(total_writes, total_writes)
+                except (OSError, RuntimeError, TimeoutError):
+                    pass
             return {**result, "data": verified, "written": writes}
         finally:
             try:
