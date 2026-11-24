@@ -384,7 +384,7 @@ class Workshop:
                 return
         if not messagebox.askyesno(
                 "CONFIRM physical write",
-                f"Write {len(changes)} modified memory pages to UID {self.snapshot['uid']}?\n\n"
+                f"Write {len(changes)} modified memory pages to UID {self.snapshot['uid']}?\n\n" +
                 ("RAW copy of user memory. " if raw_transfer else "NDEF data edit. ") +
                 "UID, CC, lock/config pages stay untouched.\n"
                 "A failed or interrupted write may leave the tag partially programmed.\n\n"
