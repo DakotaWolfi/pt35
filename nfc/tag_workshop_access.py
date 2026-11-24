@@ -24,25 +24,30 @@ def model_for(snapshot):
     return MODELS[capacity][0]
 
 
-def _lock_status(page, static, dynamic):
-    if page <= 2:
-        return "Manufacturer / UID"
-    if page == 3:
-        return "CC (read-only in Workshop)"
-    if page <= 15:
-        if static is None:
-            return "Unknown"
-        # Static lock bytes: byte 0 bits 3..7 cover pages 4..8;
-        # byte 1 bits 0..7 cover pages 8..15 in published map.
-        # Restrict to conservative mapping: any asserted static bit
-        # means 'possibly locked', except when both bytes are clear.
-        return "Writable*" if static == b"\x00\x00" else "Locked / check"
-    if dynamic is None:
+def _lock_status(page, static, dynamic, model):
+    if not isinstance(static, bytes) or len(static) != 2:
         return "Unknown"
-    # For NTAG215/216 dynamic bits cover groups of 16 pages, but
-    # block-lock/reserved bits require explicit model interpretation.
-    # If any bit is set, don't claim particular pages writable.
-    return "Writable*" if dynamic == b"\x00\x00\x00" else "Locked / check"
+    if page <= 15:
+        # Static lock bits L3..L7 at first byte bits 3..7;
+        # L8..L15 at second byte bits 0..7. The other 3 first-byte
+        # bits are block-lock bits and don't individually lock user pages.
+        bit = bool(static[0] & (1 << page)) if page <= 7 else (
+            bool(static[1] & (1 << (page - 8))))
+        return "Locked" if bit else "Writable*"
+    if not isinstance(dynamic, bytes) or len(dynamic) != 3:
+        return "Unknown"
+    if model == "NTAG215":
+        # NXP NTAG215 dynamic lock byte 0: 16..95 in 16-page
+        # groups, 124..129 in smaller groups. Byte 2 contains
+        # block-lock bits, not page lock bits.
+        groups = [(16, 31), (32, 47), (48, 63), (64, 79),
+                  (80, 95), (96, 111), (112, 123),
+                  (124, 129)]
+        for index, (first, last) in enumerate(groups):
+            if first <= page <= last:
+                return "Locked" if dynamic[0] & (1 << index) else "Writable*"
+    # For other chips, do not guess individual dynamic bit maps.
+    return "Writable*" if dynamic == bytes((0, 0, 0)) else "Locked / check"
 
 
 def access_rows(snapshot):
@@ -67,7 +72,7 @@ def access_rows(snapshot):
         elif model is None:
             permission = "Unknown chip"
         else:
-            permission = _lock_status(page, static, dynamic)
+            permission = _lock_status(page, static, dynamic, model)
             if isinstance(auth0, int) and auth0 != 255 and page >= auth0:
                 permission = ("Password read + write" if auth_protects_read
                               else "Password write")
