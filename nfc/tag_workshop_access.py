@@ -83,7 +83,8 @@ def access_rows(snapshot):
                 permission = "Protection unknown" if permission == "Writable*" else permission
         offset = (page-4)*4
         if page < 4:
-            value = "—"
+            header = snapshot.get("header")
+            value = header[page*4:page*4+4].hex().upper() if isinstance(header, bytes) and len(header) == 16 else "Not read"
         else:
             value = snapshot["data"][offset:offset+4].hex().upper()
         rows.append((page, f"{page:03d} / {page:02X}", kind, value, permission))
