@@ -77,9 +77,12 @@ class Workshop:
             ("Write & verify", self.write, "#315e3c"),
         ]:
             button = tk.Button(commands, text=text, command=action, bg=color, fg="white",
-                               font=("DejaVu Sans", 11, "bold"), height=2)
-            button.pack(side="left", fill="x", expand=True, padx=3)
+                               font=("DejaVu Sans", 10, "bold"), height=1)
+            i = len(self.buttons)
+            button.grid(row=i // 3, column=i % 3, sticky="ew", padx=3, pady=2)
             self.buttons.append(button)
+        for i in range(3):
+            commands.grid_columnconfigure(i, weight=1)
         self.root.bind("<Escape>", lambda _: self.root.destroy() if not self.busy else None)
         self.root.after(100, self.poll)
 
