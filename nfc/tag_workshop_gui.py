@@ -32,6 +32,7 @@ class Workshop:
         self.copied = None
         self.raw_copy = None
         self.raw_pending = None
+        self.ndef_replace = False
         self.busy = False
         self.kind = tk.StringVar(value="Text")
         self.uid = tk.StringVar(value="No tag scanned")
@@ -142,6 +143,7 @@ class Workshop:
         self.snapshot = snapshot
         self.backup = None
         self.raw_pending = None
+        self.ndef_replace = False
         self.uid.set("UID: " + snapshot["uid"])
         self.detail.set(f"Type 2 · {snapshot['capacity']} bytes · CC {snapshot['cc']} · "
                         "UID/lock pages protected by workshop")
@@ -160,8 +162,9 @@ class Workshop:
         self.preview()
 
     def editor_changed(self):
-        # Editing NDEF explicitly switches away from a queued raw transfer.
+        # Editing after a paste changes it into an ordinary manual draft.
         self.raw_pending = None
+        self.ndef_replace = False
         self.preview()
 
     def preview(self):
@@ -175,8 +178,9 @@ class Workshop:
                     f"RAW COPY · {len(diff)} changed pages · "
                     f"{len(self.raw_pending)} user bytes · UID unchanged")
             else:
-                diff = plan(self.snapshot["data"], self.kind.get(), self.content())
                 image = tlv(self.kind.get(), self.content(), self.snapshot["capacity"])
+                diff = (transfer_plan(self.snapshot["data"], image) if self.ndef_replace
+                        else plan(self.snapshot["data"], self.kind.get(), self.content()))
                 self.preview_var.set(f"{len(diff)} changed pages · {len(image)} bytes of "
                                      f"{self.snapshot['capacity']} available · UID unchanged")
         except ValueError as exc:
@@ -252,11 +256,12 @@ class Workshop:
             messagebox.showinfo("Paste", "Read the destination tag first.")
             return
         try:
-            plan(self.snapshot["data"], *self.copied)
+            tlv(self.copied[0], self.copied[1], self.snapshot["capacity"])
         except ValueError as exc:
             messagebox.showerror("Paste refused", str(exc))
             return
         kind, content = self.copied
+        self.ndef_replace = True
         self.raw_pending = None
         self.kind.set(kind)
         self.edit.delete("1.0", "end")
@@ -289,6 +294,7 @@ class Workshop:
         except ValueError as exc:
             messagebox.showerror("Incompatible tags", str(exc))
             return
+        self.ndef_replace = False
         self.raw_pending = bytes(self.raw_copy["data"])
         self.status.set(
             f"RAW user data queued from {self.raw_copy['uid']} to "
@@ -312,6 +318,7 @@ class Workshop:
     def set_editor(self, kind, content, note):
         """Update draft only; never replace a scanned destination snapshot."""
         self.raw_pending = None
+        self.ndef_replace = False
         self.kind.set(kind)
         self.edit.delete("1.0", "end")
         self.edit.insert("1.0", content)
@@ -420,14 +427,15 @@ class Workshop:
         if not self.snapshot:
             messagebox.showinfo("Write", "Read a tag first.")
             return
-        raw_transfer = self.raw_pending is not None
+        raw_transfer = self.raw_pending is not None or self.ndef_replace
         try:
-            if raw_transfer:
+            if self.raw_pending is not None:
                 image = self.raw_pending
                 changes = transfer_plan(self.snapshot["data"], image)
             else:
-                changes = plan(self.snapshot["data"], self.kind.get(), self.content())
                 image = tlv(self.kind.get(), self.content(), self.snapshot["capacity"])
+                changes = (transfer_plan(self.snapshot["data"], image) if self.ndef_replace
+                           else plan(self.snapshot["data"], self.kind.get(), self.content()))
         except ValueError as exc:
             messagebox.showerror("Write refused", str(exc))
             return
@@ -459,6 +467,7 @@ class Workshop:
         self.snapshot = result
         self.backup = None
         self.raw_pending = None
+        self.ndef_replace = False
         self.status.set(f"WRITE VERIFIED · {result['written']} page writes · UID {result['uid']}")
         self.preview()
 
