@@ -43,6 +43,9 @@ class Workshop:
                  font=("DejaVu Sans", 18, "bold")).pack(side="left")
         tk.Button(top, text="Exit", command=root.destroy, font=("DejaVu Sans", 12),
                   bg="#29364b", fg="white").pack(side="right")
+        tk.Button(top, text="Access matrix", command=self.show_access_matrix,
+                  font=("DejaVu Sans", 10), bg="#147b85",
+                  fg="white").pack(side="right", padx=8)
         tk.Label(root, textvariable=self.status, fg="#56cbbf", bg="#171c25",
                  wraplength=750, anchor="w", justify="left",
                  font=("DejaVu Sans", 11)).pack(fill="x", padx=12)
@@ -75,7 +78,6 @@ class Workshop:
         for text, action, color in [
             ("Read tag", self.read, "#147b85"),
             ("Preview", self.preview, "#29364b"),
-            ("Access matrix", self.show_access_matrix, "#29364b"),
             ("Copy NDEF", self.copy_content, "#29364b"),
             ("Paste NDEF", self.paste_content, "#29364b"),
             ("Save template", self.save_template, "#29364b"),
