@@ -147,6 +147,8 @@ class Workshop:
                         "UID/lock pages protected by workshop")
         try:
             kind, value = parse(snapshot["data"])
+            if getattr(self, "erase_entry", False):
+                kind, value = "Empty", ""
             self.kind.set(kind)
             self.edit.delete("1.0", "end")
             self.edit.insert("1.0", value)
@@ -468,6 +470,7 @@ def main():
     args = parser.parse_args()
     app = tk.Tk()
     window = Workshop(app)
+    window.erase_entry = args.empty
     if args.empty:
         window.kind.set("Empty")
         window.edit.delete("1.0", "end")
