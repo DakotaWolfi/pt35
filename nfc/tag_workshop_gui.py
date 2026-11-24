@@ -201,6 +201,7 @@ class Workshop:
             messagebox.showerror("Paste refused", str(exc))
             return
         kind, content = self.copied
+        self.raw_pending = None
         self.kind.set(kind)
         self.edit.delete("1.0", "end")
         self.edit.insert("1.0", content)
@@ -384,7 +385,8 @@ class Workshop:
         if not messagebox.askyesno(
                 "CONFIRM physical write",
                 f"Write {len(changes)} modified memory pages to UID {self.snapshot['uid']}?\n\n"
-                "This WILL replace its NDEF data. UID, CC, lock/config pages stay untouched.\n"
+                ("RAW copy of user memory. " if raw_transfer else "NDEF data edit. ") +
+                "UID, CC, lock/config pages stay untouched.\n"
                 "A failed or interrupted write may leave the tag partially programmed.\n\n"
                 "Use only a tag you own and can afford to erase."):
             return
