@@ -1,0 +1,21 @@
+[Unit]
+Description=PT35 receipt printing web host
+After=network.target cups.service
+Wants=cups.service
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/opt/pt35-receipt-host
+EnvironmentFile=/etc/pt35-receipt-host.conf
+ExecStart=/opt/pt35-receipt-host/.venv/bin/python /opt/pt35-receipt-host/app.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target
